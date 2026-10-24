@@ -202,6 +202,10 @@ public final class DrawList {
     /// the compositor rather than this window's framebuffer. Decided once per
     /// frame — see `WindowBackdrop.showsDesktop`.
     private var backdropIsDesktop = false
+    /// Glass on a view the size of the whole window, this frame — the
+    /// surface plate's, through `BackdropBridge.surfaceGlass`.
+    private var windowGlass: GlassEffect?
+    private var viewport: (w: Float, h: Float) = (0, 0)
 
     /// Fade applied to everything appended, for transitions. A multiplier
     /// rather than a value so nested transitions compose.
@@ -1169,6 +1173,22 @@ public final class DrawList {
         //
         // Glass that bends with no blur cannot frost the desktop: a plate is a
         // blur, and a radius of 0 clears it.
+        // Glass on the whole window is the glass of the plate the window was
+        // opened on — a frosted popup's, whatever the process's own backdrop
+        // is. That is the only plate such a view can mean: with no blur of
+        // its own it would otherwise bend this window's framebuffer alone,
+        // which in a popup is empty, and nothing would change.
+        if let glass, contentRadius == nil,
+           !(backdropIsDesktop && (backdropRadius ?? 0) > 0),
+           x <= 0.5, y <= 0.5, w >= viewport.w - 1, h >= viewport.h - 1
+        {
+            windowGlass = glass
+            // Nothing of this window is behind its whole extent, so there is
+            // nothing of its own to capture and bend: the plate does that. The
+            // rim still comes from the view's fill (`withGlass`).
+            if (backdropRadius ?? 0) <= 0 { return body() }
+        }
+
         if backdropIsDesktop, contentRadius == nil || contentRadius! <= 0,
            let radius = backdropRadius, radius > 0
         {
@@ -1243,6 +1263,8 @@ public final class DrawList {
         pendingTooltip = nil
         desktopFrost.removeAll(keepingCapacity: true)
         desktopFrostRadius = 0
+        windowGlass = nil
+        viewport = (viewportW, viewportH)
         backdropIsDesktop = BackdropBridge.frostOverlays != nil
             && WindowBackdrop.current.showsDesktop
         cullStack.removeAll(keepingCapacity: true)
@@ -1354,6 +1376,7 @@ public final class DrawList {
         // it flew out of. One radius covers the surface, so the strongest
         // wins.
         BackdropBridge.frostOverlays?(desktopFrostRadius, desktopFrost)
+        BackdropBridge.surfaceGlass?(windowGlass.map { ($0.refraction, $0.frost) })
         pendingOverlays.removeAll(keepingCapacity: true)
         // Last of all, over the overlays too: a tooltip on a menu row is
         // about the row.

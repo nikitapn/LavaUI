@@ -697,7 +697,7 @@ final class MenuSession {
                 }
             }
         ) {
-            VolumeWindow(pulse: pulse)
+            VolumeWindow(pulse: pulse).glassEffect(frost: 1)
         }
         volumeWindow = opened
     }

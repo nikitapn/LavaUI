@@ -370,6 +370,17 @@ public enum BackdropBridge {
     /// both, and their union would frost the gap.
     nonisolated(unsafe) public static var frostOverlays:
         (@Sendable (_ radius: Float, _ rects: [FrostRect]) -> Void)?
+
+    /// The glass of the plate the window being drawn was opened on, once a
+    /// frame: a view covering the whole window asked for `.glassEffect`, and
+    /// its frost and bend are the plate's. nil goes back to what the window
+    /// was opened with.
+    ///
+    /// Not a rectangle in `frostOverlays`: a region replaces the surface's
+    /// plate, and the plate is the one thing the compositor cuts to the
+    /// window's own corner. A popup's glass belongs on the popup's plate.
+    nonisolated(unsafe) public static var surfaceGlass:
+        (@Sendable (_ glass: (refraction: Float, frost: Float)?) -> Void)?
 }
 
 /// Styling for the floating surface an overlay draws on.

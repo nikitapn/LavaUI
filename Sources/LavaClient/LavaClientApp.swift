@@ -1078,6 +1078,39 @@ public enum LavaClient {
         flushOverlayFrost()
     }
 
+    private struct SurfaceGlass: Equatable {
+        var refraction: Float
+        var frost: Float
+    }
+
+    /// The calling window's plate takes the glass of a view covering the
+    /// whole window, or goes back to what it was opened with when there is
+    /// none. Sent only when it changes: this is asked every frame.
+    static func setSurfaceGlass(_ glass: (refraction: Float, frost: Float)?) {
+        guard let compositor = Self.compositor else { return }
+        let id = callingSurface()
+        guard id != 0 else { return }
+        let opened = openedGlass[id].map { SurfaceGlass(refraction: $0.refraction, frost: $0.frost) }
+            ?? SurfaceGlass(
+                refraction: pendingBackdropRefraction ?? 0, frost: pendingBackdropFrost ?? 0
+            )
+        let target = glass.map {
+            SurfaceGlass(refraction: max(0, $0.refraction), frost: min(max($0.frost, 0), 1))
+        } ?? opened
+        guard (lastSurfaceGlass[id] ?? opened) != target else { return }
+        lastSurfaceGlass[id] = target
+        Task.detached {
+            do {
+                try await compositor.setBackdropRefraction(surfaceId: id, px: target.refraction)
+                try await compositor.setBackdropFrost(surfaceId: id, frost: target.frost)
+            } catch {
+                FileHandle.standardError.write(
+                    Data("SetBackdropFrost failed: \(error)\n".utf8)
+                )
+            }
+        }
+    }
+
     /// The whole-surface frost a surface returns to when its last frost
     /// rectangle goes: a popup's own `backdropBlur`, or the main window's.
     /// The process's `WindowBackdrop` alone would wipe the frost a popup was
@@ -1538,6 +1571,10 @@ public enum LavaClient {
         // cleared the window frost a terminal had just asked for, and
         // every frame without a popup then kept it cleared. Idle emits
         // no-op inside `flushOverlayFrost` until a popup actually asks.
+        BackdropBridge.surfaceGlass = { glass in
+            LavaClient.setSurfaceGlass(glass)
+        }
+
         BackdropBridge.frostOverlays = { radius, rects in
             LavaClient.setBackdropGlassRegions(
                 radius: radius,
@@ -1948,6 +1985,7 @@ public enum LavaClient {
         }
         extra.surface = surface
         openedBackdrop[surface] = max(0, backdropBlur)
+        openedGlass[surface] = (max(0, refraction), min(max(frost, 0), 1))
         // Whenever the caller asked — a popup or a menu fly-out. The wash on
         // top has to be translucent or the plate is painted and then covered.
         // The corner is not a parameter: the compositor cuts the plate to
@@ -2028,6 +2066,8 @@ public enum LavaClient {
         else { return }
         editor.stopPublishingFrames(window: window)
         openedBackdrop[extra.surface] = nil
+        openedGlass[extra.surface] = nil
+        lastSurfaceGlass[extra.surface] = nil
         lastOverlayFrost[extra.surface] = nil
         destroyCompositorSurface(extra.surface)
         extra.input?.close()
@@ -2078,6 +2118,11 @@ public enum LavaClient {
     /// fall back to once no view asks for them any more. The main surface is
     /// not in here: its answer is `WindowBackdrop` and the `pending` pair.
     nonisolated(unsafe) private static var openedBackdrop: [UInt32: Float] = [:]
+    /// The same for the plate's bend and grain, `openWindow`'s `refraction`
+    /// and `frost`.
+    nonisolated(unsafe) private static var openedGlass: [UInt32: (refraction: Float, frost: Float)] = [:]
+    /// What `setSurfaceGlass` last told the compositor, per surface.
+    nonisolated(unsafe) private static var lastSurfaceGlass: [UInt32: SurfaceGlass] = [:]
     /// Set once a compositor answers `SetBackdropGlassRegions` with anything
     /// but a missing surface: it predates the call. See `flushOverlayFrost`.
     nonisolated(unsafe) private static var glassRegionsUnsupported = false
