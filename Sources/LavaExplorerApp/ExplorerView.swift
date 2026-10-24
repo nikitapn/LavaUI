@@ -778,7 +778,6 @@ private struct Toolbar: View {
             // A press anywhere in a pane makes it the active one first, so
             // the session's current tab is this one by the time this runs.
             let canMake = !TrashPath.isTrash(tab.listing.path) && tab.listing.error == nil
-                && !RemoteURL.isRemote(tab.listing.path)
             iconButton("folder-plus", tip: "New Folder", enabled: canMake, id: "new-folder") {
                 session.startNewFolder()
             }
@@ -1583,9 +1582,9 @@ private struct FileContextMenu: View {
         return items
     }
 
-    /// A server's file: open it (fetched first), take a copy, or name it.
-    /// What changes the server — rename, delete — is not done yet, so it is
-    /// not offered.
+    /// A server's file: open it (fetched first), take a copy, rename or
+    /// delete it there, or name it. No Trash on a server, so Delete is for
+    /// good, and the bar it asks in says so.
     private func serverEntries(handlers: [DesktopEntry], defaultId: String?) -> [MenuEntry] {
         let many = session.targets(for: entry).count
         let what = many > 1 ? " \(many) Items" : ""
@@ -1600,6 +1599,9 @@ private struct FileContextMenu: View {
             )),
             .separator,
             .item(MenuItemModel(id: MenuID("ctx.download"), title: "Download\(what) to Downloads")),
+            .separator,
+            .item(MenuItemModel(id: MenuID("ctx.rename"), title: "Rename", isEnabled: many == 1)),
+            .item(MenuItemModel(id: MenuID("ctx.delete"), title: "Delete\(what) Permanently")),
             .separator,
             .item(MenuItemModel(id: MenuID("ctx.copy-path"), title: "Copy Address")),
         ]

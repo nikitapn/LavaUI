@@ -109,6 +109,57 @@ struct RemoteConnectionTests {
         } throws: { ($0 as? RemoteError)?.kind == .login }
     }
 
+    /// Make, rename and delete — a tree with a file and a folder in it — the
+    /// way the explorer's New Folder, Rename and Delete do.
+    @Test(arguments: [RemoteServer.Scheme.ftp, .ftps, .sftp])
+    func makesRenamesAndDeletesATree(_ scheme: RemoteServer.Scheme) throws {
+        let (connections, _) = Servers.connections()
+        let local = Servers.scratch()
+        defer { try? FileManager.default.removeItem(atPath: local) }
+        let root = Servers.root!
+        let tag = "\(scheme.rawValue)-\(UUID().uuidString.prefix(8))"
+        let folder = Servers.url(scheme, "/tree \(tag)")
+
+        try connections.makeFolder(folder, as: Servers.alice)
+        try Data("x".utf8).write(to: URL(fileURLWithPath: local + "/f.txt"))
+        try connections.upload(local + "/f.txt", to: folder.appending("in it/f.txt"), as: Servers.alice)
+
+        try connections.rename(folder.appending("in it/f.txt"), to: "renamed file.txt", as: Servers.alice)
+        #expect(FileManager.default.fileExists(atPath: root + "/tree \(tag)/in it/renamed file.txt"))
+        try connections.rename(folder, to: "tree renamed \(tag)", as: Servers.alice)
+        #expect(FileManager.default.fileExists(atPath: root + "/tree renamed \(tag)/in it/renamed file.txt"))
+
+        try connections.removeFolder(Servers.url(scheme, "/tree renamed \(tag)"), as: Servers.alice)
+        #expect(!FileManager.default.fileExists(atPath: root + "/tree renamed \(tag)"))
+    }
+
+    /// The same under the login folder, `/~`, which is where an `sftp://host`
+    /// address lands. Commands there once named `~` literally.
+    @Test func sftpChangesTheLoginFolder() throws {
+        let (connections, _) = Servers.connections()
+        let local = Servers.scratch()
+        defer { try? FileManager.default.removeItem(atPath: local) }
+        let tag = UUID().uuidString.prefix(8)
+        let home = Servers.url(.sftp, "/~")
+        let folder = home.appending("home tree \(tag)")
+        try connections.makeFolder(folder, as: Servers.alice)
+        try Data("x".utf8).write(to: URL(fileURLWithPath: local + "/f.txt"))
+        try connections.upload(local + "/f.txt", to: folder.appending("f.txt"), as: Servers.alice)
+        try connections.rename(folder.appending("f.txt"), to: "g.txt", as: Servers.alice)
+        #expect(FileManager.default.fileExists(atPath: Servers.root! + "/home tree \(tag)/g.txt"))
+        try connections.removeFile(folder.appending("g.txt"), as: Servers.alice)
+        try connections.removeFolder(folder, as: Servers.alice)
+        #expect(!FileManager.default.fileExists(atPath: Servers.root! + "/home tree \(tag)"))
+    }
+
+    @Test func aRefusedCommandIsNotNotFound() {
+        let (connections, _) = Servers.connections()
+        // Making a folder that is already there.
+        #expect {
+            try connections.makeFolder(Servers.url(.ftp, "/docs"), as: Servers.alice)
+        } throws: { ($0 as? RemoteError)?.kind == .failed }
+    }
+
     @Test(arguments: [RemoteServer.Scheme.ftp, .sftp])
     func aWrongPasswordIsALoginError(_ scheme: RemoteServer.Scheme) {
         let (connections, _) = Servers.connections()
@@ -200,5 +251,34 @@ struct RemoteKeyringTests {
 
     @Test func noUserMeansNothingToLookUp() {
         #expect(RemoteKeyring.password(for: RemoteServer(scheme: .ftp, host: "keyring.test")) == nil)
+    }
+}
+
+/// No server needed: refused before anything is sent.
+@Suite struct RemoteNameTests {
+    @Test func namesThatWouldBeASecondCommandAreRefused() {
+        for name in ["a\r\nDELE b", "a\nb", "a/b", "..", "", "nul\0"] {
+            #expect(throws: RemoteError.self) { try RemoteConnections.check(name) }
+        }
+        #expect(throws: Never.self) { try RemoteConnections.check("ordinary name (2).txt") }
+    }
+
+    @Test func renamingToSuchANameSendsNothing() {
+        // No server listens here; a check that let the name through would
+        // fail with a connection error instead.
+        let connections = RemoteConnections(knownHosts: "/dev/null")
+        let file = RemoteURL("ftp://127.0.0.1:1/a.txt")!
+        #expect {
+            try connections.rename(file, to: "b\r\nDELE c", as: RemoteCredentials())
+        } throws: { ($0 as? RemoteError)?.message.contains("line break") == true }
+    }
+}
+
+@Suite struct SFTPPathTests {
+    @Test func theLoginFolderGoesAsARelativePath() {
+        #expect(RemoteConnections.quoted("/~") == "\".\"")
+        #expect(RemoteConnections.quoted("/~/temp/a b.txt") == "\"temp/a b.txt\"")
+        #expect(RemoteConnections.quoted("/srv/x") == "\"/srv/x\"")
+        #expect(RemoteConnections.quoted("/srv/say \"hi\"") == "\"/srv/say \\\"hi\\\"\"")
     }
 }

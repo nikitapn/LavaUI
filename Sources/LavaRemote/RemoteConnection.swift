@@ -180,17 +180,81 @@ public final class RemoteConnections: @unchecked Sendable {
         _ remote: RemoteURL, as credentials: RemoteCredentials
     ) throws(RemoteError) {
         guard let parent = remote.parent else { return }
+        try Self.check(remote.name)
         try command(Self.mkdir(remote), in: parent, as: credentials)
     }
 
-    /// Removes the file `remote`. Used to take back a half-written upload.
+    /// Removes the file `remote` — or the link, for a link.
     public func removeFile(
         _ remote: RemoteURL, as credentials: RemoteCredentials
     ) throws(RemoteError) {
         guard let parent = remote.parent else { return }
+        try Self.check(remote.name)
         let text = remote.server.scheme == .sftp
             ? "rm \(Self.quoted(remote.path))" : "DELE \(remote.name)"
         try command(text, in: parent, as: credentials)
+    }
+
+    /// Removes the folder `remote` and everything in it. Neither protocol
+    /// removes a folder that is not empty, so this walks it first: files and
+    /// links go, folders are emptied the same way, and the folder last.
+    /// `isCancelled` is asked between items; a cancel leaves what is left.
+    public func removeFolder(
+        _ remote: RemoteURL, as credentials: RemoteCredentials,
+        isCancelled: () -> Bool = { false }
+    ) throws(RemoteError) {
+        guard let parent = remote.parent else {
+            throw RemoteError(.failed, "The top of a server cannot be deleted")
+        }
+        try Self.check(remote.name)
+        for row in try list(remote, as: credentials) {
+            if isCancelled() { throw RemoteError(.cancelled, "Cancelled") }
+            guard let child = RemoteURL(row.path) else { continue }
+            // A link to a folder is listed as a link, never walked into: what
+            // it points at is not this folder's to delete.
+            if row.isDirectory, !row.isSymlink {
+                try removeFolder(child, as: credentials, isCancelled: isCancelled)
+            } else {
+                try removeFile(child, as: credentials)
+            }
+        }
+        let text = remote.server.scheme == .sftp
+            ? "rmdir \(Self.quoted(remote.path))" : "RMD \(remote.name)"
+        try command(text, in: parent, as: credentials)
+    }
+
+    /// Renames `remote` to `name` in the same folder. Whether `name` is
+    /// already taken is the caller's to check: FTP's `RNTO` and SFTP's
+    /// `rename` would replace a file without asking, on some servers.
+    public func rename(
+        _ remote: RemoteURL, to name: String, as credentials: RemoteCredentials
+    ) throws(RemoteError) {
+        guard let parent = remote.parent else {
+            throw RemoteError(.failed, "The top of a server cannot be renamed")
+        }
+        try Self.check(remote.name)
+        try Self.check(name)
+        let target = parent.appending(name)
+        let text = remote.server.scheme == .sftp
+            ? "rename \(Self.quoted(remote.path)) \(Self.quoted(target.path))"
+            : "RNFR \(remote.name)\nRNTO \(name)"
+        try command(text, in: parent, as: credentials)
+    }
+
+    /// A name that can be put in a command at all. FTP's commands are lines:
+    /// a name with a line break in it would end this one and start another
+    /// — `x\r\nDELE y` deletes `y` — so it is refused before anything is
+    /// sent, whatever the protocol. Asked of every name a command carries,
+    /// the server's own included: a listing is the server's to fill.
+    static func check(_ name: String) throws(RemoteError) {
+        if name.isEmpty || name == "." || name == ".." || name.contains("/") {
+            throw RemoteError(.failed, "\u{201C}\(name)\u{201D} cannot be a name")
+        }
+        // Scalars, not Characters: "\r\n" is one Character in Swift, equal to
+        // neither "\r" nor "\n" — and it is the very line break FTP means.
+        if name.unicodeScalars.contains(where: { $0 == "\n" || $0 == "\r" || $0 == "\0" }) {
+            throw RemoteError(.failed, "A name cannot contain a line break")
+        }
     }
 
     /// The command runs in the parent folder, so FTP names the item there —
@@ -200,21 +264,37 @@ public final class RemoteConnections: @unchecked Sendable {
         remote.server.scheme == .sftp ? "mkdir \(quoted(remote.path))" : "MKD \(remote.name)"
     }
 
-    /// SFTP's `~` is curl's to expand in a URL, not in a command.
+    /// A path for an SFTP command, quoted.
+    ///
+    /// `~` means something only in a URL, where curl swaps it for the login
+    /// folder; in a command it is a folder literally called `~`, and every
+    /// command on a path under it failed with "No such file or directory".
+    /// A path under it goes as a relative one instead, which the server
+    /// resolves against the folder it logged into — the same place.
     static func quoted(_ path: String) -> String {
         var path = path
-        if path == "/~" || path.hasPrefix("/~/") { path.removeFirst(2); path = "~" + path }
+        if path == "/~" {
+            path = "."
+        } else if path.hasPrefix("/~/") {
+            path.removeFirst(3)
+        }
         return "\"" + path.replacingOccurrences(of: "\"", with: "\\\"") + "\""
     }
 
     private func command(
         _ text: String, in folder: RemoteURL, as credentials: RemoteCredentials
     ) throws(RemoteError) {
-        let _: Bool = try run(folder.server, .transfer, credentials) { handle, call, result in
-            lava_remote_command(
-                handle, call.url(folder, true), call.user,
-                call.password, text, &result
-            ) == 0 ? true : nil
+        do throws(RemoteError) {
+            let _: Bool = try run(folder.server, .transfer, credentials) { handle, call, result in
+                lava_remote_command(
+                    handle, call.url(folder, true), call.user,
+                    call.password, text, &result
+                ) == 0 ? true : nil
+            }
+        } catch where error.kind == .notFound {
+            // A 550 from a command is the server saying no — permission, a
+            // name taken, a folder not empty — not a missing folder.
+            throw RemoteError(.failed, "\(folder.server.host) refused: \(error.message)")
         }
     }
 

@@ -26,8 +26,10 @@ struct RemoteDrag: Equatable {
 /// `RemoteListingSource` makes it look like any other folder that is slow to
 /// read. What differs is here: a password that may be needed, files that have
 /// to be fetched before anything can open them, and drops that become uploads.
-/// Renaming, deleting and making folders on a server are not done yet, and say
-/// so (`refuseOnServer`) rather than reaching for the local disk with a URL.
+/// New Folder, Rename and Delete go to the server through the same draft row,
+/// field and question bar as on the disk; extracting, compressing and the
+/// Trash say they are not for servers (`refuseOnServer`) rather than reaching
+/// for the local disk with a URL.
 extension ExplorerSession {
     // MARK: - Listing
 
@@ -57,6 +59,21 @@ extension ExplorerSession {
     func remoteFolderChanged(_ path: String) {
         let source = self.source
         layout.updateTabs(showing: path) { $0.reload(from: source) }
+        // A folder just made or a name just given, now that the listing
+        // has it.
+        if remote.failure(path) == nil, let pending = selectAfterFetch.removeValue(forKey: path),
+           let paneID = layout.paneID(containingTab: pending.tabID)
+        {
+            layout.updatePane(id: paneID) { pane in
+                pane.tabs.updateTab(id: pending.tabID) { $0.selected = pending.path }
+            }
+            if let index = layout.tab(id: pending.tabID)?.listing.entries
+                .firstIndex(where: { $0.path == pending.path })
+            {
+                let row = FileListMetrics.rowHeight
+                scrollPosition(for: pending.tabID).scroll(to: max(0, Float(index - 3) * row))
+            }
+        }
         let showing = layout.panes.contains { pane in
             pane.tabs.tabs.contains { $0.listing.path == path }
         }
@@ -427,5 +444,167 @@ extension ExplorerSession {
             return path.hasPrefix("/") ? pane.id : nil
         }
         return nil
+    }
+
+    // MARK: - Changing a server
+
+    /// New Folder, on a server: the name checked against the listing on
+    /// screen, the folder made on a worker, and selected once it is listed.
+    func commitRemoteNewFolder(_ draft: NewFolderDraft) {
+        guard let folder = RemoteURL(draft.directory) else { return }
+        let name = draft.name.trimmingCharacters(in: .whitespaces)
+        if let problem = NewFolder.problem(with: name) ?? Self.takenProblem(name, in: folder, session: self) {
+            notice = problem
+            ViewInvalidation.markDirty()
+            return
+        }
+        let target = folder.appending(name)
+        newFolderDraft = nil
+        FocusManager.clear()
+        let connections = self.connections
+        let logins = self.logins
+        runRemote("Creating \u{201C}\(name)\u{201D}…") { _ in
+            do throws(RemoteError) {
+                try connections.makeFolder(target, as: logins.credentials(for: folder.server))
+                return nil
+            } catch {
+                return error
+            }
+        } done: { [weak self] error in
+            guard let self else { return }
+            self.changed(folder, select: target, in: draft.tabID)
+            self.notice = error.map { "Could not create \u{201C}\(name)\u{201D}: \($0.message)" }
+                ?? "Created \u{201C}\(name)\u{201D}"
+        }
+    }
+
+    /// Rename, on a server. A tab open inside a renamed folder follows it,
+    /// as on the disk. No undo: the history knows local paths only.
+    func commitRemoteRename(_ draft: RenameDraft) {
+        guard let item = RemoteURL(draft.path), let folder = item.parent else { return }
+        let name = draft.name.trimmingCharacters(in: .whitespaces)
+        guard name != item.name else {
+            renameDraft = nil
+            FocusManager.clear()
+            ViewInvalidation.markDirty()
+            return
+        }
+        if let problem = NewFolder.problem(with: name) ?? Self.takenProblem(name, in: folder, session: self) {
+            // The field stays open with what was typed, to be fixed.
+            notice = problem
+            ViewInvalidation.markDirty()
+            return
+        }
+        let target = folder.appending(name)
+        renameDraft = nil
+        FocusManager.clear()
+        let connections = self.connections
+        let logins = self.logins
+        runRemote("Renaming \u{201C}\(item.name)\u{201D}…") { _ in
+            do throws(RemoteError) {
+                try connections.rename(item, to: name, as: logins.credentials(for: item.server))
+                return nil
+            } catch {
+                return error
+            }
+        } done: { [weak self] error in
+            guard let self else { return }
+            if let error {
+                self.changed(folder, select: nil, in: draft.tabID)
+                self.notice = "Could not rename \u{201C}\(item.name)\u{201D}: \(error.message)"
+                return
+            }
+            // Every tab inside it, and what they would go back to.
+            self.layout.rebaseTabs(from: item.string, to: target.string, source: self.source)
+            self.changed(folder, select: target, in: draft.tabID)
+            self.notice = "Renamed to \u{201C}\(name)\u{201D}"
+        }
+    }
+
+    /// Delete, on a server, once the bar has had its yes. Folders go whole;
+    /// Cancel stops before the next item.
+    func eraseRemote(_ entries: [FileEntry]) {
+        let rows = entries.compactMap { entry in RemoteURL(entry.path).map { (entry, $0) } }
+        guard let first = rows.first?.1 else { return }
+        let named = rows.count == 1 ? "\u{201C}\(rows[0].0.name)\u{201D}" : Self.items(rows.count)
+        let connections = self.connections
+        let logins = self.logins
+        runRemote("Deleting \(named)…") { cancel in
+            let credentials = logins.credentials(for: first.server)
+            for (entry, url) in rows {
+                if cancel.isCancelled { return RemoteError(.cancelled, "Cancelled") }
+                do throws(RemoteError) {
+                    if entry.isDirectory, !entry.isSymlink {
+                        try connections.removeFolder(url, as: credentials) { cancel.isCancelled }
+                    } else {
+                        try connections.removeFile(url, as: credentials)
+                    }
+                } catch {
+                    return RemoteError(error.kind, "\(entry.name): \(error.message)")
+                }
+            }
+            return nil
+        } done: { [weak self] error in
+            guard let self else { return }
+            for folder in Set(rows.compactMap { $0.1.parent }) {
+                self.changed(folder, select: nil, in: nil)
+            }
+            switch error?.kind {
+            case nil: self.notice = "Deleted \(named)"
+            case .cancelled?: self.notice = "Cancelled — some of it may be gone already"
+            default: self.notice = "Could not delete \(error!.message)"
+            }
+        }
+    }
+
+    /// Why `name` cannot go into `folder`, from the listing on screen.
+    private static func takenProblem(_ name: String, in folder: RemoteURL, session: ExplorerSession) -> String? {
+        let names = Set((session.remote.cached(folder.string) ?? []).map(\.name))
+        guard names.contains(name) else { return nil }
+        return "\u{201C}\(name)\u{201D} is already in \(folder.name)"
+    }
+
+    /// `folder` is to be fetched again and every tab on it reloaded — the
+    /// new listing then selects `select`, if given.
+    private func changed(_ folder: RemoteURL, select: RemoteURL?, in tabID: Int?) {
+        if let select, let tabID {
+            selectAfterFetch[folder.string] = (tabID, select.string)
+        }
+        remote.invalidate(folder.string)
+        let source = self.source
+        layout.updateTabs(showing: folder.string) { $0.reload(from: source) }
+        ViewInvalidation.markDirty()
+    }
+
+    /// One change to a server, on a worker, with the status line's Cancel —
+    /// shared with transfers, so a delete cannot start under an upload into
+    /// the same folder. `work` returns what stopped it, if anything.
+    private func runRemote(
+        _ text: String,
+        work: @escaping @Sendable (CancelFlag) -> RemoteError?,
+        done: @escaping @Sendable (RemoteError?) -> Void
+    ) {
+        guard !transferRunning else {
+            notice = "Still busy on the server — try again when it is done"
+            ViewInvalidation.markDirty()
+            return
+        }
+        let cancel = CancelFlag()
+        transferCancel = cancel
+        transferRunning = true
+        notice = text
+        ViewInvalidation.markDirty()
+        Thread.detachNewThread { [weak self] in
+            let error = work(cancel)
+            MainQueue.async { [weak self] in
+                guard let self else { return }
+                self.transferRunning = false
+                if error?.kind == .login, let server = RemoteURL(self.listing.path)?.server {
+                    self.logins.refused(server)
+                }
+                done(error)
+                ViewInvalidation.markDirty()
+            }
+        }
     }
 }

@@ -428,7 +428,19 @@ int lava_remote_command(lava_remote *remote, const char *url, const char *user,
                         lava_remote_result *result) {
   char error_buffer[CURL_ERROR_SIZE];
   prepare(remote, url, user, password, error_buffer);
-  struct curl_slist *commands = curl_slist_append(NULL, command);
+  // One command per line: a rename is two (RNFR, RNTO) and has to be sent
+  // on the same connection, in that order.
+  struct curl_slist *commands = NULL;
+  const char *line = command;
+  while (*line) {
+    const char *end = strchr(line, '\n');
+    size_t length = end ? (size_t)(end - line) : strlen(line);
+    char *one = strndup(line, length);
+    if (one && *one) commands = curl_slist_append(commands, one);
+    free(one);
+    if (!end) break;
+    line = end + 1;
+  }
   // After, not before: `QUOTE` runs straight after login, in whatever folder
   // the reused connection was last left in, so a relative name meant nothing
   // in particular. `POSTQUOTE` runs once curl has gone into the URL's folder.

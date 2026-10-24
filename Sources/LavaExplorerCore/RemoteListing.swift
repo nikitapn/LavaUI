@@ -26,7 +26,9 @@ public enum RemoteListing {
         var seen = Set<String>()
         var wall = Calendar(identifier: .gregorian)
         wall.timeZone = timeZone
-        for raw in text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
+        // `isNewline`, not a comparison with "\n": FTP's lines end in "\r\n",
+        // which Swift reads as one Character equal to neither.
+        for raw in text.split(whereSeparator: \.isNewline) {
             guard let row = parseLine(String(raw), now: now, wall: wall),
                   row.name != ".", row.name != "..", !row.name.contains("/"),
                   seen.insert(row.name).inserted

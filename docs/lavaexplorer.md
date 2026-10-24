@@ -245,9 +245,9 @@ file.
 - **A second window.** One surface per process; navigate in place.
 - **Browsing inside an archive.** It is extracted or it is not; there is no
   looking around in one first.
-- **Changing a server.** New Folder, Rename, Delete and the Trash say
-  "not supported yet" on a server rather than reaching for the local disk
-  with a URL; only uploads write there. Server to server is refused too.
+- **Undo on a server.** New Folder, Rename and Delete there are not on the
+  Edit menu's history, which knows local paths; neither is an upload.
+  Server to server is refused, and so are the Trash, Extract and Compress.
 - **Asking about a new host key.** A host seen for the first time is
   trusted and written down (`accept-new`); only a *changed* key is refused.
   A certificate that the system does not trust is refused with no way to
@@ -310,6 +310,15 @@ and splitting all just work.
   the rows onto a local pane — inside the window: a server's row has no
   path any other program could open, so it never becomes an OS drag. A file
   comes down under a hidden name and is renamed into place when complete.
+- **New Folder, Rename and Delete** work on a server through the same row,
+  field and question bar as on the disk, run on a worker, and select what
+  they made once the server lists it. A name is checked against the
+  listing on screen first — `RNTO` would replace a file on some servers
+  without asking. Delete is for good, and the bar says so: a server has no
+  Trash. A folder is emptied first, since neither protocol removes one that
+  is not; a link is removed, never followed. Any name with a line break is
+  refused before a command is sent: FTP's commands are lines, and
+  `x\r\nDELE y` would delete `y`.
 - **Progress and Cancel** in the status line, as for archives.
 - **The sidebar's Servers**: those used lately, most recent first, eight at
   most. The cross forgets one, its saved password too.

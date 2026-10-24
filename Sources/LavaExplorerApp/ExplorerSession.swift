@@ -1087,7 +1087,6 @@ final class ExplorerSession: @unchecked Sendable {
     func startNewFolder() {
         dismissContext()
         cancelRename()
-        if refuseOnServer(listing.path, "Making folders") { return }
         let tab = tabSet.current
         guard !TrashPath.isTrash(tab.listing.path) else {
             notice = "Folders cannot be made in the Trash"
@@ -1100,9 +1099,15 @@ final class ExplorerSession: @unchecked Sendable {
         // The field focuses itself only when nothing else has the keyboard,
         // and the address bar may.
         FocusManager.clear()
+        // A server is asked nothing: its folder's names are the listing on
+        // screen. (`source.exists` says yes to every remote address.)
+        let taken = Set(tab.listing.entries.map(\.name))
+        let exists: (String) -> Bool = RemoteURL.isRemote(directory)
+            ? { taken.contains(($0 as NSString).lastPathComponent) }
+            : { source.exists($0) }
         newFolderDraft = NewFolderDraft(
             paneID: layout.activePaneID, tabID: tab.id, directory: directory,
-            name: NewFolder.freeName(in: directory, exists: { source.exists($0) })
+            name: NewFolder.freeName(in: directory, exists: exists)
         )
         notice = nil
         ViewInvalidation.markDirty()
@@ -1117,6 +1122,10 @@ final class ExplorerSession: @unchecked Sendable {
 
     func commitNewFolder() {
         guard let draft = newFolderDraft else { return }
+        if RemoteURL.isRemote(draft.directory) {
+            commitRemoteNewFolder(draft)
+            return
+        }
         do {
             let path = try NewFolder.make(named: draft.name, in: draft.directory)
             newFolderDraft = nil
@@ -1165,7 +1174,6 @@ final class ExplorerSession: @unchecked Sendable {
 
     /// F2 or Rename: the lead row, or `entry` when a menu names one.
     func startRename(_ entry: FileEntry? = nil) {
-        if refuseOnServer(listing.path, "Renaming") { return }
         dismissContext()
         guard let entry = entry ?? selectedEntry else { return }
         guard !inTrash else {
@@ -1190,6 +1198,10 @@ final class ExplorerSession: @unchecked Sendable {
 
     func commitRename() {
         guard let draft = renameDraft else { return }
+        if RemoteURL.isRemote(draft.path) {
+            commitRemoteRename(draft)
+            return
+        }
         do {
             let path = try Rename.rename(draft.path, to: draft.name)
             renameDraft = nil
@@ -1293,10 +1305,10 @@ final class ExplorerSession: @unchecked Sendable {
     /// Trash, asks and then removes it for good.
     func deleteSelected(permanently: Bool) {
         dismissContext()
-        if refuseOnServer(listing.path, "Deleting") { return }
         let entries = selectedEntries
         guard !entries.isEmpty else { return }
-        if permanently || inTrash {
+        // A server has no Trash: Delete is the question Shift+Delete asks.
+        if permanently || inTrash || isOnServer {
             askToErase(entries)
         } else {
             moveToTrash(entries.map(\.path))
@@ -1307,7 +1319,9 @@ final class ExplorerSession: @unchecked Sendable {
     /// before the next frame whatever the size of what is thrown away.
     func moveToTrash(_ paths: [String]) {
         guard !paths.isEmpty else { return }
-        if let path = paths.first(where: RemoteURL.isRemote), refuseOnServer(path, "Deleting") {
+        if paths.contains(where: RemoteURL.isRemote) {
+            let remoteRows = listing.entries.filter { paths.contains($0.path) }
+            askToErase(remoteRows)
             return
         }
         var moved: [TrashItem] = []
@@ -1373,6 +1387,8 @@ final class ExplorerSession: @unchecked Sendable {
             /// Things in the Trash, by their path in `files/`.
             case trashed([String])
             case everything
+            /// Rows on a server, which has no Trash to throw them into.
+            case remote([FileEntry])
         }
 
         var what: What
@@ -1383,14 +1399,17 @@ final class ExplorerSession: @unchecked Sendable {
     @ObservationIgnored private var erasing = false
 
     func askToErase(_ entries: [FileEntry]) {
-        if let entry = entries.first(where: { RemoteURL.isRemote($0.path) }),
-           refuseOnServer(entry.path, "Deleting")
-        {
-            return
-        }
         guard !entries.isEmpty, !erasing else { return }
         let named = entries.count == 1
             ? "\u{201C}\(entries[0].name)\u{201D}" : Self.items(entries.count)
+        if let server = entries.compactMap({ RemoteURL($0.path)?.server }).first {
+            pendingErase = PendingErase(
+                what: .remote(entries),
+                message: "Delete \(named) from \(server.host) for good? A server has no Trash."
+            )
+            ViewInvalidation.markDirty()
+            return
+        }
         let paths = entries.map(\.path)
         let inTrash = entries.allSatisfy { trash.item(trashedPath: $0.path) != nil }
         pendingErase = PendingErase(
@@ -1424,6 +1443,10 @@ final class ExplorerSession: @unchecked Sendable {
             ViewInvalidation.markDirty()
             return
         }
+        if case .remote(let entries) = pending.what {
+            eraseRemote(entries)
+            return
+        }
         erasing = true
         notice = "Deleting…"
         ViewInvalidation.markDirty()
@@ -1448,6 +1471,8 @@ final class ExplorerSession: @unchecked Sendable {
                 }
             case .everything:
                 failures = trash.empty()
+            case .remote:
+                failures = []
             }
             let changed = folders
             MainQueue.async { [weak self] in
@@ -1873,6 +1898,10 @@ final class ExplorerSession: @unchecked Sendable {
     /// Rows from a server being dragged inside the window, and the pane they
     /// would be let go of on. Observed: the pane lights up from it.
     var remoteDrag: RemoteDrag?
+    /// A row to select once a server folder's new listing arrives — the
+    /// folder just made, the name just given. Selecting it at once would not
+    /// stick: the listing on screen is still the old one, without it.
+    @ObservationIgnored var selectAfterFetch: [String: (tabID: Int, path: String)] = [:]
 
     // MARK: - Copying
 

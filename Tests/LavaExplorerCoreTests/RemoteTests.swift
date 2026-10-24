@@ -165,6 +165,11 @@ import Testing
         #expect(mlsd[0].modified == Date(timeIntervalSince1970: 1_677_801_600))
     }
 
+    @Test func crlfLineEndingsSplit() {
+        let text = "type=dir; a\r\ntype=file;size=1; b\r\ntype=file;size=2; c\r\n"
+        #expect(RemoteListing.parse(text, in: folder).map(\.name) == ["a", "b", "c"])
+    }
+
     @Test func linesThatAreNoneOfThemAreSkipped() {
         #expect(RemoteListing.parse("total 0\n\nsomething odd\n", in: folder).isEmpty)
     }

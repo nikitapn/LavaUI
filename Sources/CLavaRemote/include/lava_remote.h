@@ -82,8 +82,10 @@ int lava_remote_upload(lava_remote *remote, const char *url, const char *user,
                        lava_remote_progress_fn progress, void *context,
                        lava_remote_result *result);
 
-/// Runs one protocol command once curl is in the folder `url` — `MKD name`
-/// for FTP, `mkdir "/path"` for SFTP. Nothing is transferred.
+/// Runs protocol commands once curl is in the folder `url` — `MKD name` for
+/// FTP, `mkdir "/path"` for SFTP — one per line of `command`, in order,
+/// stopping at the first the server refuses. Nothing is transferred. The
+/// caller makes sure no name in them has a line break of its own.
 int lava_remote_command(lava_remote *remote, const char *url, const char *user,
                         const char *password, const char *command,
                         lava_remote_result *result);
