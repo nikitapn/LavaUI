@@ -204,3 +204,47 @@ struct PaneDropZoneTests {
         #expect(PaneDropZone.preview(for: nil, in: rect) == rect)
     }
 }
+
+private struct WorkspaceSource: FileSource {
+    func entries(in directory: String) throws -> [FileEntry] { [] }
+    func entry(at path: String) throws -> FileEntry {
+        FileEntry(path: path, name: path, isDirectory: true)
+    }
+    func exists(_ path: String) -> Bool { true }
+}
+
+@Suite("Workspace restoration")
+struct WorkspaceTests {
+    @Test("JSON round trip keeps pane geometry, tab order, remote paths and selection")
+    func roundTrip() throws {
+        var tabs = ExplorerTabs(tab: tab(10, "/home"))
+        tabs.insert(tab(20, "ftp://alice@example.com/photos"))
+        tabs.insert(tab(30, "/tmp"))
+        var original = PaneLayout(tabs: tabs)
+        _ = original.splitTab(30, beside: 1, on: .right)
+        original.selectTab(20)
+        if case .split(let split) = original.root { original.setFraction(split: split.id, 0.35) }
+        let saved = original.workspace
+        let data = try JSONEncoder().encode(saved)
+        let decoded = try JSONDecoder().decode(PaneLayout.Workspace.self, from: data)
+        var restored = try #require(PaneLayout(workspace: decoded, source: WorkspaceSource()))
+        #expect(restored.workspace == saved)
+        // Fresh ids must stay unique as tabs and panes are added after restoration.
+        restored.openTab(path: "/new", source: WorkspaceSource())
+        let ids = restored.panes.flatMap { $0.tabs.tabs.map(\.id) }
+        #expect(Set(ids).count == ids.count)
+        let newTab = restored.activeTabs.currentID
+        let didSplit = restored.splitTab(newTab, beside: restored.activePaneID, on: .bottom)
+        #expect(didSplit)
+        #expect(Set(restored.panes.map(\.id)).count == restored.panes.count)
+    }
+
+    @Test("Empty saved panes are rejected, stale selection indices fall back safely")
+    func invalidState() throws {
+        let empty = PaneLayout.Workspace(root: .pane(paths: [], selected: 0), activePane: 0)
+        #expect(PaneLayout(workspace: empty, source: WorkspaceSource()) == nil)
+        let stale = PaneLayout.Workspace(root: .pane(paths: ["/tmp"], selected: 99), activePane: -1)
+        let restored = try #require(PaneLayout(workspace: stale, source: WorkspaceSource()))
+        #expect(restored.activeTabs.current.listing.path == "/tmp")
+    }
+}

@@ -22,7 +22,21 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
 
 - Opens on `$HOME`, or on the folder (or the parent of the file) named on the
   command line.
-- Places: Home, the XDG user directories that exist, Computer (`/`).
+- Collapsible Places, Favorites, and Servers sections in the sidebar.
+  Places includes Home, the XDG user directories that exist, and Computer (`/`).
+  Right-click a folder and choose **Add to Favorites**. Local paths and exact FTP/FTPS/SFTP folders
+  are saved across launches; the cross removes a favorite without deleting it.
+- **Profiles.** Use the sidebar's profile selector or the Profiles menu to
+  switch setups, and **New Profile…** to create one with a custom name. Each
+  keeps its own tabs and pane splits, sidebar width and expanded sections,
+  favorites, recent servers, and folder view choices. The existing setup becomes
+  Home; a new profile starts at the home folder with empty favorites and servers.
+  The selected profile is remembered across launches. Passwords stay in the
+  keyring. Finish ongoing file operations before switching profiles.
+- Remembers expanded sidebar sections and sidebar width. Launching without a
+  path restores open tabs, their order and selection, and pane splits, including
+  remote folders. Explicit paths take precedence. File-picker dialogs do not
+  restore or overwrite the Explorer workspace.
 - Details list: name, size, date. Folders first. Click a column to sort.
   Drag the line between two headings to resize: Size and Modified keep
   their widths, Name takes what is left, and every pane shares one set.
@@ -195,7 +209,9 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   the pointer. Offered as a copy only; let go on the window it came from and
   nothing happens.
 - Tabs: each has its own folder and Back stack. Ctrl+T / Ctrl+W, Ctrl+Tab,
-  the plus on the strip, middle-click a folder, or Open in New Tab. Closing
+  the plus on the strip, middle-click a folder, or Open in New Tab. Ctrl+T,
+  the plus, and File → New Tab open the home directory; opening a folder in
+  a new tab uses that folder. Closing
   the last tab closes the window. Several paths on the command line open
   one tab each. Tabs keep their width; a strip that runs out of room scrolls
   (the wheel over it), and the selected tab is scrolled into view when it

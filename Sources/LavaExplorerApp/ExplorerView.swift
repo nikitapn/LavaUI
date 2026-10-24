@@ -41,6 +41,9 @@ struct ExplorerView: View {
             if let request = session.remoteLogin {
                 LoginBar(session: session, request: request)
             }
+            if session.profileDraft != nil {
+                ProfileNameBar(session: session)
+            }
             if session.connectDraft != nil {
                 ConnectBar(session: session)
             }
@@ -531,6 +534,27 @@ private struct LoginBar: View {
 }
 
 /// Connect to Server…: an address, started for you.
+private struct ProfileNameBar: View {
+    @Bindable var session: ExplorerSession
+
+    var body: some View {
+        HStack(padding: 10, alignment: .center, spacing: 10) {
+            Text("New Profile", color: Theme.current.textSecondary)
+            TextField(
+                text: Binding(get: { session.profileDraft ?? "" }, set: { session.profileDraft = $0 }),
+                placeholder: "Work, Home, …", autoFocus: true,
+                onSubmit: { session.createProfile() }
+            )
+            .flexGrow(1)
+            .agentId("profile-name")
+            Button("Cancel") { session.profileDraft = nil }
+            Button("Create") { session.createProfile() }
+                .agentId("create-profile")
+        }
+        .background(Theme.current.panel)
+    }
+}
+
 private struct ConnectBar: View {
     @Bindable var session: ExplorerSession
 
@@ -860,25 +884,110 @@ private struct Sidebar: View {
                     .frame(height: .pt(PaneChrome.stripHeight), minWidth: 24)
                     .windowDrag()
             }
-            VStack(flexGrow: 1, padding: 8, spacing: 2) {
-                // Leading 10 is the rows' own, so the heading lines up with
-                // the icons under it.
-                Text("PLACES", color: Theme.current.textDim)
-                    .padding(EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10))
-                ForEach(session.places) { place in
-                    placeRow(place)
-                }
-                if !session.servers.isEmpty {
-                    Text("SERVERS", color: Theme.current.textDim)
-                        .padding(EdgeInsets(top: 14, leading: 10, bottom: 6, trailing: 10))
-                    ForEach(session.servers, id: \.string) { url in
-                        serverRow(url)
+            ScrollView(.vertical) {
+                VStack(padding: 8, spacing: 2) {
+                    if session.chooser == nil {
+                        sectionHeader("PROFILE: \(session.profiles.selected.name)", expanded: session.profilePickerExpanded) {
+                            session.profilePickerExpanded.toggle()
+                        }
+                        if session.profilePickerExpanded {
+                            ForEach(session.profiles.profiles) { profile in
+                                HStack(padding: 10, alignment: .center, spacing: 8, onClick: {
+                                    session.selectProfile(profile.id)
+                                }) {
+                                    Text(profile.name, color: Theme.current.textPrimary, lineLimit: 1)
+                                    Spacer()
+                                    if profile.id == session.profiles.selectedID {
+                                        Text("✓", color: Theme.current.accent)
+                                    }
+                                }
+                                .background(profile.id == session.profiles.selectedID
+                                            ? Theme.current.selectionFill : Color.clear)
+                                .hoverBackground(Theme.current.hover)
+                                .cornerRadius(4)
+                                .cursor(.pointer)
+                                .agentId("profile-\(profile.id)")
+                            }
+                            Button("New Profile…") { session.profileDraft = "" }
+                                .agentId("new-profile")
+                        }
+                    }
+                    sectionHeader("PLACES", expanded: session.placesExpanded) {
+                        session.placesExpanded.toggle()
+                    }
+                    if session.placesExpanded {
+                        ForEach(session.places) { place in
+                            placeRow(place)
+                        }
+                    }
+                    sectionHeader("FAVORITES", expanded: session.favoritesExpanded) {
+                        session.favoritesExpanded.toggle()
+                    }
+                    if session.favoritesExpanded {
+                        ForEach(session.favorites, id: \.self) { path in
+                            favoriteRow(path)
+                        }
+                        if session.favorites.isEmpty {
+                            Text("Right-click a folder to add", color: Theme.current.textDim)
+                                .padding(10)
+                        }
+                    }
+                    sectionHeader("SERVERS", expanded: session.serversExpanded) {
+                        session.serversExpanded.toggle()
+                    }
+                    if session.serversExpanded {
+                        ForEach(session.servers, id: \.string) { url in
+                            serverRow(url)
+                        }
                     }
                 }
-                Spacer()
             }
         }
         .background(Theme.current.panel)
+    }
+
+    private func sectionHeader(
+        _ title: String, expanded: Bool, toggle: @escaping () -> Void
+    ) -> some View {
+        HStack(padding: 0, alignment: .center, spacing: 8, onClick: toggle) {
+            DisclosureChevron(isExpanded: expanded, color: Theme.current.textDim)
+            Text(title, color: Theme.current.textDim)
+            Spacer()
+        }
+        .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
+        .hoverBackground(Theme.current.hover)
+        .cornerRadius(4)
+        .cursor(.pointer)
+        .agentId("section-\(title.lowercased())")
+    }
+
+    private func favoriteRow(_ path: String) -> some View {
+        let theme = Theme.current
+        let on = session.listing.path == path
+        return HStack(
+            padding: 0, alignment: .center, spacing: 12,
+            onClick: { session.go(path) }
+        ) {
+            Glyph(name: RemoteURL.isRemote(path) ? "place-server" : "place-folder",
+                  color: on ? theme.textPrimary : theme.textDim, size: 18)
+            Text(ExplorerSession.favoriteTitle(path),
+                 color: on ? theme.textPrimary : theme.textSecondary, lineLimit: 1)
+                .flexShrink(1)
+            Spacer()
+            HStack(padding: 4, alignment: .center, onClick: { session.removeFavorite(path) }) {
+                Mark(.cross, size: 8, color: theme.textDim)
+            }
+            .hoverBackground(theme.hover)
+            .cornerRadius(4)
+            .tooltip("Remove from Favorites")
+        }
+        .padding(EdgeInsets(top: 9, leading: 10, bottom: 9, trailing: 6))
+        .background(on ? theme.selectionFill : Color.clear)
+        .hoverBackground(on ? theme.selectionFill : theme.hover)
+        .cornerRadius(6)
+        .cursor(.pointer)
+        .tooltip(path)
+        .agentId("favorite-\(path)")
     }
 
     /// A server lately used: a click goes back, a drop uploads to its login
@@ -1585,6 +1694,9 @@ private struct FileContextMenu: View {
         items.append(.item(MenuItemModel(
             id: MenuID("ctx.copy-path"), title: "Copy Path"
         )))
+        if entry.isDirectory {
+            items.append(.item(MenuItemModel(id: MenuID("ctx.favorite"), title: "Add to Favorites")))
+        }
         return items
     }
 
@@ -1594,7 +1706,7 @@ private struct FileContextMenu: View {
     private func serverEntries(handlers: [DesktopEntry], defaultId: String?) -> [MenuEntry] {
         let many = session.targets(for: entry).count
         let what = many > 1 ? " \(many) Items" : ""
-        return [
+        var items: [MenuEntry] = [
             .item(MenuItemModel(id: MenuID("ctx.open"), title: "Open")),
             .item(MenuItemModel(
                 id: MenuID("ctx.open-tab"), title: "Open in New Tab", isEnabled: entry.isDirectory
@@ -1611,6 +1723,10 @@ private struct FileContextMenu: View {
             .separator,
             .item(MenuItemModel(id: MenuID("ctx.copy-path"), title: "Copy Address")),
         ]
+        if entry.isDirectory {
+            items.append(.item(MenuItemModel(id: MenuID("ctx.favorite"), title: "Add to Favorites")))
+        }
+        return items
     }
 
     /// Something in the Trash is there to be put back or got rid of.

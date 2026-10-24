@@ -30,10 +30,138 @@ final class ExplorerSession: @unchecked Sendable {
         didSet {
             syncWatches()
             applyRememberedViews()
+            saveProfile()
         }
     }
     var notice: String?
-    var sidebarFraction: Float = 0.22
+    var profiles: ExplorerProfiles
+    var profilePickerExpanded = false
+    var profileDraft: String?
+    @ObservationIgnored private var loadingProfile = true
+
+    var sidebarFraction: Float = 0.22 { didSet { saveProfile() } }
+    var placesExpanded = true { didSet { saveProfile() } }
+    var favoritesExpanded = true { didSet { saveProfile() } }
+    var serversExpanded = true { didSet { saveProfile() } }
+    var favorites: [String] = [] { didSet { saveProfile() } }
+
+    private static func loadProfiles() -> ExplorerProfiles {
+        if let saved = AppSettings.value(forKey: "profiles", as: ExplorerProfiles.self), saved.isValid {
+            return saved
+        }
+        // Keep the existing setup as Home on the first launch with profiles.
+        var home = ExplorerProfile(name: "Home")
+        home.workspace = AppSettings.value(forKey: "workspace", as: PaneLayout.Workspace.self)
+        home.sidebarFraction = Float(AppSettings.double(forKey: "sidebarFraction") ?? 0.22)
+        home.placesExpanded = AppSettings.bool(forKey: "placesExpanded") ?? true
+        home.favoritesExpanded = AppSettings.bool(forKey: "favoritesExpanded") ?? true
+        home.serversExpanded = AppSettings.bool(forKey: "serversExpanded") ?? true
+        home.favorites = AppSettings.value(forKey: "favoritePaths", as: [String].self) ?? []
+        home.servers = Self.loadServers().map(\.string)
+        home.folderViews = AppSettings.value(forKey: "folderViews", as: FolderViewMemory.self) ?? FolderViewMemory()
+        return ExplorerProfiles(initial: home)
+    }
+
+    func saveProfile() {
+        guard !loadingProfile else { return }
+        var profile = profiles.selected
+        if chooser == nil { profile.workspace = layout.workspace }
+        profile.sidebarFraction = sidebarFraction
+        profile.placesExpanded = placesExpanded
+        profile.favoritesExpanded = favoritesExpanded
+        profile.serversExpanded = serversExpanded
+        profile.favorites = favorites
+        profile.servers = servers.map(\.string)
+        profile.folderViews = viewMemory
+        guard profile != profiles.selected else { return }
+        profiles.update(profile)
+        AppSettings.set(profiles, forKey: "profiles")
+    }
+
+    private func applyProfileControls() {
+        let profile = profiles.selected
+        sidebarFraction = profile.sidebarFraction.isFinite ? min(max(profile.sidebarFraction, 0.1), 0.6) : 0.22
+        placesExpanded = profile.placesExpanded
+        favoritesExpanded = profile.favoritesExpanded
+        serversExpanded = profile.serversExpanded
+        favorites = profile.favorites
+        servers = profile.servers.compactMap(RemoteURL.init)
+        viewMemory = profile.folderViews
+    }
+
+    var canSelectProfile: Bool {
+        chooser == nil && !copying && !erasing && !archiveWorkRunning && !transferRunning
+            && pendingCopy == nil && pendingTransfer == nil && pendingErase == nil
+            && pendingOverwrite == nil && newFolderDraft == nil && renameDraft == nil
+            && compressDraft == nil && passwordRequest == nil && remoteLogin == nil
+            && connectDraft == nil && tabDrag == nil && remoteDrag == nil
+    }
+
+    func selectProfile(_ id: String) {
+        guard id != profiles.selectedID else {
+            profilePickerExpanded = false
+            return
+        }
+        guard canSelectProfile else {
+            notice = "Finish the current operation before switching profiles"
+            return
+        }
+        saveProfile()
+        guard profiles.select(id: id) else { return }
+        loadingProfile = true
+        dismissContext()
+        FocusManager.clear()
+        viewAppliedAt = [:]
+        scrollPositions = [:]
+        gridColumns = [:]
+        paneFrames = [:]
+        tabFrames = [:]
+        columnRoom = [:]
+        selectAfterFetch = [:]
+        ownDrag = []
+        dropHover = nil
+        collapseOnRelease = nil
+        profilePickerExpanded = false
+        profileDraft = nil
+        notice = nil
+        applyProfileControls()
+        layout = profiles.selected.workspace.flatMap { PaneLayout(workspace: $0, source: source) }
+            ?? PaneLayout(tabs: ExplorerTabs(tab: ExplorerTab.open(id: 1, path: NSHomeDirectory(), source: source)))
+        loadingProfile = false
+        saveProfile()
+        AppSettings.set(profiles, forKey: "profiles")
+        ViewInvalidation.markDirty()
+    }
+
+    func createProfile() {
+        guard let name = profileDraft else { return }
+        guard canSelectProfile else {
+            notice = "Finish the current operation before creating a profile"
+            return
+        }
+        guard profiles.create(name: name) else {
+            notice = "Choose a non-empty, unique profile name"
+            return
+        }
+        profileDraft = nil
+        selectProfile(profiles.profiles.last!.id)
+    }
+
+    func addFavorite(_ path: String) {
+        let path = RemoteURL(path)?.string ?? FolderHistory.normalize(path)
+        guard !TrashPath.isTrash(path), !favorites.contains(path) else { return }
+        favorites.append(path)
+        favoritesExpanded = true
+    }
+
+    func removeFavorite(_ path: String) {
+        favorites.removeAll { $0 == path }
+    }
+
+    static func favoriteTitle(_ path: String) -> String {
+        if let remote = RemoteURL(path) { return remote.name }
+        return path == "/" ? "Computer" : (path as NSString).lastPathComponent
+    }
     /// Right-clicked row, and the pane it was in. Nil closes the overlay; the
     /// binding lives here because a `LazyVStack` cell does not keep `@State`
     /// when it unmounts. The pane matters because one folder can be open in
@@ -74,6 +202,8 @@ final class ExplorerSession: @unchecked Sendable {
         connections: RemoteConnections = .standard(),
         logins: RemoteLogins = RemoteLogins()
     ) {
+        let initialProfiles = Self.loadProfiles()
+        self.profiles = initialProfiles
         let filter = FilteredSource.Filter(
             chooser?.mode == .folder ? .folders : chooser?.filters.first
         )
@@ -103,7 +233,14 @@ final class ExplorerSession: @unchecked Sendable {
             tabs.open(path: path, source: source)
         }
         if !paths.isEmpty { tabs.select(id: 1) }
-        self.layout = PaneLayout(tabs: tabs)
+        if chooser == nil, paths.isEmpty,
+           let saved = initialProfiles.selected.workspace,
+           let restored = PaneLayout(workspace: saved, source: source) {
+            self.layout = restored
+        } else {
+            self.layout = PaneLayout(tabs: tabs)
+        }
+        applyProfileControls()
         thumbnails.onChange = { [weak self] in
             self?.thumbnailRevision &+= 1
             ViewInvalidation.markDirty()
@@ -115,6 +252,9 @@ final class ExplorerSession: @unchecked Sendable {
             syncWatches()
         }
         applyRememberedViews()
+        loadingProfile = false
+        saveProfile()
+        if chooser == nil { AppSettings.set(profiles, forKey: "profiles") }
         // Last: the callback needs `self`, and a fetch started by the tabs
         // above can land before it is set — which `remoteFolderChanged`
         // makes up for by reloading whatever is showing that folder then.
@@ -156,9 +296,7 @@ final class ExplorerSession: @unchecked Sendable {
         ViewInvalidation.markDirty()
     }
 
-    private static let viewMemoryKey = "folderViews"
-    @ObservationIgnored private var viewMemory =
-        AppSettings.value(forKey: viewMemoryKey, as: FolderViewMemory.self) ?? FolderViewMemory()
+    @ObservationIgnored private var viewMemory = FolderViewMemory()
     /// The folder each tab was in when its remembered view was last looked
     /// up, so arriving somewhere applies the memory once and switching away
     /// from it afterwards is not undone on the next change to `layout`.
@@ -169,7 +307,7 @@ final class ExplorerSession: @unchecked Sendable {
         // as a place things pass through, and its path is not on disk.
         guard folder.hasPrefix("/") else { return }
         viewMemory.remember(mode, for: folder)
-        AppSettings.set(viewMemory, forKey: Self.viewMemoryKey)
+        saveProfile()
     }
 
     /// A tab that has arrived in a folder with a remembered view takes it.
@@ -195,7 +333,7 @@ final class ExplorerSession: @unchecked Sendable {
     private func rebaseRememberedViews(from old: String, to new: String) {
         let before = viewMemory
         viewMemory.rebase(from: old, to: new)
-        if viewMemory != before { AppSettings.set(viewMemory, forKey: Self.viewMemoryKey) }
+        if viewMemory != before { saveProfile() }
     }
 
     /// Columns the icon view has in each pane, from its width — so Up and
@@ -630,7 +768,7 @@ final class ExplorerSession: @unchecked Sendable {
 
     func newTab(path: String? = nil) {
         dismissContext()
-        layout.openTab(path: path ?? history.path, source: source)
+        layout.openTab(path: path ?? NSHomeDirectory(), source: source)
         ViewInvalidation.markDirty()
     }
 
@@ -950,6 +1088,9 @@ final class ExplorerSession: @unchecked Sendable {
         case "ctx.open-tab":
             dismissContext()
             if entry.isDirectory { newTab(path: entry.path) }
+        case "ctx.favorite":
+            if entry.isDirectory { addFavorite(entry.path) }
+            dismissContext()
         case "ctx.copy-path":
             copySelectedPath()
         case "ctx.download":
@@ -1888,7 +2029,7 @@ final class ExplorerSession: @unchecked Sendable {
     /// Connect to Server…: the address being typed. Observed.
     var connectDraft: String?
     /// The sidebar's servers, most recently used first. Observed.
-    var servers: [RemoteURL]
+    var servers: [RemoteURL] { didSet { saveProfile() } }
     /// A transfer is running; the status line's Cancel stops it. Observed.
     var transferRunning = false
     @ObservationIgnored var transferCancel = CancelFlag()

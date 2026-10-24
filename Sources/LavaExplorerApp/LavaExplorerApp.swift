@@ -40,7 +40,7 @@ struct LavaExplorerApp {
 
         let paths = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
         let session = ExplorerSession(
-            paths: paths.isEmpty ? [NSHomeDirectory()] : Array(paths),
+            paths: Array(paths),
             chooser: chooser
         )
         // Closing the last tab of a picker is Cancel, not a window left open
@@ -146,6 +146,21 @@ struct LavaExplorerApp {
                 MenuItem("As List", id: "view.list") { session.setViewMode(.list) }
                 MenuItem("As Icons", id: "view.icons") { session.setViewMode(.icons) }
             }
+            if session.chooser == nil {
+                Menu("Profiles", id: "profiles") {
+                    for profile in session.profiles.profiles {
+                        MenuItem(profile.name, id: MenuID("profiles.\(profile.id)"),
+                                 isEnabled: session.canSelectProfile,
+                                 isChecked: profile.id == session.profiles.selectedID) {
+                            session.selectProfile(profile.id)
+                        }
+                    }
+                    MenuSeparator()
+                    MenuItem("New Profile…", id: "profiles.new", isEnabled: session.canSelectProfile) {
+                        session.profileDraft = ""
+                    }
+                }
+            }
             Menu("Go", id: "go") {
                 MenuItem("Back", id: "go.back") { session.goBack() }
                 MenuItem("Forward", id: "go.forward") { session.goForward() }
@@ -171,6 +186,10 @@ struct LavaExplorerApp {
 
         // Before the field gets it: Escape in the new folder's name is
         // "never mind", not "stop typing".
+        if event.button == KeyCode.escape, session.profileDraft != nil {
+            session.profileDraft = nil
+            return true
+        }
         if event.button == KeyCode.escape, session.newFolderDraft != nil {
             session.cancelNewFolder()
             return true

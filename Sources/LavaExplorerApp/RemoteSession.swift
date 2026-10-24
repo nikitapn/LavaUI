@@ -90,7 +90,7 @@ extension ExplorerSession {
                         user: url.server.user ?? ""
                     )
                 }
-            } else {
+            } else if showing {
                 rememberServer(url.server)
             }
         }
@@ -225,13 +225,11 @@ extension ExplorerSession {
         servers.removeAll { $0.server == server }
         servers.insert(start, at: 0)
         if servers.count > 8 { servers.removeLast(servers.count - 8) }
-        AppSettings.set(servers.map(\.string), forKey: Self.serversKey)
     }
 
     /// Off the sidebar, and its password out of the keyring.
     func forgetServer(_ url: RemoteURL) {
         servers.removeAll { $0.server == url.server }
-        AppSettings.set(servers.map(\.string), forKey: Self.serversKey)
         logins.refused(url.server)
         let server = url.server
         DispatchQueue.global(qos: .utility).async { RemoteKeyring.forget(server) }

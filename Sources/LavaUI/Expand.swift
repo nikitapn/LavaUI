@@ -1,5 +1,42 @@
 import Foundation
 
+/// A font-independent disclosure chevron, pointing right when collapsed and down when expanded.
+public struct DisclosureChevron: View {
+    public var isExpanded: Bool
+    public var size: Float
+    public var color: Color
+    public var lineWidth: Float
+
+    public init(isExpanded: Bool, size: Float = 14, color: Color = .primary, lineWidth: Float = 1.5) {
+        self.isExpanded = isExpanded
+        self.size = size
+        self.color = color
+        self.lineWidth = lineWidth
+    }
+
+    public var body: some View {
+        let expanded = isExpanded
+        let color = color
+        let lineWidth = lineWidth
+        return Canvas(label: "Disclosure", width: .pt(size), height: .pt(size)) { list, frame in
+            let cx = frame.x + frame.w * 0.5
+            let cy = frame.y + frame.h * 0.5
+            let arm = min(frame.w, frame.h) * (4.0 / 14.0)
+            if expanded {
+                list.line(x1: cx - arm, y1: cy - arm * 0.5, x2: cx, y2: cy + arm * 0.5,
+                          color: color, width: lineWidth)
+                list.line(x1: cx, y1: cy + arm * 0.5, x2: cx + arm, y2: cy - arm * 0.5,
+                          color: color, width: lineWidth)
+            } else {
+                list.line(x1: cx - arm * 0.5, y1: cy - arm, x2: cx + arm * 0.5, y2: cy,
+                          color: color, width: lineWidth)
+                list.line(x1: cx + arm * 0.5, y1: cy, x2: cx - arm * 0.5, y2: cy + arm,
+                          color: color, width: lineWidth)
+            }
+        }
+    }
+}
+
 /// Disclosure control: chevron + title in a rounded outline, content below when open.
 ///
 /// Matches the common “expand block” pattern (› header, bordered pill). Use it to
@@ -44,13 +81,18 @@ public struct Expand<Content: View>: View {
         // fills + padding = 1px stroke without a dedicated border primitive.
         VStack(padding: s.borderWidth) {
             VStack(padding: 0) {
-                Text(
-                    "\(chevron)  \(title)",
-                    color: s.titleColor,
-                    hoverFill: s.hoverFill,
-                    cornerRadius: max(0, innerRadius - 2),
-                    onClick: { binding.wrappedValue.toggle() }
-                )
+                HStack(padding: 0, alignment: .center, spacing: 8,
+                       onClick: { binding.wrappedValue.toggle() }) {
+                    if let chevron {
+                        Text(chevron, color: s.titleColor)
+                    } else {
+                        DisclosureChevron(isExpanded: open, color: s.titleColor)
+                    }
+                    Text(title, color: s.titleColor)
+                }
+                .hoverBackground(s.hoverFill)
+                .cornerRadius(max(0, innerRadius - 2))
+                .cursor(.pointer)
                 // Inside the hover fill, so the fill is a chip round the title
                 // rather than a box flush with its glyphs.
                 .padding(EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4))
@@ -72,10 +114,10 @@ public struct Expand<Content: View>: View {
 
 /// Colours and metrics for an `Expand` disclosure.
 public struct ExpandStyle {
-    /// Header glyph while collapsed.
-    public var collapsedChevron: String
-    /// Header glyph while expanded.
-    public var expandedChevron: String
+    /// Optional custom header glyph while collapsed; nil uses the drawn chevron.
+    public var collapsedChevron: String?
+    /// Optional custom header glyph while expanded; nil uses the drawn chevron.
+    public var expandedChevron: String?
     /// Colour of the header text.
     public var titleColor: Color
     /// Fill inside the outline.
@@ -97,12 +139,8 @@ public struct ExpandStyle {
 
     /// Creates a style. Colours and radius left `nil` come from the current theme.
     public init(
-        collapsedChevron: String = "›",
-        // U+02C7 caron, not U+02C5 down arrowhead: the latter is absent from
-        // OpenSans and text shaping has no per-glyph fallback to the symbol
-        // face, so every *open* disclosure in every LavaUI app was drawing a
-        // tofu box. Both of these are in OpenSans and read as a chevron pair.
-        expandedChevron: String = "ˇ",
+        collapsedChevron: String? = nil,
+        expandedChevron: String? = nil,
         titleColor: Color? = nil,
         background: Color? = nil,
         border: Color? = nil,

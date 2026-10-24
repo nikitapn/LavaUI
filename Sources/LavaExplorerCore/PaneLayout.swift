@@ -72,6 +72,68 @@ public struct PaneLayout: Equatable, Sendable {
         nextTabID = (tabs.tabs.map(\.id).max() ?? 0) + 1
     }
 
+    /// Only navigation and pane geometry are persisted; listings are fetched afresh.
+    public struct Workspace: Codable, Equatable, Sendable {
+        public indirect enum Node: Codable, Equatable, Sendable {
+            case pane(paths: [String], selected: Int)
+            case split(horizontal: Bool, fraction: Float, first: Node, second: Node)
+        }
+        public var root: Node
+        public var activePane: Int
+    }
+
+    public var workspace: Workspace {
+        func save(_ node: PaneNode) -> Workspace.Node {
+            switch node {
+            case .pane(let pane):
+                return .pane(paths: pane.tabs.tabs.map { $0.listing.path },
+                             selected: pane.tabs.tabs.firstIndex { $0.id == pane.tabs.currentID } ?? 0)
+            case .split(let split):
+                return .split(horizontal: split.axis == .horizontal, fraction: split.fraction,
+                              first: save(split.first), second: save(split.second))
+            }
+        }
+        return Workspace(root: save(root), activePane: panes.firstIndex { $0.id == activePaneID } ?? 0)
+    }
+
+    public init?(workspace: Workspace, source: any FileSource) {
+        var paneID = 0
+        var tabID = 0
+        var splitID = 0
+        func restore(_ node: Workspace.Node) -> PaneNode? {
+            switch node {
+            case .pane(let paths, let selected):
+                guard !paths.isEmpty, paths.allSatisfy({ !$0.isEmpty }) else { return nil }
+                paneID += 1
+                var restored: ExplorerTabs?
+                for path in paths {
+                    tabID += 1
+                    let tab = ExplorerTab.open(id: tabID, path: path, source: source)
+                    if restored == nil { restored = ExplorerTabs(tab: tab) }
+                    else {
+                        let count = restored!.tabs.count
+                        restored?.insert(tab, at: count)
+                    }
+                }
+                guard var tabs = restored else { return nil }
+                tabs.select(id: tabs.tabs[min(max(selected, 0), tabs.tabs.count - 1)].id)
+                return .pane(ExplorerPane(id: paneID, tabs: tabs))
+            case .split(let horizontal, let fraction, let first, let second):
+                guard fraction.isFinite, let a = restore(first), let b = restore(second) else { return nil }
+                splitID += 1
+                return .split(PaneSplit(id: splitID, axis: horizontal ? .horizontal : .vertical,
+                                        fraction: min(max(fraction, 0.05), 0.95), first: a, second: b))
+            }
+        }
+        guard let root = restore(workspace.root) else { return nil }
+        self.root = root
+        let panes = Self.leaves(root)
+        activePaneID = panes[min(max(workspace.activePane, 0), panes.count - 1)].id
+        nextPaneID = paneID + 1
+        nextTabID = tabID + 1
+        nextSplitID = splitID + 1
+    }
+
     // MARK: - Reading
 
     /// Every pane, in reading order: left before right, top before bottom.
