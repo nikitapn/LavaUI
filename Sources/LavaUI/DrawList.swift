@@ -2305,6 +2305,22 @@ extension DrawList {
             return
         }
 
+        // A row wider than the box slides under it rather than running out of
+        // it, and only the caret moves it: `followCaret` after a key, the drag
+        // of a selection. No wheel — a field is not a scroll container, and
+        // inside a list the wheel belongs to the list. Unfocused, the field
+        // shows its start, which is the part of a path or a name that says
+        // what it is; the next click lands on what that drew.
+        leaf.textViewportWidth = max(0, w - inset * 2)
+        if focused {
+            // Only shrinks it: a path made shorter under the caret pulls the
+            // row back rather than drawing blank space after its end.
+            leaf.scrollX = min(leaf.scrollX, leaf.maxScrollX(font: font))
+        } else {
+            leaf.scrollX = 0
+        }
+        let textX = x + inset - leaf.scrollX
+
         // Single-line stays vertically centred in its box; multi-line starts
         // at the top inset and stacks.
         let firstTop = leaf.isMultiline ? y + inset : y + max(0, (h - lineH) / 2)
@@ -2316,9 +2332,16 @@ extension DrawList {
 
         // Across, as well as down: a row that fits vertically can still run
         // past the right edge — a long path in an address bar narrowed by a
-        // split drew straight over the button beside it. The ring is outside
-        // this, so a focused field keeps its whole outline.
-        pushClip(x: x, y: y, w: w, h: h)
+        // split drew straight over the button beside it.
+        //
+        // Across, the clip is the text area, not the box: a row slid left
+        // has a selection starting before the visible part, and clipped at
+        // the box it filled the padding and painted over the focus ring and
+        // the rounded corner. The caret's width is let through on the right,
+        // where the caret sits at the end of a row slid as far as it goes.
+        let clipLeft = x + min(inset, w / 2)
+        let clipRight = x + min(w, max(w - inset + theme.caretWidth, w / 2))
+        pushClip(x: clipLeft, y: y, w: max(0, clipRight - clipLeft), h: h)
         defer { popClip() }
         for (row, rowRange) in rows.enumerated() {
             let lineTop = firstTop + Float(row) * lineH
@@ -2342,7 +2365,7 @@ extension DrawList {
                 // empty tail still paints a sliver.
                 let spansNewline = sel.upperBound > lineEnd
                 rect(
-                    x: x + inset + x0, y: lineTop,
+                    x: textX + x0, y: lineTop,
                     w: max(spansNewline ? 4 : 1, x1 - x0), h: lineH,
                     color: theme.selectionFill
                 )
@@ -2350,8 +2373,8 @@ extension DrawList {
 
             if !lineText.isEmpty {
                 text(
-                    lineText, x: x + inset - 4, y: lineTop,
-                    w: w, h: lineH, color: leaf.color, font: font
+                    lineText, x: textX - 4, y: lineTop,
+                    w: w + leaf.scrollX, h: lineH, color: leaf.color, font: font
                 )
             }
 
@@ -2360,7 +2383,7 @@ extension DrawList {
                     in: lineText, matching: state.focus, lineStart: lineStart, state: state
                 )
                 rect(
-                    x: x + inset + run.caretX(for: local), y: lineTop,
+                    x: textX + run.caretX(for: local), y: lineTop,
                     w: theme.caretWidth, h: lineH, color: theme.textPrimary
                 )
             }

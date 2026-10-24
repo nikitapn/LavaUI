@@ -205,7 +205,11 @@ public struct TextField: PrimitiveView {
             guard let leaf, let run = leaf.shapedRun() else { return }
             leaf.focusSelf(binding: binding, onSubmit: submit)
 
-            let hit = leaf.index(atLocalX: localX, localY: localY) ?? run.index(atX: localX - leaf.textInset)
+            // Through the slide: the glyph under the pointer is `scrollX` further
+            // along the row than the pointer is along the box.
+            let textX = localX + leaf.scrollX
+            let hit = leaf.index(atLocalX: textX, localY: localY)
+                ?? run.index(atX: textX - leaf.textInset)
             let clicks = ClickCounter.register(x: originX + localX, y: originY + localY)
 
             if clicks >= 2 {
@@ -220,11 +224,16 @@ public struct TextField: PrimitiveView {
                     leaf.id,
                     onMove: { [weak leaf] wx, wy in
                         guard let leaf, let run = leaf.shapedRun() else { return }
-                        let lx = wx - originX
+                        let lx = wx - originX + leaf.scrollX
                         let ly = wy - originY
                         let target = leaf.index(atLocalX: lx, localY: ly)
                             ?? run.index(atX: lx - leaf.textInset)
                         leaf.editing.setCursor(target, extending: true)
+                        // Past either edge the selection reaches text the box
+                        // is not showing, and the row slides to follow it.
+                        if let font = leaf.font ?? FontStore.default {
+                            leaf.scrollToCaretX(font: font)
+                        }
                         CaretBlink.noteEdit()
                         // Selection lives on the retained node, not the bound
                         // text — see the identical note in EditorView.
@@ -854,6 +863,10 @@ extension LeafNode {
                 self.editing.insert(String(character))
                 binding.wrappedValue = self.committedText(after: before)
                 self.afterEdit()
+                // As after a key: typing at the right edge of a field too
+                // narrow for its text slides the row, or the caret walks out
+                // of the box and the user types blind.
+                self.followCaret()
                 return true
             }
         )
