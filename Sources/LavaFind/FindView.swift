@@ -119,7 +119,7 @@ private struct KeyChip: View {
 
     var body: some View {
         Text(label, color: FindStyle.secondary, font: FindFonts.mono, align: .center)
-            .padding(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8))
+            .padding(EdgeInsets(top: 5, leading: 12, bottom: 5, trailing: 12))
             .border(FindStyle.line, width: 1)
             .cornerRadius(6)
     }
@@ -214,7 +214,7 @@ private struct Row: View {
             onHover: { inside in if inside { model.selected = index } }
         ) {
             Badge(text: FindFormat.badge(ext: hit.ext, isDirectory: isDirectory))
-            VStack(spacing: 2) {
+            VStack(spacing: 4) {
                 HighlightedName(parts: parts)
                 Text(folder, color: FindStyle.dim, font: FindFonts.mono, lineLimit: 1)
             }
@@ -238,35 +238,34 @@ private struct Row: View {
 
 /// The name, with the part that matched in the accent colour.
 ///
-/// Drawn rather than built from three `Text`s side by side: every text leaf
-/// measures 8 pt wider than its glyphs (a hit-target margin), which put a
-/// visible gap either side of the match, and each of the three ellipsized on
-/// its own — "Celia Hawkes… Serb ian…". One run, cut once at the end, is
+/// Drawn rather than built from three `Text`s side by side: each of the
+/// three would ellipsize on its own — "Celia Hawkes… Serb ian…" — and three
+/// runs lose the kerning across the joins. One run, cut once at the end, is
 /// what a name looks like.
 private struct HighlightedName: View {
     let parts: (before: String, match: String, after: String)
 
     var body: some View {
         let font = FontStore.default
-        let height = (font?.lineHeight ?? 20) + 4
+        let height = font?.lineHeight ?? 20
         let before = parts.before, match = parts.match, after = parts.after
         return Canvas(
             label: "Name \"\(before)\(match)\(after)\"", width: .pct(100), height: .pt(height),
             paint: { draw, frame in
                 guard let font else { return }
-                // `DrawList.text` insets its pen by 4, as `Text` does; the
-                // segments are placed by width from one origin, so the inset is
-                // paid once.
-                let room = frame.w - 8
+                // Placed by width from one origin, as a `Text`'s glyphs are, so
+                // the name lines up with the folder `Text` under it.
+                let room = frame.w
                 var segments = [(before, Theme.current.textPrimary),
                                 (match, FindStyle.accent),
                                 (after, Theme.current.textPrimary)]
                 if font.measure(before + match + after).width > room {
                     segments = Self.cut(segments, to: room, font: font)
                 }
-                var x = frame.x
+                // `draw.text` adds 4 of its own to the pen.
+                var x = frame.x - 4
                 for (string, color) in segments where !string.isEmpty {
-                    draw.text(string, x: x, y: frame.y + 2, w: frame.w, h: height,
+                    draw.text(string, x: x, y: frame.y, w: frame.w, h: height,
                               color: color, font: font)
                     x += font.measure(string).width
                 }

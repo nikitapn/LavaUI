@@ -95,7 +95,8 @@ final class FrameAlignmentTests: XCTestCase {
         let commands = try emit(dayCell(alignment: nil))
         let text = try XCTUnwrap(commands.first { $0.kind == .text })
         let fill = try XCTUnwrap(commands.first { $0.kind == .rect && $0.w == 34 })
-        XCTAssertEqual(text.x, fill.x, accuracy: 0.01)
+        // `text()` insets the pen by 4pt; the ink is what sits on the edge.
+        XCTAssertEqual(text.x + 4, fill.x, accuracy: 0.01)
     }
 
     func testCentringPutsTheGlyphsInTheMiddleOfTheBox() throws {
@@ -228,7 +229,8 @@ final class FrameAlignmentTests: XCTestCase {
         let commands = try emit(host: host)
         let text = try XCTUnwrap(commands.first { $0.kind == .text })
         let fill = try XCTUnwrap(commands.first { $0.kind == .rect && $0.w == 34 })
-        XCTAssertEqual(text.x, fill.x, accuracy: 0.01)
+        // `text()` insets the pen by 4pt; the ink is what sits on the edge.
+        XCTAssertEqual(text.x + 4, fill.x, accuracy: 0.01)
     }
 
     /// A later frame in the chain must not lose the placement an earlier one

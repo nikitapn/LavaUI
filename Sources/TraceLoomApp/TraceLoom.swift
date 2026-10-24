@@ -368,7 +368,7 @@ public struct TraceLoom: View {
 
     private func header(_ parsed: TraceParseResult) -> some View {
         VStack {
-            HStack(padding: 10) {
+            HStack(padding: 10, spacing: 12) {
                 if WindowBridge.drawsOwnChrome {
                     WindowControls()
                         .padding(.trailing, 6)
@@ -376,7 +376,7 @@ public struct TraceLoom: View {
                 }
                 documentSwitcher
 
-                HStack() {
+                HStack(spacing: 16) {
                     Text("\(parsed.series.count) rules", color: .secondary)
                     Text("\(parsed.matchedLineCount) matched lines", color: .secondary)
                     Text("\(parsed.series.reduce(0) { $0 + $1.points.count }) points", color: .selected)
@@ -417,14 +417,14 @@ public struct TraceLoom: View {
                 Spacer()
                 if session.zoomStart != nil {
                     Text("Reset zoom", color: .accent, onClick: { resetZoom() })
-                        .padding(4)
+                        .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
                         .hoverBackground(Environment.current.theme.hover)
                         .cornerRadius(4)
                         .agentId("reset-zoom")
                 }
                 Text("live parse", color: .muted)
 
-                HStack() {
+                HStack(spacing: 6) {
                     Text("Paste, edit, drop a file here, or", color: .dim)
                     Text("Load file…", color: .accent, onClick: { session.openLogFile() })
                         .agentId("load-log-file")
@@ -459,8 +459,10 @@ public struct TraceLoom: View {
             )
             .agentId("document-switcher")
 
-            Text("×", color: .muted, onClick: { closeDocument() })
-                .padding(4)
+            HStack(padding: 0, alignment: .center, onClick: { closeDocument() }) {
+                Mark(.cross, size: 8, color: .muted)
+            }
+                .padding(7)
                 .hoverBackground(Environment.current.theme.hover)
                 .cornerRadius(4)
                 .cursor(.pointer)
@@ -543,7 +545,7 @@ public struct TraceLoom: View {
             HStack {
                 Spacer()
                 Text("Close", color: .accent, onClick: { session.showSettings = false })
-                    .padding(6)
+                    .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
                     .hoverBackground(Environment.current.theme.hover)
                     .cornerRadius(4)
                     .agentId("settings-close")
@@ -557,7 +559,7 @@ public struct TraceLoom: View {
     private func assistantPanel() -> some View {
         let state = assistant.snapshot
         return VStack(padding: 6) {
-            HStack(alignment: .center) {
+            HStack(alignment: .center, spacing: 16) {
                 Text("RULE ASSISTANT", color: .accent)
                 Text(assistant.model, color: .dim)
             }
@@ -579,7 +581,7 @@ public struct TraceLoom: View {
                     color: state.isRunning ? .dim : .accent,
                     onClick: { startAssistant() }
                 )
-                .padding(4)
+                .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
                 .hoverBackground(Environment.current.theme.hover)
                 .cornerRadius(4)
                 .agentId("assistant-run")
@@ -614,12 +616,12 @@ public struct TraceLoom: View {
                     .agentId("assistant-suggestion")
                 HStack(padding: 4) {
                     Text("Add to rules", color: .accent, onClick: { acceptSuggestion() })
-                        .padding(4)
+                        .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
                         .hoverBackground(Environment.current.theme.hover)
                         .cornerRadius(4)
                         .agentId("assistant-accept")
                     Text("Discard", color: .muted, onClick: { assistant.clearSuggestion() })
-                        .padding(4)
+                        .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
                         .hoverBackground(Environment.current.theme.hover)
                         .cornerRadius(4)
                         .agentId("assistant-discard")
@@ -665,7 +667,7 @@ public struct TraceLoom: View {
     private func firstLogLine() -> String { sampleLogLines(limit: 1).first ?? "" }
 
     private func sectionTitle(_ title: String, detail: String) -> some View {
-        VStack {
+        VStack(spacing: 12) {
             Text(title, color: .accent)
             Text(detail, color: .dim)
         }
@@ -700,7 +702,7 @@ public struct TraceLoom: View {
             color: selected ? .accent : .muted,
             onClick: { session.timelineLayout = layout }
         )
-        .padding(4)
+        .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
         .background(selected ? Environment.current.theme.hover : .clear)
         .hoverBackground(Environment.current.theme.hover)
         .cornerRadius(4)
@@ -1084,7 +1086,7 @@ public struct TraceLoom: View {
         HStack(padding: 4) {
             ForEach(traces) { item in
                 Text("● \(item.series.rule.name) · \(item.series.rule.kind.rawValue) · \(item.series.points.count)", color: item.color)
-                    .padding(3)
+                    .padding(EdgeInsets(top: 5, leading: 7, bottom: 5, trailing: 7))
             }
         }
     }
@@ -1113,7 +1115,7 @@ public struct TraceLoom: View {
                 }
             }
         }
-        .padding(5)
+        .padding(EdgeInsets(top: 7, leading: 9, bottom: 7, trailing: 9))
         .background(Environment.current.theme.inset)
         .cornerRadius(5)
     }

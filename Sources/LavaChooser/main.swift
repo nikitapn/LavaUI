@@ -194,7 +194,7 @@ struct Row: View {
             onClick: { model.selected = index; model.commit() },
             onHover: { inside in model.hovered = inside ? index : -1 }
         ) {
-            VStack(flexGrow: 1, padding: 0, spacing: 2) {
+            VStack(flexGrow: 1, padding: 0, spacing: 4) {
                 Text(screen.connector, color: theme.textPrimary)
                 if !screen.mode.isEmpty {
                     Text(screen.mode, color: theme.textSecondary)

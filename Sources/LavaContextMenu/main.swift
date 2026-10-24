@@ -526,7 +526,7 @@ struct MenuPlate: View {
                 Spacer()
                 Text(item.shortcut, color: theme.textDim)
                     .padding(EdgeInsets(
-                        top: 0, leading: 24, bottom: 0, trailing: 0
+                        top: 0, leading: 32, bottom: 0, trailing: 0
                     ))
             }
         }
@@ -563,7 +563,7 @@ struct MenuPlate: View {
             Text(title, color: colour)
             Spacer()
             Text("›", color: theme.textDim)
-                .padding(EdgeInsets(top: 0, leading: 24, bottom: 0, trailing: 0))
+                .padding(EdgeInsets(top: 0, leading: 32, bottom: 0, trailing: 0))
         }
         .padding(style.itemPadding)
         .cornerRadius(style.itemCornerRadius)

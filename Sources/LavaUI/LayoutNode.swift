@@ -1360,6 +1360,14 @@ final class LeafNode: YogaBoxNode {
             mode: mode
         )
         cachedLinesWidth = nil
+        // A text's box is its glyphs, as a CSS inline box is: room around a
+        // label is the caller's `.padding`, and a margin built into the leaf
+        // could not be taken away again. It showed as a gap round every
+        // `.background` and between Texts set side by side. The other kinds
+        // that land here (a button's label) keep the slack they are drawn
+        // centred in.
+        let margin: (w: Float, h: Float) =
+            kind == .text || kind == .markdown ? (0, 0) : (8, 4)
         if kind == .text, let limit = textLineLimit {
             let constrained = width > 0 && (
                 widthMode == YGMeasureModeExactly || widthMode == YGMeasureModeAtMost
@@ -1371,14 +1379,16 @@ final class LeafNode: YogaBoxNode {
             cachedLinesWidth = constrained ? width : .infinity
             if overflowed {
                 return YGSize(
-                    width: entry.width + 8,
-                    height: font.lineHeight * Float(visible.count) + 4
+                    width: entry.width + margin.w,
+                    height: font.lineHeight * Float(visible.count) + margin.h
                 )
             }
         }
         cachedLines = entry.lines
-        // Padding keeps a slightly larger hit target.
-        return YGSize(width: entry.width + 8, height: max(entry.height, font.lineHeight) + 4)
+        return YGSize(
+            width: entry.width + margin.w,
+            height: max(entry.height, font.lineHeight) + margin.h
+        )
     }
 
     /// The rows a `lineLimit` text shows at `width`, the last one ellipsized
@@ -1411,7 +1421,7 @@ final class LeafNode: YogaBoxNode {
             // too narrow wrapped as "a" / "photo.jpg" and showed "a…" with the
             // room for most of the name still empty beside it.
             let rest = entry.lines[last...].joined(separator: " ")
-            visible[last] = font.ellipsized(rest, availWidth: max(0, width - 8))
+            visible[last] = font.ellipsized(rest, availWidth: max(0, width))
         }
         return (visible, overflowed)
     }

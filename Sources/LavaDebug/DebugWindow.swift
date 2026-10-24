@@ -81,7 +81,7 @@ private struct SidebarRow: View {
     var body: some View {
         let selected = store.section == section
         return VStack(
-            padding: 9, spacing: 2,
+            padding: 0, spacing: 4,
             onClick: { store.section = section },
             onHover: { hovered = $0 }
         ) {
@@ -90,6 +90,7 @@ private struct SidebarRow: View {
                                  : Theme.current.textSecondary)
             Text(section.subtitle, color: Theme.current.textDim)
         }
+        .padding(EdgeInsets(top: 11, leading: 13, bottom: 11, trailing: 13))
         .background(selected ? Theme.current.selectionFill
                              : (hovered ? Theme.current.hover : .clear))
         .cornerRadius(8)
@@ -124,7 +125,7 @@ private struct StatusLine: View {
     let small: UIFont
 
     var body: some View {
-        HStack(padding: 8, alignment: .center, spacing: 8) {
+        HStack(padding: 0, alignment: .center, spacing: 8) {
             Text(store.status.isEmpty ? statusIdle : store.status,
                  color: store.statusIsError ? Theme.current.accent
                                             : Theme.current.textDim)
@@ -133,6 +134,7 @@ private struct StatusLine: View {
                  color: Theme.current.textDim)
         }
         .font(small)
+        .padding(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
         .frame(height: .pt(28))
         .background(Theme.current.panel)
     }

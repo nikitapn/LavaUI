@@ -530,7 +530,7 @@ private struct ShotChrome: View {
             align: .center,
             onClick: enabled ? { session.perform(action) } : nil
         )
-        .padding(6)
+        .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
         .frame(width: .pt(Self.button), height: .pt(Self.button))
         .background(active ? Palette.accent : Color.clear)
         .hoverBackground(enabled ? (active ? Palette.accent : Palette.hover) : Color.clear)

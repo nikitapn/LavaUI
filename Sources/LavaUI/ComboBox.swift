@@ -111,7 +111,7 @@ public struct ComboBox<Tag: Hashable>: View {
             // The same triangle a menu bar uses for a submenu, turned down.
             Text("▼", color: .muted)
         }
-        .padding(EdgeInsets(top: 5, leading: 9, bottom: 5, trailing: 8))
+        .padding(EdgeInsets(top: 7, leading: 13, bottom: 7, trailing: 12))
         .background(theme.inset)
         .hoverBackground(theme.hover)
         .cornerRadius(theme.cornerRadius)
@@ -145,7 +145,7 @@ public struct ComboBox<Tag: Hashable>: View {
         let theme = Environment.current.theme
         let selected = item.tag == selection
         return HStack(
-            padding: 0, alignment: .center, spacing: 8,
+            padding: 0, alignment: .center, spacing: 16,
             onClick: { choose(item.tag) }
         ) {
             // A fixed marker column, present on every row, so titles line up
@@ -157,7 +157,7 @@ public struct ComboBox<Tag: Hashable>: View {
                 Text(detail, color: .dim, lineLimit: 1)
             }
         }
-        .padding(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+        .padding(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
         .background(selected ? theme.hover : .clear)
         .hoverBackground(theme.hover)
         .cornerRadius(4)
@@ -182,6 +182,7 @@ public struct ComboBox<Tag: Hashable>: View {
     }
 
     private var rowHeight: Float {
-        (Environment.current.font?.lineHeight ?? 18) + 9
+        // The row's line, its padding and the 1pt between rows.
+        (Environment.current.font?.lineHeight ?? 18) + 13
     }
 }

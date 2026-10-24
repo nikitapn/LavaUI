@@ -175,7 +175,7 @@ public struct DemoExample: View {
             action()
             showMenu = false
         })
-        .padding(4)
+        .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
         .hoverBackground(Environment.current.theme.hover)
         .cornerRadius(3)
     }
@@ -199,7 +199,7 @@ public struct DemoExample: View {
 
     @ViewBuilder
     private var toolbar: some View {
-        HStack(height: .pt(56), padding: 8) {
+        HStack(height: .pt(56), padding: 8, spacing: 16) {
             // Client-side decoration. With no compositor title bar above it
             // this row *is* the non-client area: the buttons are here, and
             // `.windowDrag()` below makes its empty space the drag handle.
@@ -213,7 +213,7 @@ public struct DemoExample: View {
             if let brandImage {
                 Image(brandImage, width: .pt(40), height: .pt(40), contentMode: .fit)
             }
-            VStack(padding: 2) {
+            VStack(padding: 2, spacing: 12) {
                 Text("LavaUI · DemoExample", color: .accent)
                 Text(status, color: .secondary)
             }
@@ -266,7 +266,7 @@ public struct DemoExample: View {
 
     @ViewBuilder
     private var sidebar: some View {
-        VStack(width: .pt(200), padding: 8) {
+        VStack(width: .pt(200), padding: 8, spacing: 12) {
             Text("Navigation", color: .accent)
             Text("ForEach + selection", color: .dim)
             // Rows slide in from the left as they are added and fade out where
@@ -734,7 +734,7 @@ public struct DemoExample: View {
 
     @ViewBuilder
     private var inspector: some View {
-        VStack(width: .pt(260), padding: 8) {
+        VStack(width: .pt(260), padding: 8, spacing: 12) {
             Text("Inspector", color: .accent)
             Text("Widgets in this demo", color: .secondary)
             Text("· HStack / VStack / Spacer", color: .primary)

@@ -69,7 +69,7 @@ struct VolumeWindow: View {
     var body: some View {
         let theme = Theme.current
         VStack(flexGrow: 1, padding: 16, spacing: 10) {
-            HStack(padding: 0, alignment: .center, spacing: 8) {
+            HStack(padding: 0, alignment: .center, spacing: 16) {
                 Text(
                     pulse.muted ? "Muted" : "Volume",
                     color: theme.textPrimary
@@ -94,7 +94,7 @@ struct VolumeWindow: View {
 
             if !pulse.sinkName.isEmpty {
                 Text(pulse.sinkName, color: theme.textDim)
-                    .padding(2)
+                    .padding(EdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6))
             }
 
             if !pulse.isReady {

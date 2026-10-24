@@ -38,9 +38,9 @@ struct Card<Content: View>: View {
     }
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 10) {
             Text(title, color: Theme.current.textSecondary)
-            VStack(padding: 12, spacing: 6) { content }
+            VStack(padding: 14, spacing: 10) { content }
                 .background(Theme.current.panel)
                 .cornerRadius(10)
         }
@@ -55,7 +55,7 @@ struct Row: View {
     var emphasis: Bool = false
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .center, spacing: 18) {
             Text(label, color: emphasis ? Theme.current.textPrimary
                                         : Theme.current.textSecondary)
             Spacer()
@@ -122,7 +122,7 @@ struct OverviewPage: View {
 
                 Card("By category") {
                     ForEach(categories, id: \.name) { entry in
-                        VStack(spacing: 4) {
+                        VStack(spacing: 6) {
                             Row(label: entry.name,
                                 value: humanBytes(entry.bytes),
                                 detail: "\(percent(entry.bytes, of: report.ownBytes))%")
@@ -186,8 +186,8 @@ struct WindowsPage: View {
                              color: Theme.current.textDim)
                     }
                     ForEach(report.windows, id: \.id) { window in
-                        VStack(spacing: 4) {
-                            HStack(alignment: .center, spacing: 10) {
+                        VStack(spacing: 6) {
+                            HStack(alignment: .center, spacing: 18) {
                                 Text(window.title.isEmpty
                                         ? "window \(window.id)"
                                         : window.title,
@@ -355,7 +355,7 @@ struct TexturePage: View {
                         Text("Nothing cached.", color: Theme.current.textDim)
                     }
                     ForEach(report.textures, id: \.key) { texture in
-                        HStack(alignment: .center, spacing: 10) {
+                        HStack(alignment: .center, spacing: 18) {
                             Text(texture.key, color: Theme.current.textSecondary,
                                  lineLimit: 1)
                                 .font(mono)
@@ -399,7 +399,7 @@ struct AllocationPage: View {
                 Card("Allocations (\(allocations.count))") {
                     ForEach(Array(allocations.enumerated()), id: \.offset) { pair in
                         let alloc = pair.element
-                        HStack(alignment: .center, spacing: 10) {
+                        HStack(alignment: .center, spacing: 18) {
                             Text(humanBytes(alloc.bytes),
                                  color: Theme.current.textPrimary)
                                 .font(mono)

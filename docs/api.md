@@ -599,6 +599,14 @@ components hex and CSS use. `Color(hex:)`, `.hex`, `.hsv`, and
 visible line. Clickable `Text` receives the theme hover surface by default;
 specifying `hoverColor` gives link-like text hover without a row fill.
 
+A `Text`'s box is exactly its glyphs: a `.background` hugs the letters, and two
+texts side by side touch. Room around a label is `.padding`, and on a
+clickable text the padding goes first so the hover fill takes it in:
+`Text("Save", onClick: save).padding(EdgeInsets(top: 4, leading: 8, bottom: 4,
+trailing: 8))`. For a close cross or a plus, use `Mark(.cross)` /
+`Mark(.plus)` inside the button's stack — a `"×"` character sits on the
+baseline of a full line box and is never centred.
+
 `TextField` supports single- and multiline editing, selection, clipboard,
 undo, search-related text infrastructure, and optional soft wrapping.
 `ButtonStyle`, `ToggleStyle`, and `SliderStyle` expose the colors, geometry,

@@ -10,7 +10,7 @@ struct TitleBar: View {
     static let height: Float = 36
 
     var body: some View {
-        HStack(height: .pt(Self.height), padding: 8, alignment: .center, spacing: 8) {
+        HStack(height: .pt(Self.height), padding: 8, alignment: .center, spacing: 12) {
             if WindowBridge.drawsOwnChrome {
                 WindowControls().windowChrome()
             }
@@ -187,7 +187,7 @@ struct TransportBar: View {
             align: .center,
             onClick: enabled ? action : nil
         )
-        .padding(6)
+        .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
         .frame(width: .pt(34))
         .hoverBackground(enabled ? Theme.current.hover : Theme.current.panel)
         .cornerRadius(4)

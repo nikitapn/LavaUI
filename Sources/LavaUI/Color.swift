@@ -32,6 +32,15 @@ public struct Color: Equatable, Sendable, Hashable {
     /// right until the day something sits behind it.
     public static let clear = Color(r: 0, g: 0, b: 0, a: 0)
 
+    public static let red = Color(r: 1, g: 0, b: 0)
+    public static let green = Color(r: 0, g: 1, b: 0)
+    public static let blue = Color(r: 0, g: 0, b: 1)
+    public static let yellow = Color(r: 1, g: 1, b: 0)
+    public static let cyan = Color(r: 0, g: 1, b: 1)
+    public static let magenta = Color(r: 1, g: 0, b: 1)
+    public static let black = Color(r: 0, g: 0, b: 0)
+    public static let white = Color(r: 1, g: 1, b: 1)
+
     /// Pack as authored sRGB RGBA8 (R in the low byte). Carried through
     /// unchanged — do not pre-linearise here, or the colour arrives dark.
     public var rgba8: UInt32 {

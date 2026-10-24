@@ -140,7 +140,7 @@ struct PlayerView: View {
                 .agentId("error")
             Spacer()
             Text("Dismiss", color: .accent, onClick: { session.dismissError() })
-                .padding(4)
+                .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
                 .cornerRadius(4)
                 .cursor(.pointer)
         }

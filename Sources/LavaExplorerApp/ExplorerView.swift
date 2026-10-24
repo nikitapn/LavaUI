@@ -475,14 +475,10 @@ private struct TabStrip: View {
             }
             .flexGrow(0)
             .flexShrink(1)
-            Text(
-                "+",
-                color: Theme.current.textSecondary,
-                align: .center,
-                onClick: { session.newTab() }
-            )
-            .padding(6)
-            .frame(width: .pt(28), height: .pt(28))
+            // 9 round a 10pt mark is the 28pt square the button always was.
+            HStack(padding: 9, alignment: .center, onClick: { session.newTab() }) {
+                Mark(.plus, size: 10, color: Theme.current.textSecondary)
+            }
             .hoverBackground(Theme.current.hover)
             .cornerRadius(6)
             .cursor(.pointer)
@@ -515,11 +511,12 @@ private struct TabStrip: View {
             }
         ) {
             Text(tab.title, color: titleColor, lineLimit: 1)
-            Text(
-                "×",
-                color: theme.textDim,
+            HStack(
+                padding: 0, alignment: .center,
                 onClick: { session.closeTab(id: tab.id) }
-            )
+            ) {
+                Mark(.cross, size: 8, color: theme.textDim)
+            }
             .padding(4)
             .hoverBackground(theme.hover)
             .cornerRadius(4)
@@ -743,8 +740,10 @@ private struct Sidebar: View {
                     .windowDrag()
             }
             VStack(flexGrow: 1, padding: 8, spacing: 2) {
+                // Leading 10 is the rows' own, so the heading lines up with
+                // the icons under it.
                 Text("PLACES", color: Theme.current.textDim)
-                    .padding(6)
+                    .padding(EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10))
                 ForEach(session.places) { place in
                     placeRow(place)
                 }
@@ -765,7 +764,7 @@ private struct Sidebar: View {
         // a `Text` with a click carries its own hover fill at the width of its
         // glyphs, and the row's would sit around it.
         return HStack(
-            padding: 0, alignment: .center, spacing: 10,
+            padding: 0, alignment: .center, spacing: 12,
             onClick: { session.go(place.path) }
         ) {
             Glyph(
@@ -780,7 +779,7 @@ private struct Sidebar: View {
             )
             .flexShrink(1)
         }
-        .padding(EdgeInsets(top: 7, leading: 10, bottom: 7, trailing: 10))
+        .padding(EdgeInsets(top: 9, leading: 10, bottom: 9, trailing: 10))
         .background(fill)
         .hoverBackground(on ? theme.selectionFill : theme.hover)
         .cornerRadius(6)
@@ -1012,7 +1011,8 @@ enum TileMetrics {
     /// tile at a larger one.
     static var height: Float {
         let line = FontStore.default?.lineHeight ?? 20
-        // `+ 4`: what a text box measures beyond its rows.
+        // `+ 4`: room under the second line, so a name does not sit on the
+        // tile's edge.
         return padding + icon + padding + 2 * line + 4 + padding
     }
     /// Space between tiles, both ways. `ExplorerSession.noteGridWidth` works
@@ -1188,7 +1188,10 @@ private struct FileRow: View {
             if renaming {
                 renameField.flexGrow(1)
             } else {
+                // A little further from the icon than the columns are from
+                // each other: the name belongs to the picture beside it.
                 Text(entry.name, color: theme.textPrimary, lineLimit: 1)
+                    .padding(.leading, 4)
                     .flexGrow(1)
             }
             Text(entry.sizeLabel, color: theme.textDim, lineLimit: 1)
@@ -1457,7 +1460,7 @@ private struct StatusBar: View {
     @Bindable var session: ExplorerSession
 
     var body: some View {
-        HStack(padding: 8, alignment: .center, spacing: 8) {
+        HStack(padding: 0, alignment: .center, spacing: 8) {
             Text(session.status, color: Theme.current.textDim, lineLimit: 1)
                 .flexShrink(1)
                 .agentId("status")
@@ -1465,11 +1468,13 @@ private struct StatusBar: View {
                 Text("Cancel", color: Theme.current.accent, onClick: {
                     session.cancelArchiveWork()
                 })
+                .padding(EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4))
                 .agentId("archive-cancel")
             }
             Spacer()
             Text(session.title, color: Theme.current.textSecondary)
         }
+        .padding(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
         .frame(height: .pt(28))
         .background(Theme.current.panel)
     }

@@ -193,7 +193,7 @@ struct LockView: View {
             onChar: { [model] character in model.type(character) }
         )
 
-        return VStack(flexGrow: 1, alignment: .center, spacing: 10) {
+        return VStack(flexGrow: 1, alignment: .center, spacing: 14) {
             Spacer()
             Text(model.time, color: Palette.text, font: fonts.clock)
             Text(model.date, color: Palette.dim, font: fonts.date)

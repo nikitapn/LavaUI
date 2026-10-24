@@ -105,7 +105,7 @@ private struct Footer: View {
     var body: some View {
         HStack(alignment: .center) {
             Spacer()
-            VStack(alignment: .center, spacing: 6) {
+            VStack(alignment: .center, spacing: 10) {
                 Text(title, color: Theme.current.textPrimary)
                 if !subtitle.isEmpty {
                     Text(subtitle, color: Theme.current.textSecondary)

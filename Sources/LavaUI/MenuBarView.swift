@@ -17,7 +17,8 @@ public struct MenuBarStyle: Equatable, Sendable {
     /// Forced strip height. `nil` sizes to the titles, which is what a
     /// panel wants when the strip itself is already a fixed 32pt.
     public var stripHeight: Float?
-    /// Inset around each text title.
+    /// Inset around each text title. All the room there is: a `Text`'s box
+    /// is its glyphs.
     public var titlePadding: EdgeInsets
     /// Inset around an icon-only title. Tighter than `titlePadding` so a
     /// 18pt mark does not sit in a text-sized chip.
@@ -107,12 +108,12 @@ public struct MenuBarStyle: Equatable, Sendable {
         MenuBarStyle(
             stripFill: theme.panel,
             stripHeight: MenuHost.barHeight,
-            titlePadding: EdgeInsets(top: 2, leading: 7, bottom: 2, trailing: 7),
+            titlePadding: EdgeInsets(top: 4, leading: 11, bottom: 4, trailing: 11),
             iconPadding: EdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 4),
             titleCornerRadius: 5,
             titleHover: theme.hover,
             titleOpenFill: theme.hover,
-            itemPadding: EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8),
+            itemPadding: EdgeInsets(top: 5, leading: 12, bottom: 5, trailing: 12),
             itemCornerRadius: 5,
             // `hover` is a one-step lift, right for a dense list and easy to
             // miss on a two-item dropdown. `selectionFill` is the chip a
@@ -147,12 +148,12 @@ public struct MenuBarStyle: Equatable, Sendable {
         return MenuBarStyle(
             stripFill: nil,
             stripHeight: nil,
-            titlePadding: EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0),
+            titlePadding: EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4),
             iconPadding: EdgeInsets(top: 5, leading: 5, bottom: 5, trailing: 5),
             titleCornerRadius: 6,
             titleHover: theme.hover,
             titleOpenFill: theme.hover,
-            itemPadding: EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10),
+            itemPadding: EdgeInsets(top: 6, leading: 14, bottom: 6, trailing: 14),
             itemCornerRadius: 6,
             itemHover: theme.selectionFill,
             itemSpacing: 1,

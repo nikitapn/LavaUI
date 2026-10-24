@@ -1055,7 +1055,7 @@ struct PanelView: View {
                 )
             } else {
                 Text(item.fallback, color: Theme.current.textPrimary)
-                    .padding(4)
+                    .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
             }
         }
         .hoverBackground(PanelChrome.style.titleHover)

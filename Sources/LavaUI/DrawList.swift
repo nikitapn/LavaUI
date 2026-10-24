@@ -1837,11 +1837,9 @@ public final class DrawList {
             let textColor = leaf.color
             // Multi-line: emit one command per wrapped line (same breaks
             // as Yoga measure via TextLayoutCache / Font::wrapLines).
-            // `measureForYoga` reserves a built-in 4px horizontal / 2px
-            // vertical inset, and Yoga adds modifier padding around that
-            // measured content. Painting must apply the same offsets; using
-            // the outer box origin put glyphs at its top-left and left all
-            // padding on the bottom/right (most visible on hover fills).
+            // `measureForYoga` measures the glyphs and nothing else, and Yoga
+            // adds modifier padding around that, so the glyphs start at the
+            // padding edge.
             let lineH = (leaf.font ?? FontStore.default)?.lineHeight ?? 18
             let measured = !leaf.cachedLines.isEmpty
             var lines = measured
@@ -1869,7 +1867,7 @@ public final class DrawList {
                 lines = Array(lines.prefix(max(1, limit)))
                 if let last = lines.indices.last {
                     let budget = max(
-                        0, w - leaf.padding.leading - leaf.padding.trailing - 8
+                        0, w - leaf.padding.leading - leaf.padding.trailing
                     )
                     if budget > 0, font.shapedRun(lines[last]).width > budget {
                         lines[last] = font.ellipsized(
@@ -1879,7 +1877,7 @@ public final class DrawList {
                 }
             }
             let textXBase = x + leaf.padding.leading
-            let textYBase = y + leaf.padding.top + 2
+            let textYBase = y + leaf.padding.top
             // Room the glyphs are free to move in, per axis. About zero for a
             // box shrink-wrapped around its own text — the overwhelmingly
             // common case — so an unaligned label costs nothing it did not
@@ -1910,16 +1908,12 @@ public final class DrawList {
             let inner = w - leaf.padding.leading - leaf.padding.trailing
             func hSlack(_ line: String) -> Float {
                 guard let alignFont else { return 0 }
-                // `DrawList.text` insets the pen by 4 on its own and
-                // `measureForYoga` reserved 4 either side.
-                return inner - alignFont.shapedRun(line).width - 8
+                return inner - alignFont.shapedRun(line).width
             }
             let vSlack: Float = {
                 guard leaf.textAlign.vertical != .top else { return 0 }
                 let inner = h - leaf.padding.top - leaf.padding.bottom
-                // `measureForYoga` returns `lineHeight * rows + 4`, two of
-                // which the `+ 2` in `textY` above has already spent.
-                return inner - Float(lines.count) * lineH - 4
+                return inner - Float(lines.count) * lineH
             }()
             func hShift(_ line: String) -> Float {
                 switch leaf.textAlign.horizontal {
@@ -1948,8 +1942,9 @@ public final class DrawList {
                     )
                     searchStart = range.upperBound
                 } else {
+                    // `text` adds 4 of its own to the pen.
                     text(
-                        line, x: textX, y: ly, w: w, h: lineH,
+                        line, x: textX - 4, y: ly, w: w, h: lineH,
                         color: textColor, font: leaf.font
                     )
                 }

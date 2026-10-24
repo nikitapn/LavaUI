@@ -510,7 +510,7 @@ struct KeyboardPage: View {
                     + "same table that dispatches them, so what is here is "
                     + "what works."
                 ) {
-                    VStack(spacing: 2) {
+                    VStack(spacing: 6) {
                         ForEach(store.bindings, id: \.action) { binding in
                             HStack(padding: 4, alignment: .center, spacing: 10) {
                                 Text("\(binding.modifiers)+\(binding.key)",
@@ -906,7 +906,7 @@ struct LockPage: View {
                             cornerRadius: 6,
                             onClick: { store.lockNow() }
                         )
-                        .padding(10)
+                        .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
                         .background(Theme.current.selectionFill)
                         .cornerRadius(6)
                         Spacer()

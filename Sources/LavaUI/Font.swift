@@ -465,12 +465,10 @@ public final class UIFont: @unchecked Sendable {
     /// the run origin (pen at the baseline); the caller offsets them.
     ///
     /// This is what the draw list paints, and the renderer never calls
-    /// HarfBuzz itself. It is *not* what Yoga measured: layout goes through
-    /// `measure`, which is C++ `Font::measure` over this face alone. So a run
-    /// carrying characters this face lacks is wider here than the box layout
-    /// derived for it — see `shapeWithFallbacks`, which re-shapes them through
-    /// `fallbacks`. Do not use a shaped width to second-guess a laid-out box:
-    /// the two disagree by a fallback glyph's advance, every time.
+    /// HarfBuzz itself. `measure` is C++ `Font::measure` over this face alone,
+    /// so a run carrying characters this face lacks is wider here — see
+    /// `shapeWithFallbacks`. `TextLayoutCache` takes the wider of the two, so
+    /// a text's box is what this draws.
     public func shape(_ text: String) -> [ShapedGlyph] {
         if let hit = shapeCache[text] {
             PerfCounters.textShapeHits &+= 1
@@ -1213,7 +1211,7 @@ public final class TextLayoutCache: @unchecked Sendable {
                 // measure() single-arg ignores \n for width; use AtMost huge width for lines.
                 let wrapped = font.wrapLines(text, availWidth: 1e6)
                 let entry = Entry(
-                    width: metrics.width,
+                    width: Self.drawnWidth(metrics.width, wrapped, font: font),
                     height: font.lineHeight * Float(max(wrapped.count, 1)),
                     lines: wrapped
                 )
@@ -1224,9 +1222,28 @@ public final class TextLayoutCache: @unchecked Sendable {
             lines = font.wrapLines(text, availWidth: availWidth)
         }
 
-        let entry = Entry(width: metrics.width, height: metrics.height, lines: lines)
+        var width = Self.drawnWidth(metrics.width, lines, font: font)
+        // A constrained measure reports at most what it was offered, and a
+        // fallback glyph is no reason to stop doing that.
+        if mode != 0 { width = min(width, max(metrics.width, availWidth)) }
+        let entry = Entry(width: width, height: metrics.height, lines: lines)
         store(entry, for: key)
         return entry
+    }
+
+    /// The width the lines are drawn at, which is never less than `measured`.
+    ///
+    /// `Font::measure` sees the primary face alone, and the draw list paints
+    /// `shape`, which substitutes fallback faces for what that face lacks —
+    /// so "↑↓ move ↵ open" drew 11pt wider than its box. Shaping here costs
+    /// nothing extra: `shape` is cached per line, and these are the lines the
+    /// draw is about to ask for.
+    private static func drawnWidth(_ measured: Float, _ lines: [String], font: UIFont) -> Float {
+        var width = measured
+        for line in lines where !line.isEmpty {
+            width = max(width, font.shapedRun(line).width)
+        }
+        return width
     }
 
     private func store(_ entry: Entry, for key: Key) {

@@ -50,8 +50,9 @@ struct LavaEditorView: View {
             Spacer()
                 .frame(height: .pt(Self.barHeight), minWidth: TabChrome.dragGrab)
                 .windowDrag()
-            Text("+", color: .muted, onClick: { session.newDocument() })
-                .padding(8)
+            HStack(padding: 9, alignment: .center, onClick: { session.newDocument() }) {
+                Mark(.plus, size: 10, color: .muted)
+            }
                 .hoverBackground(Environment.current.theme.hover)
                 .cornerRadius(4)
                 .cursor(.pointer)
@@ -68,7 +69,7 @@ struct LavaEditorView: View {
                 // The file could not be read. Saying so beats an empty buffer,
                 // which looks exactly like an empty file — and would overwrite
                 // the real one on the next Ctrl+S.
-                VStack(flexGrow: 1, padding: 24, alignment: .center, spacing: 8) {
+                VStack(flexGrow: 1, padding: 24, alignment: .center, spacing: 12) {
                     Text(session.active.name, color: .primary)
                     Text(error, color: .muted)
                 }
@@ -114,7 +115,7 @@ struct LavaEditorView: View {
                     session.find.caseSensitive.toggle()
                     session.runSearch()
                 })
-                .padding(4)
+                .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
                 .hoverBackground(Environment.current.theme.hover)
                 .cornerRadius(4)
                 .cursor(.pointer)
@@ -185,8 +186,11 @@ struct LavaEditorView: View {
     private func noticeBar(_ notice: String) -> some View {
         HStack(padding: 6, alignment: .center, spacing: 8) {
             Text(notice, color: .muted).flexGrow(1).agentId("notice")
-            Text("×", color: .dim, onClick: { session.notice = nil })
-                .padding(4)
+            HStack(padding: 4, alignment: .center, onClick: { session.notice = nil }) {
+                Mark(.cross, size: 8, color: .dim)
+            }
+                .hoverBackground(Environment.current.theme.hover)
+                .cornerRadius(4)
                 .cursor(.pointer)
         }
         .background(Environment.current.theme.panel)
@@ -194,17 +198,24 @@ struct LavaEditorView: View {
 
     private var statusBar: some View {
         let theme = Environment.current.theme
+        // Each item carries a 4pt inset of its own rather than the bar a wider
+        // gap: the clickable ones light up, and the fill wants room round the
+        // word.
+        let inset = EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4)
         return HStack(height: .pt(26), padding: 6, alignment: .center, spacing: 12) {
             pathLabel(theme: theme)
             if session.active.isModified {
-                Text("modified", color: .accent).agentId("status-modified")
+                Text("modified", color: .accent).padding(inset).agentId("status-modified")
             }
-            Text("\(session.activeLineCount) lines", color: .dim).agentId("status-lines")
+            Text("\(session.activeLineCount) lines", color: .dim)
+                .padding(inset).agentId("status-lines")
             Text(session.active.language.title, color: .dim, onClick: { })
+                .padding(inset)
                 .agentId("status-language")
             Text(session.wraps ? "wrap" : "no wrap", color: .dim, onClick: {
                 session.wraps.toggle()
             })
+            .padding(inset)
             .cursor(.pointer)
             .agentId("status-wrap")
         }
@@ -228,6 +239,7 @@ struct LavaEditorView: View {
             }
         ) {
             Text(session.active.url?.path ?? "unsaved", color: .dim, lineLimit: 1)
+                .padding(EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4))
         }
         .clipped()
         .hoverBackground(theme.hover)

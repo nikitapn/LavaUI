@@ -14,7 +14,7 @@ struct CalendarApplet: View {
             color: theme.textPrimary,
             onClick: { session.toggleCalendar() }
         )
-        .padding(4)
+        .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
         .hoverBackground(PanelChrome.style.titleHover)
         .cornerRadius(6)
         .agentId("applet.calendar")
@@ -51,7 +51,7 @@ struct CalendarWindow: View {
                         visibleMonth = CalendarMonth.shift(visibleMonth, by: -1)
                     }
                 )
-                .padding(6)
+                .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
                 .hoverBackground(theme.hover)
                 .cornerRadius(4)
                 .agentId("calendar.prev")
@@ -67,7 +67,7 @@ struct CalendarWindow: View {
                         visibleMonth = CalendarMonth.shift(visibleMonth, by: 1)
                     }
                 )
-                .padding(6)
+                .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
                 .hoverBackground(theme.hover)
                 .cornerRadius(4)
                 .agentId("calendar.next")
@@ -102,7 +102,7 @@ struct CalendarWindow: View {
                         visibleMonth = CalendarMonth.startOfMonth(Date())
                     }
                 )
-                .padding(4)
+                .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
                 .hoverBackground(theme.hover)
                 .cornerRadius(3)
                 .agentId("calendar.today")

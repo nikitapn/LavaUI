@@ -51,6 +51,9 @@ public struct Expand<Content: View>: View {
                     cornerRadius: max(0, innerRadius - 2),
                     onClick: { binding.wrappedValue.toggle() }
                 )
+                // Inside the hover fill, so the fill is a chip round the title
+                // rather than a box flush with its glyphs.
+                .padding(EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4))
                 .padding(s.headerPadding)
 
                 if open {

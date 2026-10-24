@@ -72,7 +72,7 @@ private struct TitleBar: View {
     @Bindable var session: WeatherSession
 
     var body: some View {
-        HStack(padding: 10, alignment: .center, spacing: 10) {
+        HStack(padding: 10, alignment: .center, spacing: 12) {
             if WindowBridge.drawsOwnChrome {
                 WindowControls()
                     .windowChrome()
@@ -89,17 +89,17 @@ private struct TitleBar: View {
                 color: Ink.secondary,
                 onClick: { session.units = session.units == .metric ? .imperial : .metric }
             )
-            .padding(6)
+            .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
             .hoverBackground(Ink.hover)
             .cornerRadius(6)
             .agentId("units-toggle")
             Text("Search", color: .accent, onClick: { session.isSearchPresented = true })
-                .padding(6)
+                .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
                 .hoverBackground(Ink.hover)
                 .cornerRadius(6)
                 .agentId("open-search")
             Text("Refresh", color: Ink.secondary, onClick: { session.reload() })
-                .padding(6)
+                .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
                 .hoverBackground(Ink.hover)
                 .cornerRadius(6)
                 .agentId("refresh")
@@ -148,7 +148,7 @@ private struct Hero: View {
             if let current = session.forecast?.current {
                 HStack(padding: 0, alignment: .center, spacing: 18) {
                     SkyIcon(sky: current.code.sky, isDay: current.isDay, size: 96)
-                    VStack(padding: 0, spacing: 4) {
+                    VStack(padding: 0, spacing: 6) {
                         Text(
                             units.temperatureLabel(current.temperature),
                             color: Ink.primary, font: Fonts.hero
@@ -191,7 +191,7 @@ private struct Detail: View {
     }
 
     var body: some View {
-        HStack(padding: 0, alignment: .center, spacing: 8) {
+        HStack(padding: 0, alignment: .center, spacing: 12) {
             Text(label, color: Ink.dim)
             Text(value, color: Ink.secondary)
         }
@@ -280,10 +280,10 @@ private struct WeekList: View {
             acc.lo = min(acc.lo, day.low)
             acc.hi = max(acc.hi, day.high)
         }
-        return VStack(padding: 0, spacing: 4) {
+        return VStack(padding: 8, spacing: 4) {
             ForEach(Array(session.days.enumerated()), id: \.offset) { entry in
                 let day = entry.element
-                HStack(padding: 10, alignment: .center, spacing: 12) {
+                HStack(padding: 10, alignment: .center, spacing: 16) {
                     Text(
                         entry.offset == 0 ? "Today" : day.weekdayLabel,
                         color: Ink.primary
@@ -296,6 +296,7 @@ private struct WeekList: View {
                     )
                     .frame(width: .pt(44))
                     Text(day.code.summary, color: Ink.dim)
+                    .frame(width: .pt(90))
                     Spacer()
                     Text(units.temperatureLabel(day.low), color: Ink.dim)
                     TemperatureBar(day: day, lo: range.lo, hi: range.hi)
@@ -304,7 +305,7 @@ private struct WeekList: View {
                 // Alternate rows only: a lift on every row would be a grid of
                 // boxes again, and the glass is the container now.
                 .background(entry.offset % 2 == 0 ? Glass.tile : .clear)
-                .cornerRadius(12)
+                .cornerRadius(16)
             }
         }
     }
@@ -374,7 +375,7 @@ private struct SearchPanel: View {
                             onClick: { session.select(found) }
                         )
                         .frame(width: .pct(100))
-                        .padding(8)
+                        .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
                         .hoverBackground(Theme.current.hover)
                         .cornerRadius(6)
                     }
@@ -387,7 +388,7 @@ private struct SearchPanel: View {
                 Text("Close", color: Theme.current.textDim, onClick: {
                     session.isSearchPresented = false
                 })
-                .padding(6)
+                .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
             }
         }
     }

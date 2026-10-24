@@ -15,7 +15,7 @@ struct OutlineSidebar: View {
         let outline = session.outline
         return VStack(spacing: 0) {
             Text("Contents", color: Theme.current.textDim)
-                .padding(10)
+                .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
             ScrollView {
                 VStack(spacing: 0) {
                     ForEach(session.visibleOutlineRows, id: \.self) { index in
@@ -41,7 +41,7 @@ struct OutlineSidebar: View {
             if outline.hasChildren(index) {
                 Text(open ? "▾" : "▸", color: Theme.current.textDim,
                      onClick: { session.toggleExpanded(index) })
-                    .padding(EdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 4))
+                    .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
                     .frame(width: .pt(20))
                     .cursor(.pointer)
                     .agentId("outline-toggle-\(index)")
@@ -52,7 +52,7 @@ struct OutlineSidebar: View {
                  color: current ? Theme.current.textPrimary : Theme.current.textSecondary,
                  lineLimit: 1,
                  onClick: item.target == nil ? nil : { session.choose(outlineItem: index) })
-                .padding(EdgeInsets(top: 5, leading: 6, bottom: 5, trailing: 6))
+                .padding(EdgeInsets(top: 7, leading: 10, bottom: 7, trailing: 10))
                 .flexGrow(1)
                 .flexShrink(1)
                 .cursor(item.target == nil ? nil : .pointer)

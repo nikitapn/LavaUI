@@ -74,7 +74,7 @@ struct PlayerApplet: View {
         ) {
             Text(label, color: enabled ? theme.textPrimary : theme.textDim)
         }
-        .padding(EdgeInsets(top: 6, leading: 14, bottom: 6, trailing: 14))
+        .padding(EdgeInsets(top: 8, leading: 18, bottom: 8, trailing: 18))
         .hoverBackground(enabled ? theme.hover : .clear)
         .cornerRadius(6)
         .agentId(id)
@@ -111,7 +111,7 @@ struct PlayerWindow: View {
         VStack(padding: 4, spacing: 10) {
             HStack(padding: 0, alignment: .center, spacing: 10) {
                 PlayerArt(mpris: mpris, size: 72, radius: 6)
-                VStack(padding: 0, alignment: .start, spacing: 4) {
+                VStack(padding: 0, alignment: .start, spacing: 6) {
                     Text(
                         mpris.title.isEmpty ? mpris.stripTitle : mpris.title,
                         color: theme.textPrimary,
@@ -169,7 +169,7 @@ struct PlayerWindow: View {
         ) {
             Text(label, color: enabled ? theme.textPrimary : theme.textDim, align: .center)
         }
-        .padding(EdgeInsets(top: 6, leading: 14, bottom: 6, trailing: 14))
+        .padding(EdgeInsets(top: 8, leading: 18, bottom: 8, trailing: 18))
         .hoverBackground(enabled ? theme.hover : .clear)
         .cornerRadius(6)
         .agentId(id)

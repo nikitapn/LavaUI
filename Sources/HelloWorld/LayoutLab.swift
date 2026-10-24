@@ -108,6 +108,18 @@ struct LayoutLab: View {
         }
         caption("Nested: VStack of a bar and an HStack")
         specimen(theme: theme, id: "layout-lab-nested") {
+            HStack(padding: 8, alignment: .start, spacing: 8) {
+                Text("Hello, World!", color: .primary)
+                Spacer()
+                Text("x").background(.red)
+                Spacer()
+                Text("X", align: .center).background(.cyan).frame(width: .pt(28), height: .pt(28))
+            }
+            .background(.dim)
+        }
+
+        caption("Text has its own yoga box")
+        specimen(theme: theme, id: "layout-lab-text-box") {
             VStack(alignment: .start, spacing: 4) {
                 swatch("top", theme: theme, w: 80, h: 16)
                 HStack(spacing: 4) {

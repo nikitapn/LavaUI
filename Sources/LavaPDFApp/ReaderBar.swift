@@ -52,7 +52,7 @@ struct ReaderBar: View {
         _ label: String, id: String, on: Bool = false, action: @escaping () -> Void
     ) -> some View {
         Text(label, color: on ? .accent : Theme.current.textPrimary, align: .center, onClick: action)
-            .padding(6)
+            .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
             .hoverBackground(Theme.current.hover)
             .cornerRadius(4)
             .cursor(.pointer)
@@ -87,7 +87,7 @@ struct FindBar: View {
 
     private func step(_ label: String, id: String, action: @escaping () -> Void) -> some View {
         Text(label, color: Theme.current.textSecondary, onClick: action)
-            .padding(4)
+            .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
             .hoverBackground(Theme.current.hover)
             .cornerRadius(4)
             .cursor(.pointer)
@@ -120,14 +120,14 @@ struct PasswordBar: View {
                 .flexShrink(1)
                 .agentId("password-field")
                 Text("Open", color: .accent, align: .center, onClick: { session.submitPassword() })
-                    .padding(4)
+                    .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
                     .hoverBackground(Theme.current.hover)
                     .cornerRadius(4)
                     .cursor(.pointer)
                     .agentId("password-open")
                 Spacer()
                 Text("Cancel", color: Theme.current.textDim, align: .center, onClick: { session.cancelPassword() })
-                    .padding(4)
+                    .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
                     .hoverBackground(Theme.current.hover)
                     .cornerRadius(4)
                     .cursor(.pointer)

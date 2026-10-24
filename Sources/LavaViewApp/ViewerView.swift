@@ -325,14 +325,14 @@ struct ViewerView: View {
             Spacer()
             if session.loadError != nil {
                 Text("Skip", color: .accent, onClick: { session.skipUnreadable() })
-                    .padding(4)
+                    .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
                     .hoverBackground(Theme.current.hover)
                     .cornerRadius(4)
                     .cursor(.pointer)
                     .agentId("skip-unreadable")
             }
             Text("Dismiss", color: Theme.current.textDim, onClick: { session.dismissNotice() })
-                .padding(4)
+                .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
                 .hoverBackground(Theme.current.hover)
                 .cornerRadius(4)
                 .cursor(.pointer)

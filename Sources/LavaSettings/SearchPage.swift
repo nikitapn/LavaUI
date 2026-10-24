@@ -238,8 +238,8 @@ private struct RootRow: View {
     @DrawState private var hovered = false
 
     var body: some View {
-        HStack(padding: 8, alignment: .center, spacing: 12, onHover: { hovered = $0 }) {
-            VStack(spacing: 2) {
+        HStack(padding: 0, alignment: .center, spacing: 12, onHover: { hovered = $0 }) {
+            VStack(spacing: 4) {
                 Text(Self.shortened(FindFormat.tilde(root, home: NSHomeDirectory())),
                      color: Theme.current.textPrimary, lineLimit: 1)
                 Text(detail, color: Theme.current.textDim, lineLimit: 1)
@@ -249,6 +249,7 @@ private struct RootRow: View {
             ActionText("Rescan") { indexSettings.rescan(root) }
             ActionText("Remove") { indexSettings.remove(root) }
         }
+        .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
         .background(hovered ? Theme.current.hover : .clear)
         .cornerRadius(6)
     }
@@ -280,7 +281,7 @@ private struct ActionText: View {
             cornerRadius: 6,
             onClick: action
         )
-        .padding(EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10))
+        .padding(EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14))
         .background(Theme.current.selectionFill)
         .cornerRadius(6)
     }

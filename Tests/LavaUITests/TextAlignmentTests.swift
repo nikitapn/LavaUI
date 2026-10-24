@@ -108,7 +108,7 @@ final class TextAlignmentTests: XCTestCase {
         let fill = try XCTUnwrap(commands.first { $0.kind == .rect && $0.w == 44 })
         let font = try XCTUnwrap(FontStore.default)
         let inkEnd = text.x + 4 + font.shapedRun("Fit").width
-        XCTAssertEqual(inkEnd, fill.x + fill.w - 6 - 4, accuracy: 1)
+        XCTAssertEqual(inkEnd, fill.x + fill.w - 6, accuracy: 1)
     }
 
     func testCentringActuallyMovesTheGlyphs() throws {

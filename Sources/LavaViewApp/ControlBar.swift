@@ -57,7 +57,7 @@ struct ControlBar: View {
             Text("\(session.zoomPercent)%", color: Theme.current.textSecondary,
                  align: .center,
                  onClick: { session.setMode(.actual) })
-                .padding(4)
+                .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
                 .frame(width: .pt(60))
                 .hoverBackground(Theme.current.hover)
                 .cornerRadius(4)
@@ -131,7 +131,7 @@ struct ControlBar: View {
             align: .center,
             onClick: { session.setMode(mode) }
         )
-        .padding(6)
+        .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
         .frame(width: .pt(44))
         // `selectionFill`, and specifically **not** `selected`.
         //
@@ -162,7 +162,7 @@ struct ControlBar: View {
             color: enabled ? Theme.current.textSecondary : Theme.current.textDim,
             onClick: enabled ? action : nil
         )
-        .padding(6)
+        .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
         .frame(width: .pt(30))
         .hoverBackground(enabled ? Theme.current.hover : Theme.current.panel)
         .cornerRadius(4)

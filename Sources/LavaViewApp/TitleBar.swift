@@ -24,7 +24,7 @@ struct TitleBar: View {
     static let height: Float = 40
 
     var body: some View {
-        HStack(height: .pt(Self.height), padding: 8, alignment: .center, spacing: 8) {
+        HStack(height: .pt(Self.height), padding: 8, alignment: .center, spacing: 12) {
             if WindowBridge.drawsOwnChrome {
                 WindowControls().windowChrome()
             }
@@ -65,7 +65,7 @@ struct TitleBar: View {
 
     private var saveButton: some View {
         Text("Save", color: .accent, onClick: { session.requestSave() })
-            .padding(6)
+            .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
             .hoverBackground(Theme.current.hover)
             .cornerRadius(4)
             .cursor(.pointer)

@@ -76,8 +76,8 @@ private struct SidebarRow: View {
     var body: some View {
         let selected = store.section == section
         return VStack(
-            padding: 9,
-            spacing: 2,
+            padding: 0,
+            spacing: 4,
             onClick: {
                 store.section = section
                 // The layout catalogue is a parse of the xkb rules on the
@@ -95,6 +95,7 @@ private struct SidebarRow: View {
                                  : Theme.current.textSecondary)
             Text(section.subtitle, color: Theme.current.textDim)
         }
+        .padding(EdgeInsets(top: 11, leading: 13, bottom: 11, trailing: 13))
         .background(
             // `selectionFill`, not `selected`: the latter is the bright
             // highlight a menu draws behind *dark* text, and light text on it
@@ -217,7 +218,7 @@ struct SettingRow<Content: View>: View {
     }
 
     var body: some View {
-        VStack(padding: 14, spacing: 8) {
+        VStack(padding: 16, spacing: 10) {
             Text(title, color: Theme.current.textPrimary)
             if !detail.isEmpty {
                 Text(detail, color: Theme.current.textDim)
@@ -262,9 +263,9 @@ struct PickerRow: View {
 
     var body: some View {
         HStack(
-            padding: 8,
+            padding: 0,
             alignment: .center,
-            spacing: 10,
+            spacing: 12,
             onClick: action,
             onHover: { hovered = $0 }
         ) {
@@ -278,6 +279,7 @@ struct PickerRow: View {
                 Text(detail, color: Theme.current.textDim)
             }
         }
+        .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
         .background(
             selected ? Theme.current.selectionFill
                      : (hovered ? Theme.current.hover : .clear)

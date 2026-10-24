@@ -63,7 +63,7 @@ private struct ToastCard: View {
         ) {
             HStack(padding: 0, alignment: .start, spacing: 10) {
                 icon
-                VStack(flexGrow: 1, padding: 0, spacing: 2) {
+                VStack(flexGrow: 1, padding: 0, spacing: 4) {
                     // The application first and dim: a toast is read by where
                     // it came from before it is read at all.
                     if !item.appName.isEmpty {
@@ -83,7 +83,7 @@ private struct ToastCard: View {
                     padding: 0, alignment: .center,
                     onClick: { model.dismiss(item) }
                 ) {
-                    Text("✕", color: theme.textDim, align: .center)
+                    Mark(.cross, size: 8, color: theme.textDim)
                 }
                 .padding(4)
                 .cornerRadius(4)
@@ -101,7 +101,7 @@ private struct ToastCard: View {
                         ) {
                             Text(action.label, color: theme.accent)
                         }
-                        .padding(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+                        .padding(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
                         .cornerRadius(6)
                         .hoverBackground(theme.hover)
                         .agentId("notification.action.\(item.id).\(action.key)")
@@ -131,7 +131,7 @@ private struct ToastCard: View {
             Image(image, width: .pt(32), height: .pt(32), contentMode: .fit)
         } else {
             Text(toast.fallback, color: Theme.current.textDim)
-                .padding(8)
+                .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
         }
     }
 }

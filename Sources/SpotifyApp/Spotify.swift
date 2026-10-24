@@ -33,30 +33,30 @@ struct Spotify: View {
             Divider()
 
             Text("Playback", color: .muted)
-                .padding(4)
+                .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
             if session.isLoggedIn {
-                Text("  ● Logged in", color: .accent)
+                Text("  ● Logged in", color: .accent).padding(EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4))
                     .agentId("auth-status")
                 if let name = session.activeDeviceName
                     ?? session.devices.first(where: { $0.id == session.selectedDeviceId })?.name
                 {
-                    Text("  \(name)", color: .secondary)
+                    Text("  \(name)", color: .secondary).padding(EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4))
                         .agentId("device-name")
                 } else {
-                    Text("  No device", color: .dim, onClick: { session.refreshDevices() })
+                    Text("  No device", color: .dim, onClick: { session.refreshDevices() }).padding(EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4))
                         .agentId("device-name")
                 }
-                Text("  Refresh devices", color: .muted, onClick: { session.refreshDevices() })
+                Text("  Refresh devices", color: .muted, onClick: { session.refreshDevices() }).padding(EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4))
                     .agentId("refresh-devices")
             } else {
-                Text("  Log in to play", color: .accent, onClick: { session.login() })
+                Text("  Log in to play", color: .accent, onClick: { session.login() }).padding(EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4))
                     .agentId("auth-status")
             }
 
             Divider()
 
             Text("Playlists", color: .muted)
-                .padding(4)
+                .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
             navRow(
                 "Liked Songs",
                 selected: isLikedNav,
@@ -94,7 +94,7 @@ struct Spotify: View {
             color: selected ? .accent : .primary,
             onClick: action
         )
-        .padding(6)
+        .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
         .hoverBackground(Theme.current.hover)
         .cornerRadius(4)
     }
@@ -215,7 +215,7 @@ struct Spotify: View {
                     cornerRadius: 5,
                     editor: session.editor
                 )
-                VStack(flexGrow: 1, padding: 2) {
+                VStack(flexGrow: 1, padding: 2, spacing: 12) {
                     Text(compact(track.name, limit: 56), color: .primary)
                     artistLink(track.artists)
                 }
@@ -236,7 +236,7 @@ struct Spotify: View {
 
     @ViewBuilder
     private func sectionRow(_ section: CatalogSection) -> some View {
-        VStack(padding: 6) {
+        VStack(padding: 6, spacing: 12) {
             Text(section.title, color: .primary)
                 .padding(2)
                 .agentId("section-\(section.id)")
@@ -315,7 +315,7 @@ struct Spotify: View {
 
     @ViewBuilder
     private var libraryView: some View {
-        VStack(flexGrow: 1, padding: 12) {
+        VStack(flexGrow: 1, padding: 12, spacing: 12) {
             Text("Your Library", color: .primary)
             Text(
                 session.client.hasCredentials
@@ -350,7 +350,7 @@ struct Spotify: View {
     private var likedView: some View {
         VStack(flexGrow: 1, padding: 12) {
             HStack(padding: 8, alignment: .center) {
-                VStack(padding: 2, alignment: .start) {
+                VStack(padding: 2, alignment: .start, spacing: 12) {
                     Text("PLAYLIST", color: .muted)
                     Text("Liked Songs", color: .primary)
                         .agentId("liked-title")
@@ -373,7 +373,7 @@ struct Spotify: View {
                     .agentId("liked-loading")
             } else if !session.isLoggedIn {
                 Text("Account → Log in", color: .accent, onClick: { session.login() })
-                    .padding(8)
+                    .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
             } else if session.likedTracks.isEmpty {
                 Text("Songs you like will land here.", color: .secondary)
                     .padding(8)
@@ -412,7 +412,7 @@ struct Spotify: View {
                         cornerRadius: 82,
                         editor: session.editor
                     )
-                    VStack(padding: 5) {
+                    VStack(padding: 5, spacing: 12) {
                         Text("ARTIST", color: .muted)
                         Text(artist.name, color: .primary)
                             .agentId("artist-title")
@@ -457,7 +457,7 @@ struct Spotify: View {
                         cornerRadius: 4,
                         editor: session.editor
                     )
-                    VStack(padding: 6) {
+                    VStack(padding: 6, spacing: 12) {
                         Text("ALBUM", color: .muted)
                         Text(album.name, color: .primary)
                             .agentId("detail-title")
@@ -510,7 +510,7 @@ struct Spotify: View {
                 cornerRadius: 4,
                 editor: session.editor
             )
-            VStack(flexGrow: 1, padding: 1) {
+            VStack(flexGrow: 1, padding: 1, spacing: 12) {
                 Text(track.name, color: selected ? .accent : .primary)
                     .lineLimit(1)
                 HStack() {
@@ -545,7 +545,7 @@ struct Spotify: View {
                         cornerRadius: 4,
                         editor: session.editor
                     )
-                    VStack(padding: 2) {
+                    VStack(padding: 2, spacing: 12) {
                         Text(track.name, color: .primary)
                             .lineLimit(1)
                             .agentId("np-title")

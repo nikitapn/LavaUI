@@ -252,7 +252,7 @@ private struct AppCard: View {
             height: .pct(100),
             padding: 10,
             alignment: .center,
-            spacing: 6,
+            spacing: 8,
             onClick: { model.launch(entry) },
             onHover: { hovered = $0 }
         ) {
