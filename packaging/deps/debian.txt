@@ -74,6 +74,8 @@ libarchive-dev
 libcurl4-openssl-dev
 libssh2-1-dev
 libsecret-1-dev
+# The panel's network applet and secret agent: NetworkManager's client library.
+libnm-dev
 # LavaPass / KDBXKit compressed KeePass vaults.
 zlib1g-dev
 libpoppler-cpp-dev

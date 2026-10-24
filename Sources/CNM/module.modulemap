@@ -1,0 +1,5 @@
+module CNM [system] {
+    header "shim.h"
+    link "nm"
+    export *
+}

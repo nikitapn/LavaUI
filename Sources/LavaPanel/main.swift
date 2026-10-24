@@ -1,4 +1,5 @@
 import Foundation
+import LavaNetwork
 import LavaClient
 import LavaIDL
 import LavaMpris
@@ -171,6 +172,14 @@ final class MenuSession {
     @ObservationIgnored var aboutWindow: WindowID?
     /// The volume window, if it is up. Clicking the speaker again closes it.
     @ObservationIgnored var volumeWindow: WindowID?
+    /// The network window, if it is up. Clicking the glyph again closes it.
+    @ObservationIgnored var networkWindow: WindowID?
+    /// The pane of every Wi-Fi network beside it, if that is up. Observed:
+    /// the row that opens it shows whether it is open.
+    var networkListWindow: WindowID?
+    /// A window per secret prompt the agent is waiting on, with what has been
+    /// typed into it.
+    @ObservationIgnored var authWindows: [UInt64: (window: WindowID, draft: AuthDraft)] = [:]
     /// The calendar window, if it is up. Clicking the clock again closes it.
     @ObservationIgnored var calendarWindow: WindowID?
     /// The player window, if it is up.
@@ -702,6 +711,128 @@ final class MenuSession {
         volumeWindow = opened
     }
 
+    /// Network glyph click. Opens the network window — and asks for a scan,
+    /// so the list is fresh by the time anyone reads it — or closes it.
+    func toggleNetwork() {
+        if let id = networkWindow, LavaApp.isWindowOpen(id) {
+            LavaApp.closeWindow(id)
+            return
+        }
+        closeMenu()
+        network.scan()
+        let panelW = editor?.framebufferSize().w ?? 1280
+        let anchor: LavaApp.SurfaceAnchor
+        if let icon = LavaApp.mainLayoutHost?.agentFrame(sid: "applet.network") {
+            anchor = LavaApp.SurfaceAnchor(icon)
+        } else {
+            anchor = LavaApp.SurfaceAnchor(
+                x: panelW - 88, y: 0, w: 34, h: Self.stripHeight
+            )
+        }
+        var opened: WindowID?
+        // Sized to what is there when it opens; a scan that finds more
+        // makes the list scroll, as the sound window's does.
+        opened = LavaApp.openPopup(
+            title: "Network",
+            width: NetworkBlock.width,
+            height: NetworkBlock.height(of: NetworkBlock.blocks(network)),
+            anchor: anchor,
+            backdropBlur: PanelChrome.popupBlurRadius,
+            refraction: PanelChrome.popupRefraction,
+            onClose: {
+                if let id = opened, session.networkWindow == id {
+                    session.networkWindow = nil
+                    // The pane hangs off this window; it goes with it.
+                    session.closeNetworkList()
+                }
+            }
+        ) {
+            NetworkWindow(network: network).glassEffect(frost: 1)
+        }
+        networkWindow = opened
+    }
+
+    /// "All Wi-Fi networks". A popup of the network window rather than of
+    /// the panel, to its left, top edges level: the compositor keeps the
+    /// network window up while the pane is pressed, because it is the pane's
+    /// parent.
+    func toggleNetworkList() {
+        if let id = networkListWindow, LavaApp.isWindowOpen(id) {
+            closeNetworkList()
+            return
+        }
+        guard let parent = networkWindow, LavaApp.isWindowOpen(parent) else { return }
+        network.scan()
+        let width = NetworkBlock.listWidth
+        var opened: WindowID?
+        opened = LavaApp.openPopup(
+            title: "Wi-Fi Networks",
+            width: width,
+            height: NetworkBlock.height(of: NetworkBlock.listBlocks(network)),
+            anchor: .leftOf(parent, width: width),
+            backdropBlur: PanelChrome.popupBlurRadius,
+            refraction: PanelChrome.popupRefraction,
+            onClose: {
+                if let id = opened, session.networkListWindow == id {
+                    session.networkListWindow = nil
+                }
+            }
+        ) {
+            NetworkWindow(network: network, isList: true)
+        }
+        networkListWindow = opened
+    }
+
+    func closeNetworkList() {
+        guard let id = networkListWindow else { return }
+        networkListWindow = nil
+        if LavaApp.isWindowOpen(id) { LavaApp.closeWindow(id) }
+    }
+
+    /// The agent needs something typed. A window of its own: a popup takes
+    /// no keyboard, and the network window may not even be open — a VPN
+    /// that reconnects on its own asks just the same.
+    func openAuth(_ prompt: NetworkSession.SecretPrompt) {
+        guard authWindows[prompt.id] == nil else { return }
+        let draft = AuthDraft(prompt)
+        var opened: WindowID?
+        opened = LavaApp.openWindow(
+            title: prompt.title.isEmpty ? "Network" : prompt.title,
+            width: NetworkAuthWindow.width,
+            height: NetworkAuthWindow.height(prompt),
+            onClose: {
+                // Closed from its title bar: that is a no.
+                if session.authWindows[prompt.id] != nil { session.cancelAuth(prompt.id) }
+            }
+        ) {
+            NetworkAuthWindow(prompt: prompt, draft: draft)
+        }
+        if let opened { authWindows[prompt.id] = (opened, draft) }
+        else { network.decline(prompt.id) }
+    }
+
+    func submitAuth(_ id: UInt64) {
+        guard let entry = authWindows.removeValue(forKey: id) else { return }
+        network.answer(id, values: entry.draft.values)
+        entry.draft.clear()
+        LavaApp.closeWindow(entry.window)
+    }
+
+    func cancelAuth(_ id: UInt64) {
+        guard let entry = authWindows.removeValue(forKey: id) else { return }
+        network.decline(id)
+        entry.draft.clear()
+        LavaApp.closeWindow(entry.window)
+    }
+
+    /// NetworkManager stopped waiting: another agent answered, or the
+    /// connection was cancelled.
+    func dropAuth(_ id: UInt64) {
+        guard let entry = authWindows.removeValue(forKey: id) else { return }
+        entry.draft.clear()
+        LavaApp.closeWindow(entry.window)
+    }
+
     /// Clock click. Opens the calendar under the clock, or closes it when
     /// it is already up. A press that misses the popup is the compositor's
     /// to swallow — the panel does not grow to catch it.
@@ -918,6 +1049,7 @@ nonisolated(unsafe) var tray: StatusNotifierTray?
 nonisolated(unsafe) var notifications: Notifications?
 let pulse = PulseSession()
 let mpris = MprisSession()
+let network = NetworkSession()
 
 /// Every popover on the panel — menubar dropdown, tray menu, volume,
 /// calendar — wears this, so a theme change retints all of them and a
@@ -989,8 +1121,20 @@ struct PanelView: View {
 
                 trayStrip
 
-                // Native sound control before the clock — scroll, mute, window.
-                VolumeApplet(pulse: pulse)
+                // Network, then sound, before the clock. Network only while
+                // NetworkManager is there to ask; without it there is
+                // nothing to show and nothing to click through to.
+                //
+                // One cluster, with none of the strip's 10pt between them:
+                // two status glyphs read as a pair, and each box already
+                // carries the inset its hover needs.
+                HStack(padding: 0, alignment: .center, spacing: 4) {
+                    if network.state.running {
+                        NetworkApplet(network: network)
+                    }
+                    // Native sound control — scroll, mute, window.
+                    VolumeApplet(pulse: pulse)
+                }
 
                 CalendarApplet(clockText: clock.text)
             }
@@ -1264,6 +1408,8 @@ guard let brandImage = ImageStore.loadAsset(
 // while the panel is still coming up should not have to try twice.
 session.attach(editor: editor, brandIcon: brandIcon)
 mpris.onAbsent = { session.closePlayer() }
+network.onPrompt = { session.openAuth($0) }
+network.onPromptGone = { session.dropAuth($0) }
 
 // One face, loaded once. Building it inside `body` would reopen FreeType
 // every clock tick, and a face that is never `registerWithEngine`'d

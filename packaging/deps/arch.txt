@@ -58,6 +58,8 @@ libarchive
 # LavaExplorer's servers: FTP/FTPS/SFTP (curl, above), host keys, saved passwords.
 libssh2
 libsecret
+# The panel's network applet and secret agent: NetworkManager's client library.
+libnm
 # LavaPass / KDBXKit compressed KeePass vaults.
 zlib
 poppler

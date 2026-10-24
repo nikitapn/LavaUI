@@ -25,7 +25,7 @@ struct VolumeApplet: View {
         HStack(height: .pt(36), padding: 0, alignment: .center) {
             Canvas(
                 label: "volume",
-                width: .pt(36),
+                width: .pt(22),
                 height: .pt(22),
                 onGesture: { gesture in
                     guard gesture.phase == .began else { return }
@@ -51,7 +51,8 @@ struct VolumeApplet: View {
                 }
             )
         }
-        .padding(2)
+        // Nothing on the side that faces the network glyph; see the strip.
+        .padding(EdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 2))
         .hoverBackground(PanelChrome.style.titleHover)
         .cornerRadius(6)
         .agentId("applet.volume")
@@ -284,9 +285,11 @@ enum SoundGlyph {
             microphone(list: list, frame: frame, muted: muted, color: color, accent: accent)
             return
         }
-        let cx = frame.x + frame.w * 0.38
-        let cy = frame.y + frame.h * 0.5
         let s = min(frame.w, frame.h)
+        // From the left edge, not a share of the width: the box is the
+        // glyph's own, and the strip sets it beside the network glyph.
+        let cx = frame.x + s * 0.22 * 0.9 + 2
+        let cy = frame.y + frame.h * 0.5
 
         // Body: small rounded rect (magnet).
         let bodyW = s * 0.22

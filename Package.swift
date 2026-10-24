@@ -193,6 +193,31 @@ var targets: [Target] = [
             .linkedLibrary("glib-2.0"), .linkedLibrary("gobject-2.0"),
         ]
     ),
+    // libnm, NetworkManager's own client library, for the panel's network
+    // applet: the object model, kept current, and a secret-agent base class.
+    .systemLibrary(
+        name: "CNM",
+        path: "Sources/CNM",
+        pkgConfig: "libnm",
+        providers: [.apt(["libnm-dev"])]
+    ),
+    // One NMClient on a thread of its own, posting snapshots, and the
+    // panel's secret agent. GObject all the way down, so a little C again.
+    // See Sources/CLavaNet/include/lava_net.h.
+    .target(
+        name: "CLavaNet",
+        dependencies: ["CNM", "CSecret"],
+        linkerSettings: [
+            .linkedLibrary("nm"), .linkedLibrary("secret-1"), .linkedLibrary("gio-2.0"),
+            .linkedLibrary("glib-2.0"), .linkedLibrary("gobject-2.0"),
+        ]
+    ),
+    // Which Wi-Fi rows, in what order, and what the strip glyph says — from
+    // a snapshot, with no NetworkManager. See Sources/LavaNetworkCore.
+    .target(name: "LavaNetworkCore"),
+    // The live session over CLavaNet: snapshots, commands, the agent's prompts.
+    .target(name: "LavaNetwork", dependencies: ["CLavaNet", "LavaNetworkCore", "LavaUI"],
+            swiftSettings: interopCxx),
     // Connections, transfers and the keyring, blocking, for worker threads.
     // What a remote folder *is* — its address, its listing — stays in
     // LavaExplorerCore, where it is a test.
@@ -274,7 +299,7 @@ var targets: [Target] = [
     // out of the same client API an app uses. See Sources/LavaPanel.
     .executableTarget(
         name: "LavaPanel",
-        dependencies: ["LavaUI", "CPulse", "LavaMpris", "LavaShell"]
+        dependencies: ["LavaUI", "CPulse", "LavaMpris", "LavaShell", "LavaNetwork", "LavaNetworkCore"]
             + (haveNprpc ? [Target.Dependency("LavaClient"),
                             Target.Dependency("LavaIDL")] : []),
         resources: [
@@ -485,6 +510,11 @@ var targets: [Target] = [
     .testTarget(name: "LavaTextTests", dependencies: ["LavaText"]),
     .testTarget(name: "LavaMenuTests", dependencies: ["LavaMenu"]),
     .testTarget(name: "LavaShellTests", dependencies: ["LavaShell"]),
+    .testTarget(name: "LavaNetworkCoreTests", dependencies: ["LavaNetworkCore"]),
+    // Against a mock NetworkManager on a private system bus; skipped unless
+    // LAVA_NET_TEST_BUS names one. See tools/mock_networkmanager.py.
+    .testTarget(name: "LavaNetworkTests", dependencies: ["LavaNetwork", "LavaNetworkCore"],
+                swiftSettings: interopCxx),
     .testTarget(name: "TraceLoomCoreTests", dependencies: ["TraceLoomCore"]),
     .testTarget(
         name: "LavaUITests",
