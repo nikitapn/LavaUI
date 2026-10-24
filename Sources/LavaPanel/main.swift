@@ -2,6 +2,7 @@ import Foundation
 import LavaClient
 import LavaIDL
 import LavaMpris
+import LavaShell
 import LavaUI
 import Observation
 
@@ -103,6 +104,14 @@ enum WindowMenuID {
     static let close = MenuID("window.close")
 }
 
+/// The application menu the panel makes up for a window that exports none:
+/// the application's name over a Quit, so the bar reads the way it does for
+/// an app with a menu of its own rather than going quiet after the icon.
+enum AppMenuID {
+    static let root = MenuID("app")
+    static let quit = MenuID("app.quit")
+}
+
 /// A confirm drawn on the panel itself. About is a window of its own —
 /// a card this tall does not belong in the strip's surface.
 enum SystemDialog: Equatable {
@@ -130,6 +139,8 @@ final class MenuSession {
     var focusedSurface: UInt32 = 0
     /// Whether that window is pinned, for the Window menu's checkmark.
     var focusedOnTop = false
+    /// The focused window's application, as the compositor names it.
+    var focusedAppId = ""
     var model = MenuModel()
 
     /// The importer is not observable state: it is the machinery that produces
@@ -193,6 +204,7 @@ final class MenuSession {
         self.title = window.title
         self.focusedSurface = window.surfaceId
         self.focusedOnTop = window.alwaysOnTop
+        self.focusedAppId = window.appId
         // An open menu belongs to the window that is no longer focused.
         closeMenu()
         if menuDebug {
@@ -200,7 +212,7 @@ final class MenuSession {
                 + " registrar=\(window.registrarId) pid=\(window.pid)"
                 + " onTop=\(window.alwaysOnTop)"
                 + " kde=\(window.menuService) \(window.menuObjectPath)"
-                + " title=\(window.title)\n"
+                + " app=\(window.appId) title=\(window.title)\n"
             FileHandle.standardError.write(Data(line.utf8))
         }
         // The *registrar* id, not the surface id: an X11 client registered its
@@ -257,6 +269,11 @@ final class MenuSession {
         case WindowMenuID.close:
             closeMenu()
             if focusedSurface != 0 { LavaClient.closeWindow(focusedSurface) }
+        // A window that exports no menu is, as far as the panel can tell, the
+        // application: closing it is what Quit can honestly promise.
+        case AppMenuID.quit:
+            closeMenu()
+            if focusedSurface != 0 { LavaClient.closeWindow(focusedSurface) }
         default:
             menus?.activate(id)
             closeMenu()
@@ -264,8 +281,8 @@ final class MenuSession {
     }
 
     /// The system menu (Lava icon) always stays first. A focused window's
-    /// titles follow it; a focused window with nothing to export just leaves
-    /// the icon and we paint its name beside the strip.
+    /// titles follow it; a focused window with nothing to export gets an
+    /// application menu made up here — its name, over a Quit.
     private func refreshModel() {
         let desktop = Self.desktopMenu(icon: brandIcon)
         if focusedSurface == 0 {
@@ -273,7 +290,7 @@ final class MenuSession {
             model = desktop
             return
         }
-        let imported = menus?.model ?? MenuModel()
+        var imported = menus?.model ?? MenuModel()
         hasAppMenu = !imported.menus.isEmpty
         if hasAppMenu, menuDebug {
             let titles = imported.menus.map(\.title).joined(separator: ", ")
@@ -281,12 +298,52 @@ final class MenuSession {
                 Data("LavaPanel: imported [\(titles)]\n".utf8)
             )
         }
+        if !hasAppMenu {
+            imported = MenuModel(menus: [Self.appMenu(name: appName())])
+        }
         var menus = desktop.menus
         menus.append(
             contentsOf: imported.adding(shellMenu: Self.windowMenu(onTop: focusedOnTop)).menus
         )
         model = MenuModel(menus: menus)
     }
+
+    static func appMenu(name: String) -> MenuNode {
+        MenuNode(
+            id: AppMenuID.root,
+            title: name,
+            items: [.item(MenuItemModel(id: AppMenuID.quit, title: "Quit \(name)"))]
+        )
+    }
+
+    /// What to call the focused application: its desktop entry's name when
+    /// one matches the app id, the app id itself when none does, and the
+    /// window's title only when the client never gave an app id at all.
+    private func appName() -> String {
+        let appId = focusedAppId
+        if appId.isEmpty { return title.isEmpty ? "Application" : title }
+        if catalog == nil {
+            // Once, on the first window with no menu: a scan of every
+            // applications directory is not something to do per focus.
+            var map: [String: String] = [:]
+            for entry in DesktopEntry.installed() where !entry.name.isEmpty {
+                map[entry.id.lowercased()] = entry.name
+                if !entry.startupWMClass.isEmpty {
+                    map[entry.startupWMClass.lowercased()] = entry.name
+                }
+            }
+            catalog = map
+        }
+        if let name = catalog?[appId.lowercased()] { return name }
+        // `org.mozilla.firefox` with no entry by that id: the last part is the
+        // name the user would recognise.
+        let last = appId.split(separator: ".").last.map(String.init) ?? appId
+        return last.prefix(1).uppercased() + last.dropFirst()
+    }
+
+    /// App id (lowercased) or `StartupWMClass` → desktop entry name. Built on
+    /// first use; an application installed after that shows its app id.
+    @ObservationIgnored private var catalog: [String: String]?
 
     /// Before Help, or merged into the app's own Window menu — see
     /// `MenuModel.adding(shellMenu:)`.
@@ -306,9 +363,8 @@ final class MenuSession {
         )
     }
 
-    /// Whether the focused window exported titles of its own. The strip
-    /// always has the system icon; this decides whether to also print the
-    /// window's name.
+    /// Whether the focused window exported titles of its own, rather than
+    /// being given `appMenu`.
     var hasAppMenu = false
 
     /// macOS-style: the brand mark is the system menu, always present.
@@ -918,16 +974,6 @@ struct PanelView: View {
                     externalMenus: true
                 )
                 .font(menuFont)
-
-                if session.focusedSurface != 0 && !session.hasAppMenu {
-                    // Focused window exports no menu (LavaTerm, a foreign
-                    // app that never registered). Its name sits after the
-                    // icon so the panel still says who is focused.
-                    Text(
-                        session.title.isEmpty ? "no window" : session.title,
-                        color: Theme.current.textDim
-                    )
-                }
 
                 // Pushes the clock (and tray) to the far end: an empty growing
                 // child is the spacer, since the stack distributes leftover

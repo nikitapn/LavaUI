@@ -5560,7 +5560,8 @@ class SurfaceRegistry : public lava::CompositorHost {
             surface.id, registrarId, pid, service.empty() ? "-" : service.c_str(),
             path.empty() ? "-" : path.c_str(), surface.title.c_str());
     control_->postActiveWindow(surface.id, surface.title, service, path, pid,
-                               registrarId, surface.alwaysOnTop());
+                               registrarId, surface.alwaysOnTop(),
+                               surface.appId);
   }
 
   /// A surface's AppMenu address changed. If it is the focused window, re-post
@@ -6889,9 +6890,12 @@ class SurfaceRegistry : public lava::CompositorHost {
   void activeWindow(uint32_t &outSurfaceId, std::string &outTitle,
                     std::string &outMenuService,
                     std::string &outMenuObjectPath, uint32_t &outPid,
-                    uint32_t &outRegistrarId) const override {
+                    uint32_t &outRegistrarId, bool &outAlwaysOnTop,
+                    std::string &outAppId) const override {
     outSurfaceId = focused_;
     outTitle.clear();
+    outAlwaysOnTop = false;
+    outAppId.clear();
     outMenuService.clear();
     outMenuObjectPath.clear();
     outPid = 0;
@@ -6903,6 +6907,8 @@ class SurfaceRegistry : public lava::CompositorHost {
         outRegistrarId = menuWindowId(*surface);
         outPid =
             surface->window != nullptr ? surface->window->clientPid() : 0;
+        outAlwaysOnTop = surface->alwaysOnTop();
+        outAppId = surface->appId;
         return;
       }
     }

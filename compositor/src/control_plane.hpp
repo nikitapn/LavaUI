@@ -521,7 +521,8 @@ struct CompositorHost {
   virtual void activeWindow(uint32_t &outSurfaceId, std::string &outTitle,
                             std::string &outMenuService,
                             std::string &outMenuObjectPath, uint32_t &outPid,
-                            uint32_t &outRegistrarId) const = 0;
+                            uint32_t &outRegistrarId, bool &outAlwaysOnTop,
+                            std::string &outAppId) const = 0;
 
   /// "A frame is committed on this surface" — draw it. `serial` is the newest
   /// input the client had consumed when it laid the frame out, which is what
@@ -709,7 +710,8 @@ class ControlPlane {
                                 const std::string &menuObjectPath = {},
                                 uint32_t pid = 0,
                                 uint32_t registrarId = 0,
-                                bool alwaysOnTop = false) = 0;
+                                bool alwaysOnTop = false,
+                                const std::string &appId = {}) = 0;
 
   /// "The system theme changed" — to every Lava client watching.
   virtual void postSystemTheme() = 0;

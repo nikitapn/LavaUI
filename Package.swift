@@ -228,7 +228,7 @@ var targets: [Target] = [
     // out of the same client API an app uses. See Sources/LavaPanel.
     .executableTarget(
         name: "LavaPanel",
-        dependencies: ["LavaUI", "CPulse", "LavaMpris"]
+        dependencies: ["LavaUI", "CPulse", "LavaMpris", "LavaShell"]
             + (haveNprpc ? [Target.Dependency("LavaClient"),
                             Target.Dependency("LavaIDL")] : []),
         resources: [

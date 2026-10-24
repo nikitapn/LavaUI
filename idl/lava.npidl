@@ -539,6 +539,11 @@ message ActiveWindow {
   /// state of the checkmark on the panel's Window menu. Re-posted when it
   /// changes, from that menu or from the title bar's.
   alwaysOnTop: boolean;
+  /// The application the window belongs to — `WindowInfo.appId`, the same
+  /// string. A window that exports no menu still gets an application menu
+  /// from the panel (its name over a Quit), and this is what names it.
+  /// Empty when the client never said.
+  appId: string;
 }
 
 /// One window, as a dock or a task list has to see it.

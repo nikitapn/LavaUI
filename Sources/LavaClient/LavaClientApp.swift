@@ -1238,6 +1238,9 @@ public enum LavaClient {
         public var registrarId: UInt32 = 0
         /// Pinned above the rest of its workspace.
         public var alwaysOnTop = false
+        /// The application it belongs to — `WindowInfo.appId`. Empty when
+        /// the client never said.
+        public var appId: String = ""
     }
 
     /// The focused window, now and whenever it changes.
@@ -1273,7 +1276,8 @@ public enum LavaClient {
                         menuObjectPath: window.menuObjectPath,
                         pid: window.pid,
                         registrarId: window.registrarId,
-                        alwaysOnTop: window.alwaysOnTop
+                        alwaysOnTop: window.alwaysOnTop,
+                        appId: window.appId
                     )
                     MainQueue.async { handler(focused) }
                     // Cheap, and the only thing that keeps the stream's flow

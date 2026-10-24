@@ -1780,7 +1780,8 @@ class CompositorImpl final : public ICompositor_Servant {
     ActiveWindow current{};
     host_.activeWindow(current.surfaceId, current.title, current.menuService,
                        current.menuObjectPath, current.pid,
-                       current.registrarId);
+                       current.registrarId, current.alwaysOnTop,
+                       current.appId);
     watcher->send(current);
 
     try {
@@ -2709,8 +2710,10 @@ class ControlPlaneImpl final : public ControlPlane {
   void postActiveWindow(uint32_t surfaceId, const std::string &title,
                         const std::string &menuService,
                         const std::string &menuObjectPath, uint32_t pid,
-                        uint32_t registrarId, bool alwaysOnTop) override {
+                        uint32_t registrarId, bool alwaysOnTop,
+                        const std::string &appId) override {
     ActiveWindow window{};
+    window.appId = appId;
     window.alwaysOnTop = alwaysOnTop;
     window.surfaceId = surfaceId;
     window.title = title;
