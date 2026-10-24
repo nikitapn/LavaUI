@@ -590,16 +590,22 @@ private struct TabStrip: View {
             }
             .flexGrow(0)
             .flexShrink(1)
-            // 9 round a 10pt mark is the 28pt square the button always was.
-            HStack(padding: 9, alignment: .center, onClick: { session.newTab() }) {
+            // A 22pt circle: 6 round a 10pt mark.
+            HStack(padding: 6, alignment: .center, onClick: { session.newTab() }) {
                 Mark(.plus, size: 10, color: Theme.current.textSecondary)
             }
             .hoverBackground(Theme.current.hover)
-            .cornerRadius(6)
+            .cornerRadius(11)
             .cursor(.pointer)
-            .flexShrink(0)
             .tooltip("New Tab")
             .agentId("new-tab")
+            // The strip stands everything on its bottom edge, which is right
+            // for the tabs and wrong for anything shorter than one: it sat
+            // low. Centred in a box a tab tall, it lines up with their titles
+            // at any size. The box is only placement; the click and the
+            // hover stay on the circle.
+            .frame(height: .pt(PaneChrome.tabHeight), alignment: .center)
+            .flexShrink(0)
             Spacer()
                 .frame(height: .pt(PaneChrome.stripHeight), minWidth: 48)
                 .windowDrag()
