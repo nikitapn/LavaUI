@@ -1202,6 +1202,21 @@ public final class TextLayoutCache: @unchecked Sendable {
         }
         misses += 1
 
+        // Within a pixel of the text's own width is the text's own width.
+        // Yoga rounds frames to the pixel grid, so a box sized from a frame
+        // it read back can be offered a fraction less than it measured — and
+        // the wrapper then breaks at the last space, which takes a whole word
+        // off the line. A menu plate laid out at its own size grew a row
+        // taller that way, past the frost cut for it. The 8pt margin a text
+        // used to carry hid this.
+        if mode != 0, !text.isEmpty {
+            let natural = layout(font: font, text: text, availWidth: 0, mode: 0)
+            if natural.width <= availWidth + Self.wrapTolerance {
+                store(natural, for: key)
+                return natural
+            }
+        }
+
         let metrics = font.measure(text, availWidth: availWidth, mode: mode)
         let lines: [String]
         if mode == 0 || text.isEmpty {
@@ -1245,6 +1260,10 @@ public final class TextLayoutCache: @unchecked Sendable {
         }
         return width
     }
+
+    /// How far short of a text's natural width a box can be and still be
+    /// drawn on the text's natural lines. One pixel: what rounding can take.
+    static let wrapTolerance: Float = 1
 
     private func store(_ entry: Entry, for key: Key) {
         if map.count >= Self.limit {
