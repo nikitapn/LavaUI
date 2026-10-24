@@ -681,10 +681,13 @@ final class MenuSession {
             )
         }
         var opened: WindowID?
+        // Sized to what is there when it opens. Something that starts
+        // playing while it is up makes the list scroll rather than the
+        // window grow: a popup's size is fixed at creation.
         opened = LavaApp.openPopup(
             title: "Volume",
-            width: 280,
-            height: 180,
+            width: SoundBlock.width,
+            height: SoundBlock.height(of: SoundBlock.blocks(pulse)),
             anchor: anchor,
             backdropBlur: PanelChrome.popupBlurRadius,
             refraction: PanelChrome.popupRefraction,
