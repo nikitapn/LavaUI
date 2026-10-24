@@ -73,8 +73,15 @@ struct NetworkSessionTests {
             supports-hints=true
             """
         FileManager.default.createFile(atPath: dir + "/fakevpn.name", contents: Data(name.utf8))
+        // The real OpenVPN plugin beside it, when installed, for the import
+        // test: its .name file names its library by absolute path, and the
+        // library is all an import loads — nothing it does reaches past the
+        // mock.
+        try? FileManager.default.copyItem(atPath: openVPNName, toPath: dir + "/openvpn.name")
         return dir
     }
+
+    static let openVPNName = "/usr/lib/NetworkManager/VPN/nm-openvpn-service.name"
 
     /// Drains the main queue until `condition` holds, or fails after `timeout`.
     static func wait(
@@ -279,5 +286,131 @@ struct NetworkSessionTests {
         let active = try #require(session.wifi.first { $0.ssid == "Home" }?.active)
         session.disconnect(active)
         #expect(Self.wait("home down") { !session.state.active.contains { $0.path == active.path } })
+    }
+
+    // MARK: - Settings: editing and importing profiles
+
+    /// What `onDone` reported, in order.
+    nonisolated(unsafe) static var done: [(String, String)] = []
+
+    static func listenForDone() {
+        session.onDone = { what, path in done.append((what, path)) }
+    }
+
+    static func temporaryFile(_ name: String, _ text: String) -> String {
+        let dir = pluginRoot + "/files"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let path = dir + "/" + name
+        FileManager.default.createFile(atPath: path, contents: Data(text.utf8))
+        return path
+    }
+
+    @Test("saving renames a profile and gives it a static address")
+    func saveProfile() throws {
+        let session = Self.session
+        Self.listenForDone()
+        #expect(Self.wait("home saved") { session.state.connections.contains { $0.id == "Home" } })
+        let home = try #require(session.state.connections.first { $0.id == "Home" })
+        #expect(home.ip4.method == "auto")
+        var form = ProfileForm(home)
+        let original = form
+        form.name = "Home (static)"
+        form.method = "manual"
+        form.addresses = "192.168.7.5/24, 10.0.0.9"
+        form.gateway = "192.168.7.1"
+        form.dns = "9.9.9.9 1.1.1.1"
+        form.autoconnect = false
+        #expect(form.isValid)
+        let edit = try #require(form.edit(from: original))
+        session.save(home.path, edit)
+        #expect(Self.wait("saved") { Self.done.contains { $0 == ("Save", home.path) } })
+        #expect(Self.wait("in the snapshot") {
+            session.state.connections.first { $0.path == home.path }?.id == "Home (static)"
+        })
+        let saved = try #require(session.state.connections.first { $0.path == home.path })
+        #expect(saved.ip4.method == "manual")
+        #expect(saved.ip4.addresses == ["192.168.7.5/24", "10.0.0.9/24"])
+        #expect(saved.ip4.gateway == "192.168.7.1")
+        #expect(saved.ip4.dns == ["9.9.9.9", "1.1.1.1"])
+        #expect(!saved.autoconnect)
+        #expect(session.recentError == nil)
+    }
+
+    @Test("an address NetworkManager would refuse is refused here, by name")
+    func saveRefused() throws {
+        let session = Self.session
+        let home = try #require(session.state.connections.first { $0.type == NetConnection.wifiType })
+        let edit = ProfileEdit(ip4: .init(method: "manual", addresses: ["300.1.1.1/24"],
+                                          gateway: "", dns: [], ignoreAutoDNS: false))
+        session.save(home.path, edit)
+        #expect(Self.wait("refused") { session.recentError != nil })
+        #expect(session.recentError?.contains("300.1.1.1") == true)
+        #expect(session.state.connections.first { $0.path == home.path }?.ip4.addresses
+                    .contains("300.1.1.1/24") == false)
+    }
+
+    @Test("a WireGuard file becomes a tunnel profile")
+    func importWireGuard() throws {
+        let session = Self.session
+        Self.listenForDone()
+        // Throwaway keys: 32 random bytes each, which is all a key is.
+        func key() -> String {
+            Data((0..<32).map { _ in UInt8.random(in: 0...255) }).base64EncodedString()
+        }
+        let file = Self.temporaryFile("wgtest.conf", """
+            [Interface]
+            PrivateKey = \(key())
+            Address = 10.66.0.2/32
+            DNS = 10.66.0.1
+
+            [Peer]
+            PublicKey = \(key())
+            AllowedIPs = 0.0.0.0/0
+            Endpoint = wg.example.org:51820
+            """)
+        session.importProfile(file)
+        #expect(Self.wait("imported") { Self.done.contains { $0.0 == "Import" } })
+        #expect(Self.wait("in the list") { session.vpns.contains { $0.connection.id == "wgtest" } })
+        let tunnel = try #require(session.vpns.first { $0.connection.id == "wgtest" })
+        #expect(tunnel.connection.type == "wireguard")
+        #expect(tunnel.connection.remote == "wg.example.org:51820")
+        #expect(tunnel.connection.ip4.addresses == ["10.66.0.2/32"])
+        #expect(session.recentError == nil)
+    }
+
+    @Test("an OpenVPN file is read by the OpenVPN plugin",
+          .enabled(if: FileManager.default.fileExists(atPath: openVPNName)))
+    func importOpenVPN() throws {
+        let session = Self.session
+        Self.listenForDone()
+        // The plugin wants a CA named; it is a path in the profile, not read.
+        let ca = Self.temporaryFile("ca.crt", "placeholder\n")
+        let file = Self.temporaryFile("office-udp.ovpn", """
+            client
+            dev tun
+            proto udp
+            remote vpn.example.org 1194
+            ca \(ca)
+            auth-user-pass
+            cipher AES-256-GCM
+            """)
+        session.importProfile(file)
+        #expect(Self.wait("in the list") {
+            session.vpns.contains { $0.connection.id == "office-udp" } || session.recentError != nil
+        })
+        #expect(session.recentError == nil, "\(session.recentError ?? "")")
+        let vpn = try #require(session.vpns.first { $0.connection.id == "office-udp" })
+        #expect(vpn.connection.vpnService == "org.freedesktop.NetworkManager.openvpn")
+        #expect(vpn.connection.remote.contains("vpn.example.org"))
+        #expect(session.recentError == nil)
+    }
+
+    @Test("a file nothing can read says so")
+    func importRefused() {
+        let session = Self.session
+        let file = Self.temporaryFile("notes.txt", "these are not the settings you are looking for\n")
+        session.importProfile(file)
+        #expect(Self.wait("refused") { session.recentError != nil })
+        #expect(session.recentError?.hasPrefix("Import:") == true)
     }
 }

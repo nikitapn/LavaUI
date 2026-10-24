@@ -71,6 +71,16 @@ typedef struct {
   int managed;
   /// The first IPv4 address with its prefix, "192.168.1.20/24"; "" if none.
   const char *ip4;
+  /// What DHCP or the profile gave the running link: the default gateway,
+  /// and the name servers comma-separated. "" when there are none.
+  const char *ip4_gateway;
+  const char *ip4_dns;
+  /// The first global IPv6 address with its prefix; "" if none.
+  const char *ip6;
+  /// "AA:BB:CC:DD:EE:FF"; "" for a device that has none.
+  const char *hw_address;
+  /// Link speed in Mb/s, Ethernet only; 0 when unknown.
+  uint32_t speed;
 } LavaNetDevice;
 
 typedef struct {
@@ -104,6 +114,8 @@ typedef struct {
   const char *device;
   /// NetworkManager's choice for the default route.
   int is_default;
+  /// The address the connection got — for a VPN, the tunnel's own; "".
+  const char *ip4;
 } LavaNetActive;
 
 typedef struct {
@@ -118,6 +130,23 @@ typedef struct {
   int autoconnect;
   /// Seconds since the epoch it last connected; 0 if never.
   uint64_t timestamp;
+  /// IPv4 as saved: "auto", "manual", "disabled", "link-local", "shared";
+  /// "" when the profile has no IPv4 setting at all (a WireGuard tunnel can
+  /// lack one until edited).
+  const char *ip4_method;
+  /// Static addresses, "a.b.c.d/prefix", comma-separated.
+  const char *ip4_addresses;
+  const char *ip4_gateway;
+  /// Name servers, comma-separated.
+  const char *ip4_dns;
+  /// Only the servers above, not the ones DHCP or the VPN offers.
+  int ip4_ignore_auto_dns;
+  /// Never the default route: only traffic for the connection's own
+  /// networks goes through it. Mostly asked of a VPN.
+  int ip4_never_default;
+  /// VPN and WireGuard: the server it connects to, as the profile names
+  /// it; "".
+  const char *remote;
 } LavaNetConnection;
 
 /// Valid only for the duration of the callback; copy what you keep.
@@ -178,13 +207,19 @@ typedef struct {
   void (*secret_cancelled)(void *user, uint64_t id);
   /// A command failed. `what` says which ("Connect", "Disconnect", …).
   void (*error)(void *user, const char *what, const char *message);
+  /// A command that changes a profile went through: `what` as for `error`,
+  /// `path` the profile it changed or made. May be NULL.
+  void (*done)(void *user, const char *what, const char *path);
 } LavaNetCallbacks;
 
-/// Connects to NetworkManager on the system bus and registers the agent.
-/// Callbacks run on the library's own thread — hop before touching UI
-/// state. NetworkManager not running is not a failure: the snapshot says
-/// `running = 0`, and a later start is picked up.
-LavaNet *lava_net_create(const LavaNetCallbacks *callbacks, void *user);
+/// Connects to NetworkManager on the system bus, and with `agent` nonzero
+/// registers the secret agent too. One agent per user is the rule — a
+/// second one under the same identifier takes over from the first — so
+/// only the panel asks for it; Settings does not. Callbacks run on the
+/// library's own thread — hop before touching UI state. NetworkManager not
+/// running is not a failure: the snapshot says `running = 0`, and a later
+/// start is picked up.
+LavaNet *lava_net_create(const LavaNetCallbacks *callbacks, void *user, int agent);
 
 void lava_net_destroy(LavaNet *net);
 
@@ -210,6 +245,31 @@ void lava_net_deactivate(LavaNet *net, const char *active);
 
 /// Deletes a saved connection.
 void lava_net_forget(LavaNet *net, const char *connection);
+
+/// A change to a saved profile. NULL strings and -1 flags leave a field as
+/// it is; `ip4_method` NULL leaves all of IPv4 alone, and given, replaces
+/// the addresses, gateway and name servers with the ones here (comma- or
+/// space-separated; an address without a prefix is a /24).
+typedef struct {
+  const char *id;
+  int autoconnect;
+  const char *ip4_method;
+  const char *ip4_addresses;
+  const char *ip4_gateway;
+  const char *ip4_dns;
+  int ip4_ignore_auto_dns;
+  int ip4_never_default;
+} LavaNetEdit;
+
+/// Saves `edit` into `connection`, to disk. Secrets are not sent, and
+/// NetworkManager keeps the ones it has. A connection that is up keeps
+/// running as it was until it is next started. `error` ("Save") or `done`.
+void lava_net_update(LavaNet *net, const char *connection, const LavaNetEdit *edit);
+
+/// Adds a profile read from `file`: a WireGuard `.conf`, or anything an
+/// installed VPN plugin can import (`.ovpn`, …). `error` ("Import") or
+/// `done` with the new profile's path.
+void lava_net_import(LavaNet *net, const char *file);
 
 /// Answers request `id` with `values[i]` for `keys[i]`. Keys not answered
 /// keep the plugin's own value.

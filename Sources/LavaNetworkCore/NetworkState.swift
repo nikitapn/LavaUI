@@ -40,10 +40,20 @@ public struct NetDevice: Equatable, Sendable {
     public var managed: Bool
     /// "192.168.1.20/24", or "".
     public var ip4: String
+    /// What the running link was given: gateway and name servers.
+    public var gateway: String
+    public var dns: [String]
+    /// The first global IPv6 address, with its prefix; "".
+    public var ip6: String
+    public var hwAddress: String
+    /// Mb/s, Ethernet only; 0 when unknown.
+    public var speed: UInt32
 
     public init(
         path: String, iface: String, kind: Kind, state: Int, activeConnection: String = "",
-        activeAccessPoint: String = "", managed: Bool = true, ip4: String = ""
+        activeAccessPoint: String = "", managed: Bool = true, ip4: String = "",
+        gateway: String = "", dns: [String] = [], ip6: String = "", hwAddress: String = "",
+        speed: UInt32 = 0
     ) {
         self.path = path
         self.iface = iface
@@ -53,6 +63,11 @@ public struct NetDevice: Equatable, Sendable {
         self.activeAccessPoint = activeAccessPoint
         self.managed = managed
         self.ip4 = ip4
+        self.gateway = gateway
+        self.dns = dns
+        self.ip6 = ip6
+        self.hwAddress = hwAddress
+        self.speed = speed
     }
 
     /// `NM_DEVICE_STATE_ACTIVATED`.
@@ -115,12 +130,15 @@ public struct NetActive: Equatable, Sendable {
     public var specificObject: String
     public var device: String
     public var isDefault: Bool
+    /// The address it got — a VPN's is the tunnel's own; "".
+    public var ip4: String
 
     public init(
         path: String, id: String, uuid: String = "", type: String, state: State,
         vpn: Bool = false, connection: String = "", specificObject: String = "",
-        device: String = "", isDefault: Bool = false
+        device: String = "", isDefault: Bool = false, ip4: String = ""
     ) {
+        self.ip4 = ip4
         self.path = path
         self.id = id
         self.uuid = uuid
@@ -144,11 +162,17 @@ public struct NetConnection: Equatable, Sendable {
     public var autoconnect: Bool
     /// Seconds since the epoch it last connected; 0 if never.
     public var timestamp: UInt64
+    public var ip4: IPv4Settings
+    /// VPN and WireGuard: the server, as the profile names it; "".
+    public var remote: String
 
     public init(
         path: String, id: String, uuid: String = "", type: String, ssid: String = "",
-        vpnService: String = "", autoconnect: Bool = true, timestamp: UInt64 = 0
+        vpnService: String = "", autoconnect: Bool = true, timestamp: UInt64 = 0,
+        ip4: IPv4Settings = IPv4Settings(), remote: String = ""
     ) {
+        self.ip4 = ip4
+        self.remote = remote
         self.path = path
         self.id = id
         self.uuid = uuid
@@ -164,4 +188,31 @@ public struct NetConnection: Equatable, Sendable {
 
     /// What the panel lists under VPN: a plugin VPN or a WireGuard tunnel.
     public var isVPN: Bool { type == "vpn" || type == "wireguard" }
+}
+
+/// A profile's IPv4, as saved — not what the link has right now, which is
+/// on `NetDevice`.
+public struct IPv4Settings: Equatable, Sendable {
+    /// "auto", "manual", "disabled", "link-local", "shared"; "" when the
+    /// profile has no IPv4 setting, which NetworkManager treats as "auto"
+    /// for most types and as nothing for a WireGuard tunnel.
+    public var method: String
+    /// "a.b.c.d/prefix".
+    public var addresses: [String]
+    public var gateway: String
+    public var dns: [String]
+    public var ignoreAutoDNS: Bool
+    public var neverDefault: Bool
+
+    public init(
+        method: String = "", addresses: [String] = [], gateway: String = "",
+        dns: [String] = [], ignoreAutoDNS: Bool = false, neverDefault: Bool = false
+    ) {
+        self.method = method
+        self.addresses = addresses
+        self.gateway = gateway
+        self.dns = dns
+        self.ignoreAutoDNS = ignoreAutoDNS
+        self.neverDefault = neverDefault
+    }
 }

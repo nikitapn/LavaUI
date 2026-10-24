@@ -50,6 +50,33 @@ public struct WiredRow: Equatable, Sendable, Identifiable {
     }
 }
 
+/// A saved profile and what it is doing: Settings' lists, which are about
+/// what is saved rather than what is in the air.
+public struct ProfileRow: Equatable, Sendable, Identifiable {
+    public var connection: NetConnection
+    public var active: NetActive?
+    /// Wi-Fi: something with its name is in range now.
+    public var inRange: Bool
+
+    public var id: String { connection.path }
+    public var isOn: Bool {
+        guard let state = active?.state else { return false }
+        return state == .activating || state == .activated
+    }
+    public var isConnecting: Bool { active?.state == .activating }
+}
+
+/// One fact about a running link, for the status card.
+public struct LinkDetail: Equatable, Sendable {
+    public var label: String
+    public var value: String
+
+    public init(_ label: String, _ value: String) {
+        self.label = label
+        self.value = value
+    }
+}
+
 /// What the strip's glyph shows.
 public struct NetworkStatus: Equatable, Sendable {
     public enum Link: Equatable, Sendable {
@@ -153,6 +180,82 @@ public enum NetworkRows {
     public static func wired(_ state: NetworkState) -> [WiredRow] {
         state.devices.filter { $0.kind == .ethernet && $0.managed }.map { device in
             WiredRow(device: device, active: state.active.first { $0.path == device.activeConnection })
+        }
+    }
+
+    /// Saved Wi-Fi profiles: the one in use, then by when each was last
+    /// used — the order someone looking for an old network expects.
+    public static func savedWifi(_ state: NetworkState) -> [ProfileRow] {
+        let inAir = Set(state.accessPoints.map(\.ssid))
+        return state.connections.filter { $0.type == NetConnection.wifiType }
+            .map { profileRow($0, state, inRange: inAir.contains($0.ssid)) }
+            .sorted { a, b in
+                if a.isOn != b.isOn { return a.isOn }
+                if a.connection.timestamp != b.connection.timestamp {
+                    return a.connection.timestamp > b.connection.timestamp
+                }
+                return a.connection.id.localizedCaseInsensitiveCompare(b.connection.id) == .orderedAscending
+            }
+    }
+
+    public static func wiredProfiles(_ state: NetworkState) -> [ProfileRow] {
+        state.connections.filter { $0.type == NetConnection.ethernetType }
+            .map { profileRow($0, state, inRange: true) }
+            .sorted { $0.connection.id.localizedCaseInsensitiveCompare($1.connection.id) == .orderedAscending }
+    }
+
+    public static func profile(_ state: NetworkState, path: String) -> ProfileRow? {
+        state.connections.first { $0.path == path }.map { conn in
+            profileRow(conn, state, inRange: conn.type != NetConnection.wifiType
+                       || state.accessPoints.contains { $0.ssid == conn.ssid })
+        }
+    }
+
+    private static func profileRow(_ conn: NetConnection, _ state: NetworkState, inRange: Bool) -> ProfileRow {
+        ProfileRow(
+            connection: conn,
+            active: state.active.first { $0.connection == conn.path }
+                ?? state.active.first { !conn.uuid.isEmpty && $0.uuid == conn.uuid },
+            inRange: inRange
+        )
+    }
+
+    /// What a device that is up was given, in the order a person checks it.
+    /// Empty for a device that is not connected: its last address is not a
+    /// fact about now.
+    public static func details(_ device: NetDevice) -> [LinkDetail] {
+        guard device.isConnected else { return [] }
+        var out: [LinkDetail] = []
+        if !device.ip4.isEmpty { out.append(LinkDetail("IPv4 address", device.ip4)) }
+        if !device.gateway.isEmpty { out.append(LinkDetail("Gateway", device.gateway)) }
+        if !device.dns.isEmpty { out.append(LinkDetail("DNS", device.dns.joined(separator: ", "))) }
+        if !device.ip6.isEmpty { out.append(LinkDetail("IPv6 address", device.ip6)) }
+        if device.speed > 0 {
+            out.append(LinkDetail("Speed", device.speed >= 1000 && device.speed % 1000 == 0
+                                  ? "\(device.speed / 1000) Gb/s" : "\(device.speed) Mb/s"))
+        }
+        if !device.hwAddress.isEmpty { out.append(LinkDetail("Hardware address", device.hwAddress)) }
+        return out
+    }
+
+    /// "Today", "Yesterday", "5 days ago", "Never" — a profile's last use.
+    public static func lastUsed(_ timestamp: UInt64, now: Date = Date(),
+                                calendar: Calendar = .current) -> String {
+        guard timestamp > 0 else { return "Never used" }
+        let then = Date(timeIntervalSince1970: TimeInterval(timestamp))
+        let days = calendar.dateComponents(
+            [.day], from: calendar.startOfDay(for: then), to: calendar.startOfDay(for: now)
+        ).day ?? 0
+        switch days {
+        case ..<1: return "Used today"
+        case 1: return "Used yesterday"
+        case 2..<30: return "Used \(days) days ago"
+        case 30..<365:
+            let months = days / 30
+            return months == 1 ? "Used a month ago" : "Used \(months) months ago"
+        default:
+            let years = days / 365
+            return years == 1 ? "Used a year ago" : "Used \(years) years ago"
         }
     }
 

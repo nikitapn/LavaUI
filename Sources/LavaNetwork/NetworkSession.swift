@@ -22,6 +22,8 @@ public final class NetworkSession: @unchecked Sendable {
     @ObservationIgnored public var onPrompt: ((SecretPrompt) -> Void)?
     /// NetworkManager no longer needs prompt `id`.
     @ObservationIgnored public var onPromptGone: ((UInt64) -> Void)?
+    /// A save or an import went through: what, and the profile's path.
+    @ObservationIgnored public var onDone: ((String, String) -> Void)?
 
     private var handle: OpaquePointer?
     private var box: Unmanaged<NetworkSession>?
@@ -45,7 +47,10 @@ public final class NetworkSession: @unchecked Sendable {
         public var asked: [Field] { fields.filter(\.ask) }
     }
 
-    public init() {
+    /// `agent: false` watches and changes NetworkManager without answering
+    /// for secrets. There is one agent per user and the panel is it; a
+    /// second process registering would take that over from the panel.
+    public init(agent: Bool = true) {
         let unmanaged = Unmanaged.passRetained(self)
         box = unmanaged
         var callbacks = LavaNetCallbacks()
@@ -76,7 +81,14 @@ public final class NetworkSession: @unchecked Sendable {
                 ViewInvalidation.markNeedsRedraw()
             }
         }
-        handle = lava_net_create(&callbacks, unmanaged.toOpaque())
+        callbacks.done = { user, what, path in
+            guard let user else { return }
+            let session = Unmanaged<NetworkSession>.fromOpaque(user).takeUnretainedValue()
+            let what = what.map { String(cString: $0) } ?? ""
+            let path = path.map { String(cString: $0) } ?? ""
+            MainQueue.async { session.onDone?(what, path) }
+        }
+        handle = lava_net_create(&callbacks, unmanaged.toOpaque(), agent ? 1 : 0)
         if handle == nil {
             unmanaged.release()
             box = nil
@@ -177,6 +189,50 @@ public final class NetworkSession: @unchecked Sendable {
         lava_net_forget(handle, connection.path)
     }
 
+    /// Writes `edit` into the profile at `path`. The answer comes back as
+    /// `onDone("Save", path)` or as `lastError`.
+    public func save(_ path: String, _ edit: ProfileEdit) {
+        guard let handle else { return }
+        lastError = nil
+        let ip4 = edit.ip4
+        let strings = [
+            edit.name, ip4?.method, ip4.map { $0.addresses.joined(separator: ",") },
+            ip4?.gateway, ip4.map { $0.dns.joined(separator: ",") },
+        ]
+        // NULL for a field the edit leaves alone.
+        let copies = strings.map { $0.map { strdup($0) } ?? nil }
+        defer { copies.forEach { free($0) } }
+        var c = LavaNetEdit()
+        c.id = UnsafePointer(copies[0])
+        c.autoconnect = edit.autoconnect.map { $0 ? 1 : 0 } ?? -1
+        c.ip4_method = UnsafePointer(copies[1])
+        c.ip4_addresses = UnsafePointer(copies[2])
+        c.ip4_gateway = UnsafePointer(copies[3])
+        c.ip4_dns = UnsafePointer(copies[4])
+        c.ip4_ignore_auto_dns = ip4.map { $0.ignoreAutoDNS ? 1 : 0 } ?? -1
+        c.ip4_never_default = edit.neverDefault.map { $0 ? 1 : 0 } ?? -1
+        lava_net_update(handle, path, &c)
+    }
+
+    public func setAutoconnect(_ connection: NetConnection, _ on: Bool) {
+        save(connection.path, ProfileEdit(autoconnect: on))
+    }
+
+    /// Adds a profile from a WireGuard `.conf` or anything a VPN plugin
+    /// imports; `onDone("Import", path)` names the new one.
+    public func importProfile(_ file: String) {
+        guard let handle else { return }
+        lastError = nil
+        lava_net_import(handle, file)
+    }
+
+    /// Starts a saved profile wherever NetworkManager sees fit.
+    public func activate(_ connection: NetConnection) {
+        guard let handle else { return }
+        lastError = nil
+        lava_net_activate(handle, connection.path, nil, nil)
+    }
+
     /// Answers prompt `id`. `values` is keyed by field key.
     public func answer(_ id: UInt64, values: [String: String]) {
         guard let handle else { return }
@@ -231,6 +287,12 @@ public final class NetworkSession: @unchecked Sendable {
         p.map { String(cString: $0) } ?? ""
     }
 
+    /// "a, b" → ["a", "b"]: how the C side joins a list.
+    private static func list(_ p: UnsafePointer<CChar>?) -> [String] {
+        text(p).split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
     private static func buffer<T>(_ base: UnsafePointer<T>?, _ count: Int) -> UnsafeBufferPointer<T> {
         guard let base, count > 0 else { return UnsafeBufferPointer(start: nil, count: 0) }
         return UnsafeBufferPointer(start: base, count: count)
@@ -252,7 +314,8 @@ public final class NetworkSession: @unchecked Sendable {
                 kind: NetDevice.Kind(rawValue: Int(d.type)) ?? .other, state: Int(d.state),
                 activeConnection: text(d.active_connection),
                 activeAccessPoint: text(d.active_access_point), managed: d.managed != 0,
-                ip4: text(d.ip4)
+                ip4: text(d.ip4), gateway: text(d.ip4_gateway), dns: list(d.ip4_dns),
+                ip6: text(d.ip6), hwAddress: text(d.hw_address), speed: d.speed
             )
         }
         state.accessPoints = buffer(s.access_points, s.access_point_count).map { a in
@@ -267,14 +330,21 @@ public final class NetworkSession: @unchecked Sendable {
                 path: text(a.path), id: text(a.id), uuid: text(a.uuid), type: text(a.type),
                 state: NetActive.State(rawValue: Int(a.state)) ?? .unknown, vpn: a.vpn != 0,
                 connection: text(a.connection), specificObject: text(a.specific_object),
-                device: text(a.device), isDefault: a.is_default != 0
+                device: text(a.device), isDefault: a.is_default != 0, ip4: text(a.ip4)
             )
         }
         state.connections = buffer(s.connections, s.connection_count).map { c in
             NetConnection(
                 path: text(c.path), id: text(c.id), uuid: text(c.uuid), type: text(c.type),
                 ssid: text(c.ssid), vpnService: text(c.vpn_service),
-                autoconnect: c.autoconnect != 0, timestamp: c.timestamp
+                autoconnect: c.autoconnect != 0, timestamp: c.timestamp,
+                ip4: IPv4Settings(
+                    method: text(c.ip4_method), addresses: list(c.ip4_addresses),
+                    gateway: text(c.ip4_gateway), dns: list(c.ip4_dns),
+                    ignoreAutoDNS: c.ip4_ignore_auto_dns != 0,
+                    neverDefault: c.ip4_never_default != 0
+                ),
+                remote: text(c.remote)
             )
         }
         return state

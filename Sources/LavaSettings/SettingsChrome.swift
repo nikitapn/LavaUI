@@ -87,6 +87,7 @@ private struct SidebarRow: View {
                 // must not be the thing that changes what it is drawing.
                 if section == .keyboard { store.ensureLayouts() }
                 if section == .background { store.ensurePictures() }
+                if section == .network { networkSettings.start() }
             },
             onHover: { hovered = $0 }
         ) {
@@ -162,6 +163,8 @@ struct SettingsContent: View {
                     KeyboardPage(store: store)
                 case .display:
                     DisplayPage(store: store)
+                case .network:
+                    NetworkPage()
                 case .lock:
                     LockPage(store: store)
                 case .search:
@@ -186,6 +189,8 @@ struct StatusBar: View {
                 message.isEmpty
                     ? (store.section == .search
                         ? "Changes apply immediately and are saved to index.conf."
+                        : store.section == .network
+                        ? "Profiles are NetworkManager's, and saved by it."
                         : "Changes apply immediately and are saved to lava.conf.")
                     : message,
                 color: message.isEmpty

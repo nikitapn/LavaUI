@@ -5,6 +5,7 @@
 #include <nm-vpn-plugin-info.h>
 #include <libsecret/secret.h>
 #include <stdarg.h>
+#include <sys/socket.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,6 +47,7 @@ struct LavaNet {
   GMutex start_lock;
   GCond started;
   int start_done;
+  int want_agent;
 
   NMClient *client;
   NMSecretAgentOld *agent;
@@ -110,12 +112,22 @@ static void on_object_signal(gpointer instance, gpointer object, gpointer data) 
   schedule_snapshot(data);
 }
 
+static void on_changed(gpointer instance, gpointer data) {
+  (void)instance;
+  schedule_snapshot(data);
+}
+
 // Listen to an object once. The mark lives on the object, so it goes when
 // the object does and a recycled address starts unwatched.
 static void watch(LavaNet *n, gpointer object) {
   if (object == NULL || g_object_get_data(object, "lava-net-watched")) return;
   g_object_set_data(object, "lava-net-watched", GINT_TO_POINTER(1));
   g_signal_connect(object, "notify", G_CALLBACK(on_notify), n);
+  // A saved profile's settings are not properties: an edit, from here or
+  // anywhere, arrives as the connection's own "changed".
+  if (NM_IS_REMOTE_CONNECTION(object)) {
+    g_signal_connect(object, "changed", G_CALLBACK(on_changed), n);
+  }
   if (NM_IS_DEVICE_WIFI(object)) {
     g_signal_connect(object, "access-point-added", G_CALLBACK(on_object_signal), n);
     g_signal_connect(object, "access-point-removed", G_CALLBACK(on_object_signal), n);
@@ -170,6 +182,64 @@ static char *first_ip4(NMDevice *device) {
                          nm_ip_address_get_prefix(address));
 }
 
+static char *first_ip6(NMDevice *device) {
+  NMIPConfig *config = nm_device_get_ip6_config(device);
+  GPtrArray *addresses = config ? nm_ip_config_get_addresses(config) : NULL;
+  for (guint i = 0; addresses && i < addresses->len; i++) {
+    NMIPAddress *address = g_ptr_array_index(addresses, i);
+    const char *text = nm_ip_address_get_address(address);
+    // A link-local address is on every interface and says nothing.
+    if (text == NULL || g_str_has_prefix(text, "fe80:")) continue;
+    return g_strdup_printf("%s/%u", text, nm_ip_address_get_prefix(address));
+  }
+  return NULL;
+}
+
+static char *joined(const char *const *items) {
+  return items ? g_strjoinv(", ", (char **)items) : NULL;
+}
+
+static char *ip_addresses(NMSettingIPConfig *ip) {
+  GString *out = g_string_new(NULL);
+  for (guint i = 0; i < nm_setting_ip_config_get_num_addresses(ip); i++) {
+    NMIPAddress *address = nm_setting_ip_config_get_address(ip, i);
+    if (out->len) g_string_append(out, ", ");
+    g_string_append_printf(out, "%s/%u", nm_ip_address_get_address(address),
+                           nm_ip_address_get_prefix(address));
+  }
+  return g_string_free(out, FALSE);
+}
+
+static char *ip_dns(NMSettingIPConfig *ip) {
+  GString *out = g_string_new(NULL);
+  for (guint i = 0; i < nm_setting_ip_config_get_num_dns(ip); i++) {
+    if (out->len) g_string_append(out, ", ");
+    g_string_append(out, nm_setting_ip_config_get_dns(ip, i));
+  }
+  return g_string_free(out, FALSE);
+}
+
+// The server a VPN profile connects to. Each plugin names it its own way;
+// these are the keys of the ones people have.
+static char *remote_of(NMConnection *conn) {
+  NMSettingVpn *vpn = nm_connection_get_setting_vpn(conn);
+  if (vpn) {
+    const char *keys[] = {"remote", "gateway", "server", "host", "address"};
+    for (size_t i = 0; i < G_N_ELEMENTS(keys); i++) {
+      const char *value = nm_setting_vpn_get_data_item(vpn, keys[i]);
+      if (value && value[0]) return g_strdup(value);
+    }
+    return NULL;
+  }
+  NMSettingWireGuard *wg = NM_SETTING_WIREGUARD(
+      nm_connection_get_setting_by_name(conn, NM_SETTING_WIREGUARD_SETTING_NAME));
+  if (wg && nm_setting_wireguard_get_peers_len(wg) > 0) {
+    NMWireGuardPeer *peer = nm_setting_wireguard_get_peer(wg, 0);
+    return g_strdup(nm_wireguard_peer_get_endpoint(peer));
+  }
+  return NULL;
+}
+
 static int scanning(LavaNet *n) {
   if (g_get_monotonic_time() >= n->scan_until_us) return 0;
   const GPtrArray *devices = nm_client_get_devices(n->client);
@@ -207,6 +277,7 @@ static void publish(LavaNet *n) {
       NMDevice *d = g_ptr_array_index(list, i);
       watch(n, d);
       if (nm_device_get_ip4_config(d)) watch(n, nm_device_get_ip4_config(d));
+      if (nm_device_get_ip6_config(d)) watch(n, nm_device_get_ip6_config(d));
       LavaNetDevice dev = {0};
       dev.path = copy(&a, path_of(d));
       dev.iface = copy(&a, nm_device_get_iface(d));
@@ -218,6 +289,12 @@ static void publish(LavaNet *n) {
       dev.active_connection = copy(&a, path_of(nm_device_get_active_connection(d)));
       dev.managed = nm_device_get_managed(d);
       dev.ip4 = keep(&a, first_ip4(d));
+      NMIPConfig *ip4 = nm_device_get_ip4_config(d);
+      dev.ip4_gateway = copy(&a, ip4 ? nm_ip_config_get_gateway(ip4) : "");
+      dev.ip4_dns = keep(&a, ip4 ? joined(nm_ip_config_get_nameservers(ip4)) : NULL);
+      dev.ip6 = keep(&a, first_ip6(d));
+      dev.hw_address = copy(&a, nm_device_get_hw_address(d));
+      dev.speed = NM_IS_DEVICE_ETHERNET(d) ? nm_device_ethernet_get_speed(NM_DEVICE_ETHERNET(d)) : 0;
       dev.active_access_point = "";
       if (NM_IS_DEVICE_WIFI(d)) {
         NMDeviceWifi *w = NM_DEVICE_WIFI(d);
@@ -260,6 +337,15 @@ static void publish(LavaNet *n) {
       const GPtrArray *on = nm_active_connection_get_devices(ac);
       row.device = copy(&a, on && on->len > 0 ? path_of(g_ptr_array_index(on, 0)) : "");
       row.is_default = nm_active_connection_get_default(ac);
+      NMIPConfig *ip4 = nm_active_connection_get_ip4_config(ac);
+      if (ip4) watch(n, ip4);
+      GPtrArray *addresses = ip4 ? nm_ip_config_get_addresses(ip4) : NULL;
+      row.ip4 = "";
+      if (addresses && addresses->len > 0) {
+        NMIPAddress *address = g_ptr_array_index(addresses, 0);
+        row.ip4 = keep(&a, g_strdup_printf("%s/%u", nm_ip_address_get_address(address),
+                                           nm_ip_address_get_prefix(address)));
+      }
       g_array_append_val(active, row);
     }
 
@@ -280,6 +366,14 @@ static void publish(LavaNet *n) {
       NMSettingConnection *s_con = nm_connection_get_setting_connection(conn);
       row.autoconnect = s_con ? nm_setting_connection_get_autoconnect(s_con) : 0;
       row.timestamp = s_con ? nm_setting_connection_get_timestamp(s_con) : 0;
+      NMSettingIPConfig *ip4 = nm_connection_get_setting_ip4_config(conn);
+      row.ip4_method = copy(&a, ip4 ? nm_setting_ip_config_get_method(ip4) : "");
+      row.ip4_addresses = ip4 ? keep(&a, ip_addresses(ip4)) : "";
+      row.ip4_gateway = copy(&a, ip4 ? nm_setting_ip_config_get_gateway(ip4) : "");
+      row.ip4_dns = ip4 ? keep(&a, ip_dns(ip4)) : "";
+      row.ip4_ignore_auto_dns = ip4 ? nm_setting_ip_config_get_ignore_auto_dns(ip4) : 0;
+      row.ip4_never_default = ip4 ? nm_setting_ip_config_get_never_default(ip4) : 0;
+      row.remote = keep(&a, remote_of(conn));
       g_array_append_val(saved, row);
     }
   } else {
@@ -324,6 +418,9 @@ typedef struct {
   LavaNet *net;
   char *a, *b, *c;
   int flag;
+  // `lava_net_update`: the edit, its strings owned here.
+  LavaNetEdit edit;
+  char *edit_strings[5];
   uint64_t id;
   char **keys;
   char **values;
@@ -335,6 +432,7 @@ static void command_free(gpointer data) {
   g_free(cmd->a);
   g_free(cmd->b);
   g_free(cmd->c);
+  for (size_t i = 0; i < G_N_ELEMENTS(cmd->edit_strings); i++) g_free(cmd->edit_strings[i]);
   if (cmd->values) {
     // A typed password: no copy of it outlives the reply.
     for (size_t i = 0; i < cmd->count; i++) {
@@ -539,6 +637,290 @@ static gboolean do_forget(gpointer data) {
   NMRemoteConnection *rc = object_at(n, cmd->a);
   if (!NM_IS_REMOTE_CONNECTION(rc)) return G_SOURCE_REMOVE;
   nm_remote_connection_delete_async(rc, NULL, on_deleted, n);
+  return G_SOURCE_REMOVE;
+}
+
+// ─── Editing profiles ───────────────────────────────────────────────────────
+
+static void done(LavaNet *n, const char *what, const char *path) {
+  if (n->cb.done) n->cb.done(n->user, what, path);
+}
+
+static void fail_with(LavaNet *n, const char *what, const char *fmt, ...) G_GNUC_PRINTF(3, 4);
+static void fail_with(LavaNet *n, const char *what, const char *fmt, ...) {
+  if (n->cb.error == NULL) return;
+  va_list args;
+  va_start(args, fmt);
+  char *message = g_strdup_vprintf(fmt, args);
+  va_end(args);
+  n->cb.error(n->user, what, message);
+  g_free(message);
+}
+
+// "a, b c" → {"a", "b", "c"}: what a person types into one field.
+static char **words(const char *text) {
+  GPtrArray *out = g_ptr_array_new();
+  char **parts = g_strsplit_set(str(text), ", \t\n", -1);
+  for (char **p = parts; *p; p++) {
+    if (**p) g_ptr_array_add(out, g_strdup(*p));
+  }
+  g_strfreev(parts);
+  g_ptr_array_add(out, NULL);
+  return (char **)g_ptr_array_free(out, FALSE);
+}
+
+// Applies the IPv4 half of an edit. 0 and a message on input NetworkManager
+// would refuse anyway, said in words that name the field.
+static int apply_ip4(NMConnection *conn, const LavaNetEdit *e, char **message) {
+  NMSettingIPConfig *ip = nm_connection_get_setting_ip4_config(conn);
+  if (ip == NULL) {
+    ip = NM_SETTING_IP_CONFIG(nm_setting_ip4_config_new());
+    nm_connection_add_setting(conn, NM_SETTING(ip));
+  }
+  const int manual = strcmp(e->ip4_method, NM_SETTING_IP4_CONFIG_METHOD_MANUAL) == 0;
+  const int disabled = strcmp(e->ip4_method, NM_SETTING_IP4_CONFIG_METHOD_DISABLED) == 0;
+  g_object_set(ip, NM_SETTING_IP_CONFIG_METHOD, e->ip4_method, NULL);
+
+  nm_setting_ip_config_clear_addresses(ip);
+  if (manual) {
+    char **list = words(e->ip4_addresses);
+    for (char **p = list; *p; p++) {
+      char *slash = strchr(*p, '/');
+      guint prefix = 24;
+      if (slash) {
+        *slash = '\0';
+        char *end = NULL;
+        const guint64 parsed = g_ascii_strtoull(slash + 1, &end, 10);
+        if (end == slash + 1 || *end || parsed < 1 || parsed > 32) {
+          *message = g_strdup_printf("“%s/%s” has no valid prefix length (1–32).", *p, slash + 1);
+          g_strfreev(list);
+          return 0;
+        }
+        prefix = (guint)parsed;
+      }
+      GError *error = NULL;
+      NMIPAddress *address = nm_ip_address_new(AF_INET, *p, prefix, &error);
+      if (address == NULL) {
+        *message = g_strdup_printf("“%s” is not an IPv4 address.", *p);
+        g_error_free(error);
+        g_strfreev(list);
+        return 0;
+      }
+      nm_setting_ip_config_add_address(ip, address);
+      nm_ip_address_unref(address);
+    }
+    g_strfreev(list);
+  }
+
+  // A gateway with no address of its own to reach it by is refused, so it
+  // goes with the addresses.
+  const char *gateway = manual && e->ip4_gateway && e->ip4_gateway[0] ? e->ip4_gateway : NULL;
+  if (gateway && !nm_utils_ipaddr_valid(AF_INET, gateway)) {
+    *message = g_strdup_printf("The gateway “%s” is not an IPv4 address.", gateway);
+    return 0;
+  }
+  g_object_set(ip, NM_SETTING_IP_CONFIG_GATEWAY, gateway, NULL);
+
+  nm_setting_ip_config_clear_dns(ip);
+  if (!disabled) {
+    char **list = words(e->ip4_dns);
+    for (char **p = list; *p; p++) {
+      if (!nm_utils_ipaddr_valid(AF_INET, *p)) {
+        *message = g_strdup_printf("The name server “%s” is not an IPv4 address.", *p);
+        g_strfreev(list);
+        return 0;
+      }
+      nm_setting_ip_config_add_dns(ip, *p);
+    }
+    g_strfreev(list);
+  }
+  if (e->ip4_ignore_auto_dns >= 0) {
+    g_object_set(ip, NM_SETTING_IP_CONFIG_IGNORE_AUTO_DNS, e->ip4_ignore_auto_dns != 0, NULL);
+  }
+  return 1;
+}
+
+typedef struct {
+  LavaNet *net;
+  char *path;
+} Pending;
+
+static void on_updated(GObject *source, GAsyncResult *result, gpointer data) {
+  Pending *p = data;
+  GError *error = NULL;
+  GVariant *reply = nm_client_dbus_call_finish(NM_CLIENT(source), result, &error);
+  if (reply) {
+    g_variant_unref(reply);
+    done(p->net, "Save", p->path);
+  } else {
+    report(p->net, "Save", error);
+    g_error_free(error);
+  }
+  g_free(p->path);
+  g_free(p);
+}
+
+static gboolean do_update(gpointer data) {
+  Command *cmd = data;
+  LavaNet *n = cmd->net;
+  NMRemoteConnection *rc = object_at(n, cmd->a);
+  if (!NM_IS_REMOTE_CONNECTION(rc)) {
+    fail_with(n, "Save", "That profile no longer exists.");
+    return G_SOURCE_REMOVE;
+  }
+  const LavaNetEdit *e = &cmd->edit;
+  // A copy to change: the remote object is libnm's mirror of what
+  // NetworkManager has, and is replaced when the update comes back.
+  NMConnection *conn = nm_simple_connection_new_clone(NM_CONNECTION(rc));
+  NMSettingConnection *s_con = nm_connection_get_setting_connection(conn);
+  if (e->id) {
+    char *id = g_strstrip(g_strdup(e->id));
+    if (id[0] == '\0') {
+      g_free(id);
+      g_object_unref(conn);
+      fail_with(n, "Save", "A profile needs a name.");
+      return G_SOURCE_REMOVE;
+    }
+    g_object_set(s_con, NM_SETTING_CONNECTION_ID, id, NULL);
+    g_free(id);
+  }
+  if (e->autoconnect >= 0) {
+    g_object_set(s_con, NM_SETTING_CONNECTION_AUTOCONNECT, e->autoconnect != 0, NULL);
+  }
+  char *message = NULL;
+  if (e->ip4_method && !apply_ip4(conn, e, &message)) {
+    fail_with(n, "Save", "%s", message);
+    g_free(message);
+    g_object_unref(conn);
+    return G_SOURCE_REMOVE;
+  }
+  if (e->ip4_never_default >= 0) {
+    NMSettingIPConfig *ip = nm_connection_get_setting_ip4_config(conn);
+    if (ip == NULL) {
+      ip = NM_SETTING_IP_CONFIG(nm_setting_ip4_config_new());
+      nm_connection_add_setting(conn, NM_SETTING(ip));
+    }
+    g_object_set(ip, NM_SETTING_IP_CONFIG_NEVER_DEFAULT, e->ip4_never_default != 0, NULL);
+  }
+  GError *error = NULL;
+  if (!nm_connection_verify(conn, &error)) {
+    report(n, "Save", error);
+    g_error_free(error);
+    g_object_unref(conn);
+    return G_SOURCE_REMOVE;
+  }
+  // `Update` rather than libnm's commit, which is `Update2`: the same call
+  // with flags this does not need, and the one every NetworkManager and the
+  // test mock answer. No secrets go: an update without any keeps the ones
+  // NetworkManager holds, and the agent's are in the keyring regardless.
+  GVariant *settings = nm_connection_to_dbus(conn, NM_CONNECTION_SERIALIZE_NO_SECRETS);
+  Pending *p = g_new0(Pending, 1);
+  p->net = n;
+  p->path = g_strdup(cmd->a);
+  nm_client_dbus_call(n->client, cmd->a, NM_DBUS_INTERFACE_SETTINGS_CONNECTION, "Update",
+                      g_variant_new("(@a{sa{sv}})", settings), G_VARIANT_TYPE("()"), 10000,
+                      NULL, on_updated, p);
+  g_object_unref(conn);
+  return G_SOURCE_REMOVE;
+}
+
+static void on_imported(GObject *source, GAsyncResult *result, gpointer data) {
+  LavaNet *n = data;
+  GError *error = NULL;
+  NMRemoteConnection *rc = nm_client_add_connection_finish(NM_CLIENT(source), result, &error);
+  if (rc) {
+    done(n, "Import", path_of(rc));
+    g_object_unref(rc);
+  } else {
+    report(n, "Import", error);
+    g_error_free(error);
+  }
+}
+
+// What `nmcli connection import` does, without being told the type: a
+// WireGuard file by its own reader, anything else by whichever installed
+// VPN plugin will take it.
+static NMConnection *import_file(LavaNet *n, const char *file, char **message) {
+  GError *error = NULL;
+  NMConnection *conn = NULL;
+  char *lower = g_ascii_strdown(file, -1);
+  const int wireguard = g_str_has_suffix(lower, ".conf");
+  g_free(lower);
+  if (wireguard) {
+    conn = nm_conn_wireguard_import(file, &error);
+    if (conn) return conn;
+    *message = g_strdup(error->message);
+    g_clear_error(&error);
+  }
+  if (n->vpn_plugins == NULL) n->vpn_plugins = nm_vpn_plugin_info_list_load();
+  // Every plugin that refused, and why: a broken .ovpn should say what is
+  // wrong with it, and which plugin is the one that read it is not known
+  // until one succeeds.
+  GString *why = g_string_new(NULL);
+  for (GSList *l = n->vpn_plugins; l && conn == NULL; l = l->next) {
+    NMVpnEditorPlugin *editor = nm_vpn_plugin_info_load_editor_plugin(l->data, NULL);
+    if (editor == NULL) continue;
+    if (!(nm_vpn_editor_plugin_get_capabilities(editor) & NM_VPN_EDITOR_PLUGIN_CAPABILITY_IMPORT))
+      continue;
+    conn = nm_vpn_editor_plugin_import(editor, file, &error);
+    if (conn == NULL && error) {
+      g_string_append_printf(why, "%s%s: %s", why->len ? "; " : "",
+                             nm_vpn_plugin_info_get_name(l->data), error->message);
+    }
+    g_clear_error(&error);
+  }
+  if (conn) {
+    g_free(*message);
+    *message = NULL;
+  } else if (*message == NULL) {
+    *message = why->len ? g_strdup(why->str)
+                        : g_strdup("No installed VPN plugin can import files. WireGuard files "
+                                   "end in .conf; OpenVPN needs networkmanager-openvpn.");
+  }
+  g_string_free(why, TRUE);
+  return conn;
+}
+
+static gboolean do_import(gpointer data) {
+  Command *cmd = data;
+  LavaNet *n = cmd->net;
+  if (n->client == NULL) return G_SOURCE_REMOVE;
+  char *message = NULL;
+  NMConnection *conn = import_file(n, cmd->a, &message);
+  if (conn == NULL) {
+    fail_with(n, "Import", "%s", message);
+    g_free(message);
+    return G_SOURCE_REMOVE;
+  }
+  g_free(message);
+  // A plugin's import leaves the name and identity to the caller, as nmcli
+  // fills them: the file's name, and a fresh uuid.
+  NMSettingConnection *s_con = nm_connection_get_setting_connection(conn);
+  if (s_con == NULL) {
+    s_con = NM_SETTING_CONNECTION(nm_setting_connection_new());
+    nm_connection_add_setting(conn, NM_SETTING(s_con));
+  }
+  if (nm_setting_connection_get_uuid(s_con) == NULL) {
+    char *uuid = nm_utils_uuid_generate();
+    g_object_set(s_con, NM_SETTING_CONNECTION_UUID, uuid, NULL);
+    g_free(uuid);
+  }
+  if (nm_setting_connection_get_id(s_con) == NULL) {
+    char *base = g_path_get_basename(cmd->a);
+    char *dot = strrchr(base, '.');
+    if (dot && dot != base) *dot = '\0';
+    g_object_set(s_con, NM_SETTING_CONNECTION_ID, base, NULL);
+    g_free(base);
+  }
+  GError *error = NULL;
+  if (!nm_connection_normalize(conn, NULL, NULL, &error)) {
+    report(n, "Import", error);
+    g_error_free(error);
+    g_object_unref(conn);
+    return G_SOURCE_REMOVE;
+  }
+  nm_client_add_connection_async(n->client, conn, TRUE, NULL, on_imported, n);
+  g_object_unref(conn);
   return G_SOURCE_REMOVE;
 }
 
@@ -1150,7 +1532,7 @@ static gpointer thread_main(gpointer data) {
     // `LAVA_NET_AGENT=0` for a second panel beside a running one: an
     // identifier is one agent per user, and the newer would take over.
     const char *agent_env = g_getenv("LAVA_NET_AGENT");
-    if (agent_env == NULL || strcmp(agent_env, "0") != 0) {
+    if (n->want_agent && (agent_env == NULL || strcmp(agent_env, "0") != 0)) {
       // Initialised asynchronously, on this loop. The synchronous init
       // waits on a context of its own that nothing here iterates, and never
       // returns; and the back-pointer has to be there before NetworkManager
@@ -1202,7 +1584,7 @@ static gpointer thread_main(gpointer data) {
   return NULL;
 }
 
-LavaNet *lava_net_create(const LavaNetCallbacks *callbacks, void *user) {
+LavaNet *lava_net_create(const LavaNetCallbacks *callbacks, void *user, int agent) {
   LavaNet *n = g_new0(LavaNet, 1);
   if (callbacks) n->cb = *callbacks;
   n->user = user;
@@ -1211,6 +1593,7 @@ LavaNet *lava_net_create(const LavaNetCallbacks *callbacks, void *user) {
   n->loop = g_main_loop_new(n->ctx, FALSE);
   g_mutex_init(&n->start_lock);
   g_cond_init(&n->started);
+  n->want_agent = agent != 0;
   n->thread = g_thread_new("lava-net", thread_main, n);
   // Until the client exists a command has nothing to act on.
   g_mutex_lock(&n->start_lock);
@@ -1261,6 +1644,26 @@ void lava_net_deactivate(LavaNet *n, const char *active) {
 
 void lava_net_forget(LavaNet *n, const char *connection) {
   run(n, do_forget, command(n, connection, NULL, NULL));
+}
+
+void lava_net_update(LavaNet *n, const char *connection, const LavaNetEdit *edit) {
+  Command *cmd = command(n, connection, NULL, NULL);
+  if (edit) {
+    cmd->edit = *edit;
+    const char **fields[] = {&cmd->edit.id, &cmd->edit.ip4_method, &cmd->edit.ip4_addresses,
+                             &cmd->edit.ip4_gateway, &cmd->edit.ip4_dns};
+    for (size_t i = 0; i < G_N_ELEMENTS(fields); i++) {
+      cmd->edit_strings[i] = g_strdup(*fields[i]);
+      *fields[i] = cmd->edit_strings[i];
+    }
+  } else {
+    cmd->edit.autoconnect = cmd->edit.ip4_ignore_auto_dns = cmd->edit.ip4_never_default = -1;
+  }
+  run(n, do_update, cmd);
+}
+
+void lava_net_import(LavaNet *n, const char *file) {
+  run(n, do_import, command(n, file, NULL, NULL));
 }
 
 void lava_net_secret_reply(LavaNet *n, uint64_t id, const char *const *keys,
