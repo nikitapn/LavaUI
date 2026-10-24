@@ -28,7 +28,7 @@ layout(location = 6) in vec2 vUv;
 layout(location = 7) flat in uint vTextureIndex;
 layout(location = 8) flat in float vDither;
 layout(location = 9) flat in float vAdapt;
-layout(location = 10) flat in vec2 vGlass;
+layout(location = 10) flat in vec3 vGlass;
 layout(location = 11) flat in vec2 vUvPerPx;
 layout(binding = 0) uniform sampler2D textures[];
 layout(location = 0) out vec4 outColor;
@@ -87,14 +87,16 @@ float glassRim(float d, vec2 n, float bend) {
 }
 
 /// This quad's texture at `vUv`, bent inward at the rim by up to `vGlass.x`
-/// pixels — inward, so the read never leaves the rect the UVs describe.
+/// pixels — inward, so the read never leaves the rect the UVs describe —
+/// and moved by `jitterPx` more everywhere (the frost's surface, below).
 ///
 /// Red bends a little less than green and blue a little more, so edges in
 /// what is under the glass fringe where the rim bends them hardest. On the
-/// flat face the offset is zero and the two extra taps are skipped.
-vec4 glassSample(vec2 n, float bend) {
+/// flat face the rim's offset is zero and the two extra taps are skipped;
+/// the frost's jitter does not ask for them, since it fringes nothing.
+vec4 glassSample(vec2 n, float bend, vec2 jitterPx) {
   vec2 offset = n * (vGlass.x * bend) * vUvPerPx;
-  vec2 uv = vUv - offset;
+  vec2 uv = vUv - offset + jitterPx * vUvPerPx;
   vec4 s = texture(textures[nonuniformEXT(vTextureIndex)], uv);
   if (offset != vec2(0.0)) {
     vec2 disperse = offset * kDispersion;
@@ -102,6 +104,72 @@ vec4 glassSample(vec2 n, float bend) {
     s.b = texture(textures[nonuniformEXT(vTextureIndex)], uv - disperse).b;
   }
   return s;
+}
+
+// ─── Frost ───────────────────────────────────────────────────────────────────
+//
+// The surface of frosted glass, on a composite that asks for it
+// (`vGlass.z`, `.glassEffect(frost:)`). A blur is what frosted glass does to
+// light passing through it; what the eye reads *as* frost is the surface — a
+// fine uneven grain that catches the light and shifts what is behind it a
+// little. Procedural, so it has no tile to repeat and no asset to find, and
+// anchored to the plate (`vLocal`) so it travels with the window instead of
+// swimming under it.
+//
+// Strength 1 is the values below, chosen by eye from four variants over a
+// striped backdrop: a 5 px grain with more light read as hammered glass and
+// at double strength as stucco, while this reads as an acid-etched pane.
+// Each is still a define, so a variant can be compiled with `glslc -D` and
+// compared without editing this file.
+
+#ifndef FROST_CELL_PX
+#define FROST_CELL_PX 2.5     // size of the coarse grain, in pixels
+#endif
+#ifndef FROST_SHIFT_PX
+#define FROST_SHIFT_PX 1.5    // how far the grain moves what is behind it
+#endif
+#ifndef FROST_LIGHT
+#define FROST_LIGHT 0.06      // light caught by the grain's slopes, ±
+#endif
+#ifndef FROST_GRAIN
+#define FROST_GRAIN 0.02      // plain brightness grain, ±
+#endif
+
+/// Hash without sine (Dave Hoskins): the same on every driver, unlike
+/// `fract(sin(…))`, whose precision is the compiler's choice.
+float frostHash(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+/// Value noise and its gradient, analytically (Quilez): x is -1…1, yz the
+/// slope per unit of `p`. A quintic fade, so the slope is continuous too and
+/// the light it catches has no creases along the cell edges.
+vec3 frostNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  vec2 du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
+  float a = frostHash(i);
+  float b = frostHash(i + vec2(1.0, 0.0));
+  float c = frostHash(i + vec2(0.0, 1.0));
+  float e = frostHash(i + vec2(1.0, 1.0));
+  float k1 = b - a, k2 = c - a, k4 = a - b - c + e;
+  float v = a + k1 * u.x + k2 * u.y + k4 * u.x * u.y;
+  vec2 g = du * vec2(k1 + k4 * u.y, k2 + k4 * u.x);
+  return vec3(v * 2.0 - 1.0, g * 2.0);
+}
+
+/// The frost at this pixel: x the grain, -1…1; yz the surface's tilt, about
+/// -1…1 per axis. Two octaves, the finer at half weight, so it reads as a
+/// grain rather than as blobs.
+vec3 frostSurface() {
+  vec2 p = vLocal / FROST_CELL_PX;
+  vec3 n1 = frostNoise(p);
+  vec3 n2 = frostNoise(p * 2.03 + 17.0);
+  vec3 n = n1 + 0.5 * vec3(n2.x, n2.yz * 2.03);
+  return vec3(n.x / 1.5, n.yz / 6.0);
 }
 
 /// White at `rim` laid over a premultiplied colour. Over, not added: added
@@ -178,11 +246,19 @@ void main() {
     // unchanged.
     vec4 sampled;
     vec3 rimAdd = vec3(0.0);
-    if (vGlass != vec2(0.0)) {
+    float frost = 0.0;
+    if (vGlass != vec3(0.0)) {
       vec2 n;
       float bend = glassBend(d, n);
-      sampled = glassSample(n, bend);
+      // The noise only where it is asked for: two octaves per pixel of a
+      // plate the size of a terminal is not nothing.
+      vec3 surface = vGlass.z > 0.0 ? frostSurface() * vGlass.z : vec3(0.0);
+      sampled = glassSample(n, bend, surface.yz * FROST_SHIFT_PX);
       rimAdd = vec3(glassRim(d, n, bend));
+      // Signed: the slopes facing the light brighten and the ones facing
+      // away darken, so the plate's average brightness does not move.
+      frost = dot(surface.yz, normalize(vec2(-0.6, -0.8))) * FROST_LIGHT
+            + surface.x * FROST_GRAIN;
     } else {
       sampled = texture(textures[nonuniformEXT(vTextureIndex)], vUv);
     }
@@ -220,12 +296,12 @@ void main() {
     // The rim lightens the edge, which is exactly what cannot show on a
     // bright backdrop — so as the backdrop brightens it turns into a shade.
     vec3 rim = mix(rimAdd, -rimAdd * 0.6, hi);
-    outColor = vec4(clamp(rgb + rim, 0.0, 1.0) * a, a);
+    outColor = vec4(clamp(rgb + rim + frost, 0.0, 1.0) * a, a);
     return;
   }
 
   if (vKind == 2u) { // Image
-    if (vGlass != vec2(0.0)) {
+    if (vGlass != vec3(0.0)) {
       // Glass on a picture bends the picture itself, and cuts it to the
       // outline the rim is measured from. Hard-edged when square, as the
       // plain path is.
@@ -236,7 +312,7 @@ void main() {
       if (coverage <= 0.001) discard;
       vec2 n;
       float bend = glassBend(d, n);
-      vec4 c = glassSample(n, bend) * vColor;
+      vec4 c = glassSample(n, bend, vec2(0.0)) * vColor;
       float a = c.a * coverage;
       outColor = overRim(vec4(c.rgb * a, a), glassRim(d, n, bend) * coverage);
       if (outColor.a <= 0.001) discard;

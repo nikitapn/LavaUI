@@ -241,6 +241,8 @@ struct CompositorHost {
     /// `setBackdropRefraction`, which is what every rect of the older call
     /// gets. See `SetBackdropGlassRegions`.
     float refraction = -1.f;
+    /// The grain of frosted glass on this plate, 0…1.
+    float frost = 0.f;
   };
 
   /// Frost the desktop behind this surface, one plate per rect. `radius` 0 or

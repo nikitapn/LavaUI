@@ -160,7 +160,9 @@ public struct DemoExample: View {
         }
         .background(Color(r: 1, g: 1, b: 1).opacity(0.06))
         .cornerRadius(18)
-        .glassEffect(refraction: 20)
+        // Frosted where it is blurred: the grain is what makes a blurred
+        // pane read as etched glass, and on a sharp one it only roughens.
+        .glassEffect(refraction: 20, frost: blur ? 1 : 0)
         if blur {
             card.backdropBlur(radius: 10)
         } else {
@@ -550,7 +552,7 @@ public struct DemoExample: View {
             // fringe at the rim have something to show.
             HStack(height: .pt(120), padding: 16, spacing: 16) {
                 glassCard("sharp backdrop", blur: false)
-                glassCard("+ .backdropBlur(radius: 10)", blur: true)
+                glassCard("+ .backdropBlur(radius: 10), frost: 1", blur: true)
             }
             .underlay {
                 HStack(spacing: 0) {

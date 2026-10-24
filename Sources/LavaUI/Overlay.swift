@@ -344,11 +344,14 @@ public enum BackdropBridge {
         /// `.glassEffect(refraction:)`, or 0 for plain frost. Negative takes
         /// the surface's own (`LavaClient.setBackdropRefraction`).
         public var refraction: Float
+        /// The grain of frosted glass on this plate, 0…1 — a view's
+        /// `.glassEffect(frost:)`.
+        public var frost: Float
 
         /// Creates a rectangle to frost.
         public init(
             x: Float, y: Float, w: Float, h: Float, cornerRadius: Float,
-            refraction: Float = -1
+            refraction: Float = -1, frost: Float = 0
         ) {
             self.x = x
             self.y = y
@@ -356,6 +359,7 @@ public enum BackdropBridge {
             self.h = h
             self.cornerRadius = cornerRadius
             self.refraction = refraction
+            self.frost = frost
         }
     }
 

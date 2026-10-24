@@ -278,7 +278,8 @@ class CanvasSurface {
   /// `cornerRadius` cuts the frost to the window's outline; 0 is square.
   bool frostFromRgba(const uint8_t *rgba, uint32_t srcW, uint32_t srcH,
                      float radius, const std::string &key,
-                     float cornerRadius = 0.f, float refractPx = 0.f);
+                     float cornerRadius = 0.f, float refractPx = 0.f,
+                     float frost = 0.f);
 
   /// Same frost, but the pixels stay on the GPU: `src` is the wlroots
   /// capture's dma-buf, cropped to `srcX,srcY,srcW,srcH`. False if the
@@ -286,7 +287,7 @@ class CanvasSurface {
   bool frostFromDmabuf(const wlr_dmabuf_attributes &src, int srcX, int srcY,
                        int srcW, int srcH, float radius,
                        const std::string &key, float cornerRadius = 0.f,
-                       float refractPx = 0.f);
+                       float refractPx = 0.f, float frost = 0.f);
 
   /// Renders whatever another process publishes into the arena named `id`.
   ///
@@ -423,8 +424,9 @@ class CanvasSurface {
   /// Content-blur pass over an already-uploaded texture. Shared by the
   /// CPU and dma-buf frost paths.
   /// `refractPx` bends the rim like glass; 0 is flat. See `SetBackdropRefraction`.
+  /// `frost` (0…1) adds the grain of frosted glass. See `GlassFrostRect`.
   bool frostWithTexture(int id, float radius, float cornerRadius,
-                        float refractPx);
+                        float refractPx, float frost);
 
   /// Writes the resolve target to `$LAVA_CANVAS_DUMP` if it is set.
   void dumpIfRequested();

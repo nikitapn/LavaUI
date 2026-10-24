@@ -55,6 +55,7 @@ enum class DrawCommandKind : uint32_t {
   BeginContentBlur = 10,
   /// `aux` = glass refraction at the composite's rim, in pixels; 0 is flat.
   /// `param` = adaptive strength, 0…255, as on `BeginBackdropBlur`.
+  /// `w` = frost, 0…1: the grain of frosted glass on the composite.
   /// Only the compositor's frost plates set either — LavaUI always sends 0,
   /// so a `.blur()` never bends and is never greyed.
   EndContentBlur = 11,
@@ -257,6 +258,7 @@ enum class DrawCommandKind : uint32_t {
   ///   param = strength of the specular rim, in 1/255ths (0: no rim)
   ///   w     = corner radius of the glass, read only by an `Image`, which
   ///           carries none of its own
+  ///   h     = frost, 0…1: the grain of frosted glass, read by a backdrop
   ///
   /// Consumed by the first `Rect`, `RoundedRect`, `LinearGradientRect`,
   /// `Image`, `ImageSurface` or `BeginBackdropBlur` after it, whichever that

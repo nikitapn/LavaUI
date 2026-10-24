@@ -70,7 +70,8 @@ public enum DrawKind: UInt32 {
     /// See `StrokedRect` in `draw_command.hpp`.
     case strokedRect = 24
     /// Glass on the next fill, image or backdrop: `aux` = refraction in px,
-    /// `param` = rim strength in 1/255ths, `w` = an image's corner radius.
+    /// `param` = rim strength in 1/255ths, `w` = an image's corner radius,
+    /// `h` = frost, 0…1.
     /// See `Glass` in `draw_command.hpp`.
     case glass = 25
 
@@ -217,7 +218,7 @@ public final class DrawList {
     /// land on some unrelated view further down the list. `append` writes it
     /// only immediately before a command that consumes it, and `withGlass`
     /// drops it whatever happened. See `Glass` in `draw_command.hpp`.
-    private var heldGlass: (refraction: Float, rim: Float, corner: Float)?
+    private var heldGlass: (refraction: Float, rim: Float, corner: Float, frost: Float)?
 
     /// Axis-aligned cull region in window pixels. Starts as the framebuffer;
     /// each `ScrollView` intersects it with its scissor so off-screen scroll
@@ -552,6 +553,7 @@ public final class DrawList {
             var prefix = canvas.DrawCommand()
             prefix.kind = DrawKind.glass.rawValue
             prefix.w = glass.corner
+            prefix.h = glass.frost
             prefix.color = Color(r: 1, g: 1, b: 1).rgba8
             prefix.param = UInt32((min(max(glass.rim, 0), 1) * 255).rounded())
             prefix.aux = glass.refraction
@@ -1060,10 +1062,14 @@ public final class DrawList {
         _ glass: GlassEffect?, rim: Float? = nil, cornerRadius: Float = 0,
         body: () -> Void
     ) {
-        guard let glass, glass.refraction > 0 || (rim ?? glass.rim) > 0 else {
+        guard let glass,
+              glass.refraction > 0 || (rim ?? glass.rim) > 0 || glass.frost > 0
+        else {
             return body()
         }
-        heldGlass = (glass.refraction, rim ?? glass.rim, max(0, cornerRadius))
+        heldGlass = (
+            glass.refraction, rim ?? glass.rim, max(0, cornerRadius), glass.frost
+        )
         body()
         heldGlass = nil
     }
@@ -1138,31 +1144,39 @@ public final class DrawList {
         adaptation: Float? = nil,
         glass: GlassEffect? = nil,
         fillsOver: Bool = false,
+        plateRefraction: Float = 0,
         body: () -> Void
     ) {
         guard w > 0, h > 0, !insideBlurScope else { return body() }
 
-        // In a window whose backdrop is the desktop, the frost is the
-        // compositor's: this view's rectangle, cut to its own corner, among
+        // In a window whose backdrop is the desktop, the compositor frosts the
+        // desktop under this view's rectangle, cut to its own corner, among
         // however many others the frame asks for — so two glass buttons are two
-        // plates with desktop between them, as a menu and its fly-out are. Not
-        // a scope: nothing in this window is captured, so nothing nests.
+        // plates with desktop between them, as a menu and its fly-out are. Its
+        // own bend, or none: a frosted view beside a glass one stays flat,
+        // whatever the surface was opened with (an overlay with no glass keeps
+        // the surface's, `plateRefraction`).
         //
-        // Glass that bends with no blur cannot be had here: a plate is a blur,
-        // and a radius of 0 clears it. Such a view keeps only its rim.
+        // As well as the scope below, not instead of it. Behind the view may be
+        // something this window painted — the launcher's search pill floats on
+        // the launcher's own panel — and that covers the plate; there the
+        // in-window blur of it is what shows. Where the window painted nothing
+        // the capture is clear and the plate shows through it. Skipping the
+        // scope took the pill's blur away entirely.
+        //
+        // Glass that bends with no blur cannot frost the desktop: a plate is a
+        // blur, and a radius of 0 clears it.
         if backdropIsDesktop, contentRadius == nil || contentRadius! <= 0,
            let radius = backdropRadius, radius > 0
         {
-            // Its own bend, or none: a frosted view beside a glass one stays
-            // flat, whatever the surface was opened with.
             desktopFrost.append(
                 BackdropBridge.FrostRect(
                     x: x, y: y, w: w, h: h, cornerRadius: cornerRadius,
-                    refraction: glass?.refraction ?? 0
+                    refraction: glass?.refraction ?? plateRefraction,
+                    frost: glass?.frost ?? 0
                 )
             )
             desktopFrostRadius = max(desktopFrostRadius, radius)
-            return body()
         }
 
         if let radius = contentRadius, radius > 0 {
@@ -1244,8 +1258,6 @@ public final class DrawList {
         // Collected across the whole pass and sent once at the end. Sending
         // per overlay meant the last one won: a submenu's rect replaced the
         // menu's, and the frost jumped out from under the menu it flew out of.
-        var frostRects = desktopFrost
-        var frostRadius = desktopFrostRadius
         // By index, because emitting one overlay can append another: a menu's
         // submenu is presented from inside the menu's own subtree, and its
         // anchor is only known once the row it hangs off has been laid out
@@ -1291,39 +1303,20 @@ public final class DrawList {
                 ? (cornerRadius(of: glassChild) ?? att.cornerRadius)
                 : att.cornerRadius
 
-            // A compositor client can frost the *desktop* under this rect.
-            // Skip the in-window blur when that path is live: on a panel the
-            // framebuffer behind the popup is empty, and smearing it is the
-            // thing the bridge exists to avoid.
             // Glass hoists with the blur, from the same node, for the same
             // reason: the scope it would open is the one already open here.
-            // Over the compositor's frost it is that plate's own bend instead;
-            // an overlay without glass keeps the surface's, as it always had.
+            // `withBlurScope` also puts the desktop's plate under it when the
+            // window shows the desktop — the panel's own popups — keeping the
+            // surface's bend for an overlay that asks for no glass of its own.
             let glassNode: YogaBoxNode? = overlayRoot.glass != nil
                 ? overlayRoot : (glassChild?.glass != nil ? glassChild : nil)
-            let compositorGlass = glassRadius != nil && backdropIsDesktop
-            if compositorGlass, let radius = glassRadius {
-                frostRects.append(
-                    BackdropBridge.FrostRect(
-                        x: att.origin.x, y: att.origin.y,
-                        w: att.size.w, h: att.size.h,
-                        cornerRadius: glassCorner,
-                        refraction: glassNode?.glass?.refraction ?? -1
-                    )
-                )
-                // One radius covers the surface, so the strongest wins. Two
-                // popups asking for different blurs is not a shape any of
-                // this draws, and the alternative is a plate that disagrees
-                // with the panel it belongs to.
-                frostRadius = max(frostRadius, radius)
-            }
-
             withBlurScope(
-                content: nil, backdrop: compositorGlass ? nil : glassRadius,
+                content: nil, backdrop: glassRadius,
                 x: att.origin.x, y: att.origin.y, w: att.size.w, h: att.size.h,
                 cornerRadius: glassCorner, adaptation: glassAdaptation,
-                glass: compositorGlass ? nil : glassNode?.glass,
-                fillsOver: paintsFill(glassNode)
+                glass: glassNode?.glass,
+                fillsOver: paintsFill(glassNode),
+                plateRefraction: -1
             ) {
                 // Outline first, one pixel proud on every side, so the panel's
                 // own fill covers the middle of it — which is exactly why a
@@ -1344,20 +1337,19 @@ public final class DrawList {
                 // scrolled-away region that tightened the main-walk cull.
                 let savedCull = cullStack
                 cullStack = [CullRect(x0: 0, y0: 0, x1: viewportW, y1: viewportH)]
-                // The compositor's plate *is* this overlay's scope, so the
-                // node that asked for it must not ask again — it would add a
-                // second rectangle, at its own size rather than the panel's.
-                let savedScope = insideBlurScope
-                if compositorGlass { insideBlurScope = true }
                 emitNode(
                     overlayRoot,
                     ox: att.origin.x, oy: att.origin.y
                 )
-                insideBlurScope = savedScope
                 cullStack = savedCull
             }
         }
-        BackdropBridge.frostOverlays?(frostRadius, frostRects)
+        // Collected across the whole pass, overlays included, and sent once:
+        // sending per overlay meant the last one won — a submenu's rect
+        // replaced the menu's, and the frost jumped out from under the menu
+        // it flew out of. One radius covers the surface, so the strongest
+        // wins.
+        BackdropBridge.frostOverlays?(desktopFrostRadius, desktopFrost)
         pendingOverlays.removeAll(keepingCapacity: true)
         cullStack.removeAll(keepingCapacity: true)
         WidgetProfiler.endFrame()

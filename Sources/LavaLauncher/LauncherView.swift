@@ -110,7 +110,7 @@ struct LauncherView: View {
                     backdropBlurRadius: 12
                 )
             ) {
-                SearchField()
+                SearchField().glassEffect(frost: 1)
             }
         }
     }

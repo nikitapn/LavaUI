@@ -26,11 +26,14 @@ public struct GlassEffect: Equatable {
     public var refraction: Float
     /// Strength of the light the rim catches, 0…1.
     public var rim: Float
+    /// The grain of frosted glass on what is behind the view, 0…1.
+    public var frost: Float
 
-    /// Creates a glass description. Negative values are treated as zero.
-    public init(refraction: Float = 20, rim: Float = 1) {
+    /// Creates a glass description. Values outside their ranges are clamped.
+    public init(refraction: Float = 20, rim: Float = 1, frost: Float = 0) {
         self.refraction = max(0, refraction)
         self.rim = min(max(rim, 0), 1)
+        self.frost = min(max(frost, 0), 1)
     }
 }
 
@@ -669,11 +672,20 @@ extension View {
     ///
     /// `refraction` is how far, in pixels, the very edge bends what is under
     /// it (the bend fades to nothing 20 px in); `rim` is the strength of the
-    /// light, 0…1. In a client of the compositor it is still this window's own
-    /// content that bends — glass over the *desktop* is the compositor's frost
-    /// and its `SetBackdropRefraction`.
-    public func glassEffect(refraction: Float = 20, rim: Float = 1) -> ModifiedView<Self> {
-        styled { $0.glass = GlassEffect(refraction: refraction, rim: rim) }
+    /// light, 0…1. `frost`, 0…1, gives what is behind the surface of frosted
+    /// glass: a fine grain that catches the light and shifts what is under it
+    /// by a pixel or two — on top of a blur it is what makes the pane read as
+    /// etched glass rather than as a blur. It has no effect on an image.
+    ///
+    /// In a window whose backdrop is the desktop (`WindowBackdrop
+    /// .showsDesktop`), with `.backdropBlur` as well, the bend and the frost
+    /// apply to the compositor's plate of the desktop under the view too.
+    public func glassEffect(
+        refraction: Float = 20, rim: Float = 1, frost: Float = 0
+    ) -> ModifiedView<Self> {
+        styled {
+            $0.glass = GlassEffect(refraction: refraction, rim: rim, frost: frost)
+        }
     }
 
     /// Scissor this view's paint (and its children's) to its layout rect.
@@ -845,8 +857,12 @@ extension ModifiedView {
         }
     }
 
-    /// See `View.glassEffect(refraction:rim:)`.
-    public func glassEffect(refraction: Float = 20, rim: Float = 1) -> ModifiedView<Content> {
-        adding { $0.glass = GlassEffect(refraction: refraction, rim: rim) }
+    /// See `View.glassEffect(refraction:rim:frost:)`.
+    public func glassEffect(
+        refraction: Float = 20, rim: Float = 1, frost: Float = 0
+    ) -> ModifiedView<Content> {
+        adding {
+            $0.glass = GlassEffect(refraction: refraction, rim: rim, frost: frost)
+        }
     }
 }

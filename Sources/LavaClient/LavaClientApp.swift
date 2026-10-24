@@ -1036,7 +1036,7 @@ public enum LavaClient {
             rects: rects.map {
                 LavaIDL.GlassFrostRect(
                     x: $0.x, y: $0.y, w: $0.w, h: $0.h,
-                    cornerRadius: $0.cornerRadius, refraction: -1
+                    cornerRadius: $0.cornerRadius, refraction: -1, frost: 0
                 )
             }
         )
@@ -1149,7 +1149,7 @@ public enum LavaClient {
                 && zip(a.rects, b.rects).allSatisfy {
                     $0.x == $1.x && $0.y == $1.y && $0.w == $1.w
                         && $0.h == $1.h && $0.cornerRadius == $1.cornerRadius
-                        && $0.refraction == $1.refraction
+                        && $0.refraction == $1.refraction && $0.frost == $1.frost
                 }
         }
     }
@@ -1518,7 +1518,8 @@ public enum LavaClient {
                 rects: rects.map {
                     LavaIDL.GlassFrostRect(
                         x: $0.x, y: $0.y, w: $0.w, h: $0.h,
-                        cornerRadius: $0.cornerRadius, refraction: $0.refraction
+                        cornerRadius: $0.cornerRadius, refraction: $0.refraction,
+                        frost: $0.frost
                     )
                 }
             )

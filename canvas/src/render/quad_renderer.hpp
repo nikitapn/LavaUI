@@ -63,7 +63,9 @@ struct QuadGlass {
   float rim = 0.f;
   /// The outline an image is cut to. Fills and composites have their own.
   float cornerRadius = 0.f;
-  bool active() const { return refractPx > 0.f || rim > 0.f; }
+  /// The grain of frosted glass on a composite, 0…1. See `quad_instance.frag`.
+  float frost = 0.f;
+  bool active() const { return refractPx > 0.f || rim > 0.f || frost > 0.f; }
 };
 
 class QuadRenderer {
@@ -178,11 +180,12 @@ class QuadRenderer {
     float gradBias = 0.f;
 
     /// Glass on this quad: `x` bends what it samples at the rim by that many
-    /// pixels, `y` is the strength of the specular rim. Zero is no glass, and
-    /// every quad that predates it is zero. See `Glass`.
-    vec2 glass{0.f, 0.f};
+    /// pixels, `y` is the strength of the specular rim, `z` the frost on a
+    /// composite. Zero is no glass, and every quad that predates it is zero.
+    /// See `QuadGlass`.
+    float glass[3] = {0.f, 0.f, 0.f};
   };
-  static_assert(sizeof(Instance) == 84, "QuadInstance ABI changed");
+  static_assert(sizeof(Instance) == 88, "QuadInstance ABI changed");
 
   using Glass = QuadGlass;
   /// Set around the one push it belongs to and cleared after, the way the

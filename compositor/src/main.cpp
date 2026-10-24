@@ -2068,6 +2068,8 @@ struct ClientSurface {
     /// This plate's own bend; negative takes the surface's
     /// `backdropRefractPx`. See `refractionOf`.
     float refraction = -1.f;
+    /// The grain of frosted glass on this plate, 0…1.
+    float frost = 0.f;
     std::unique_ptr<lava::CanvasSurface> canvas;
     wlr_scene_buffer *node = nullptr;
     std::string key;
@@ -5220,7 +5222,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       if (srcX >= 0 && srcY >= 0 && wlr_buffer_get_dmabuf(captured, &attribs)) {
         frosted = plate.canvas->frostFromDmabuf(
             attribs, srcX, srcY, srcW, srcH, surface.backdropBlurRadius,
-            plate.key, frost, refractionOf(surface, plate));
+            plate.key, frost, refractionOf(surface, plate), plate.frost);
       }
       if (!frosted) {
         // The CPU path uploads through the ordinary texture cache, which would
@@ -5236,7 +5238,7 @@ class SurfaceRegistry : public lava::CompositorHost {
                               raw.data(), static_cast<uint32_t>(srcW),
                               static_cast<uint32_t>(srcH),
                               surface.backdropBlurRadius, plate.key, frost,
-                              refractionOf(surface, plate));
+                              refractionOf(surface, plate), plate.frost);
       }
       if (!frosted) continue;
       plate.ready = true;
@@ -6402,7 +6404,8 @@ class SurfaceRegistry : public lava::CompositorHost {
              had.w == std::max(0.f, rects[i].w) &&
              had.h == std::max(0.f, rects[i].h) &&
              had.corner == std::max(0.f, rects[i].cornerRadius) &&
-             had.refraction == rects[i].refraction;
+             had.refraction == rects[i].refraction &&
+             had.frost == rects[i].frost;
     }
     if (same) return;
 
@@ -6426,6 +6429,7 @@ class SurfaceRegistry : public lava::CompositorHost {
         plate.h = std::max(0.f, rects[i].h);
         plate.corner = std::max(0.f, rects[i].cornerRadius);
         plate.refraction = rects[i].refraction;
+        plate.frost = std::clamp(rects[i].frost, 0.f, 1.f);
       }
     }
     wlr_log(WLR_INFO, "surface %u: backdrop blur %.0f over %zu rect(s)", id,

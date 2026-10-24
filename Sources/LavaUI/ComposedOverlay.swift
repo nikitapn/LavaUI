@@ -221,6 +221,23 @@ final class ComposedOverlayNode: YogaBoxNode {
         }
         overlayBox.fillColor = style?.background
         overlayBox.cornerRadius = style?.cornerRadius ?? 0
+
+        // Glass the content asked for — `SearchField().glassEffect()` — belongs
+        // to the scope this plate owns. Blur scopes do not nest, so on the
+        // content it would sit inside the one already open here and be dropped,
+        // and the content usually paints no fill for a rim to go on either.
+        // The bend and the frost go on the plate's scope; the rim on the
+        // overlay's fill, which is drawn over that scope — on the plate it
+        // would be under the fill. With no fill, the plate keeps the rim too.
+        let contentGlass = (overlayBox.contentNode as? YogaBoxNode)?.glass
+        let fillTakesRim = style?.background != nil
+        plateBox.glass = contentGlass.map {
+            GlassEffect(
+                refraction: $0.refraction, rim: fillTakesRim ? 0 : $0.rim,
+                frost: $0.frost
+            )
+        }
+        overlayBox.glass = fillTakesRim ? contentGlass : nil
         overlayBox.padding = .all(style?.padding ?? 0)
         overlayBox.minWidth = style?.minWidth ?? 0
         overlayBox.applyStyle()

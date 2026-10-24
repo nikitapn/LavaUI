@@ -2038,7 +2038,8 @@ class CompositorImpl final : public ICompositor_Servant {
     plates.reserve(rects.size());
     for (auto rect : rects) {
       plates.push_back({rect.x(), rect.y(), rect.w(), rect.h(),
-                        rect.cornerRadius(), rect.refraction()});
+                        rect.cornerRadius(), rect.refraction(),
+                        rect.frost()});
     }
     if (!host_.setBackdropBlur(surfaceId, radius, std::move(plates))) {
       throw SurfaceNotFound(surfaceId);
