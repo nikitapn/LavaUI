@@ -240,6 +240,9 @@ public final class DrawList {
     /// guessing at the arithmetic for a case with no caller would be a second
     /// thing to keep true.
     private var retainedShift: (x: Float, y: Float) = (0, 0)
+    /// The tooltip anchor's rect, if this frame's walk passed it. See
+    /// `Tooltips`.
+    private var pendingTooltip: (text: String, x: Float, y: Float, w: Float, h: Float)?
 
     /// Where this frame lives and who gets it. The engine's own buffers
     /// unless the editor was told otherwise — see `Editor.frames`.
@@ -1237,6 +1240,7 @@ public final class DrawList {
         viewportH: Float
     ) {
         pendingOverlays.removeAll(keepingCapacity: true)
+        pendingTooltip = nil
         desktopFrost.removeAll(keepingCapacity: true)
         desktopFrostRadius = 0
         backdropIsDesktop = BackdropBridge.frostOverlays != nil
@@ -1351,6 +1355,15 @@ public final class DrawList {
         // wins.
         BackdropBridge.frostOverlays?(desktopFrostRadius, desktopFrost)
         pendingOverlays.removeAll(keepingCapacity: true)
+        // Last of all, over the overlays too: a tooltip on a menu row is
+        // about the row.
+        if let tip = pendingTooltip, Tooltips.isVisible(at: FrameScheduler.now()) {
+            emitTooltip(
+                tip.text, anchorX: tip.x, anchorY: tip.y, anchorW: tip.w, anchorH: tip.h,
+                viewportW: viewportW, viewportH: viewportH
+            )
+        }
+        pendingTooltip = nil
         cullStack.removeAll(keepingCapacity: true)
         WidgetProfiler.endFrame()
     }
@@ -1469,6 +1482,9 @@ public final class DrawList {
             // point would put the popup underneath every later sibling.
             // Always register, even if the anchor is culled — the popup may
             // still sit on-screen after placement.
+            if node.id == Tooltips.anchor, let label = box.tooltip {
+                pendingTooltip = (label, x - retainedShift.x, y - retainedShift.y, w, h)
+            }
             if let presenter = node as? OverlayBoxNode, presenter.attachment.presented {
                 // Anchored where the presenter will be *seen*, not where it is
                 // emitted — see `retainedShift`.

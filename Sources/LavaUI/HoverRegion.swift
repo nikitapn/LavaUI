@@ -71,6 +71,9 @@ enum HoverRegions {
     /// `hovered` is the renderer's innermost node, nil for none; `root` the
     /// tree it is in.
     static func update(hovered: NodeID?, in root: (any AnyViewNode)?) {
+        // Every hover change comes through here, which is all a tooltip
+        // needs to hear about too.
+        Tooltips.update(hovered: hovered, in: root)
         var now: [(id: NodeID, action: (Bool) -> Void)] = []
         if let hovered, let root { collect(hovered, in: root, into: &now) }
 

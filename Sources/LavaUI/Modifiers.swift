@@ -105,6 +105,8 @@ public struct ViewStyle: Equatable {
     public var frameAlignment: Alignment?
     /// See `View.onHover(_:)`.
     public var hoverRegion: HoverRegionAction?
+    /// See `View.tooltip(_:)`.
+    public var tooltip: String?
 
     /// Creates a style that sets nothing.
     public init() {}
@@ -141,6 +143,7 @@ public struct ViewStyle: Equatable {
         out.hoverSnap = hoverSnap ?? base.hoverSnap
         out.border = border ?? base.border
         out.hoverRegion = hoverRegion ?? base.hoverRegion
+        out.tooltip = tooltip ?? base.tooltip
         return out
     }
 }
@@ -250,7 +253,8 @@ public struct ModifiedView<Content: View>: PrimitiveView {
         // A hover region needs a node the renderer hit-tests, which is the
         // same three kinds that can paint — so it is decided the same way.
         if style.fill == nil, style.fillGradient == nil, style.hoverFill == nil,
-           style.cornerRadius == nil, style.border == nil, style.hoverRegion == nil {
+           style.cornerRadius == nil, style.border == nil, style.hoverRegion == nil,
+           style.tooltip == nil {
             return true
         }
         return node is LeafNode || node is StackNode || node is StyleBoxNode
@@ -318,6 +322,8 @@ extension YogaBoxNode {
         // Never in the baseline: no primitive declares a region of its own, so
         // the modifier's absence means none.
         hoverRegion = style.hoverRegion?.action
+        // Never in the baseline either, for the same reason.
+        tooltip = style.tooltip
 
         if let leaf = self as? LeafNode {
             if let fill = style.fill { leaf.fillColor = fill }

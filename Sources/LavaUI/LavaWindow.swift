@@ -547,6 +547,7 @@ public final class LavaWindow {
     private func processInputEvent(_ ev: InputEvent) {
         switch ev.kind {
         case .mouseDown:
+            Tooltips.dismiss()
             // Looked up before the click handler, which may rebuild the view
             // under the pointer — a row selecting itself, say.
             pendingFileDrag = nil
@@ -656,6 +657,7 @@ public final class LavaWindow {
             PointerCapture.release()
             PointerRelease.fire()
         case .scroll:
+            Tooltips.dismiss()
             // Renderer-owned ScrollViews consume this before it reaches us, so
             // arriving here means a node under the pointer declared a wheel
             // handler and the renderer stood aside for it. Chain delivery is
@@ -727,6 +729,7 @@ public final class LavaWindow {
                 _ = FocusManager.handle(character: Character(scalar))
             }
         case .key:
+            Tooltips.dismiss()
             FocusManager.releaseIfGone { host.contains($0) }
             if onRawKey?(ev) == true { break }
             let isPress = ev.x > 0

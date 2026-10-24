@@ -487,6 +487,7 @@ private struct TabStrip: View {
             .cornerRadius(6)
             .cursor(.pointer)
             .flexShrink(0)
+            .tooltip("New Tab")
             .agentId("new-tab")
             Spacer()
                 .frame(height: .pt(PaneChrome.stripHeight), minWidth: 48)
@@ -523,6 +524,7 @@ private struct TabStrip: View {
             .hoverBackground(theme.hover)
             .cornerRadius(4)
             .cursor(.pointer)
+            .tooltip("Close Tab")
             .agentId("close-tab-\(tab.id)")
         }
         .padding(8)
@@ -638,13 +640,15 @@ private struct Toolbar: View {
             set: { session.setPathDraft($0, in: paneID) }
         )
         return HStack(padding: 8, alignment: .center, spacing: 8) {
-            iconButton("back", enabled: tab.history.canGoBack, id: "back") {
+            iconButton("back", tip: "Back", enabled: tab.history.canGoBack, id: "back") {
                 session.goBack()
             }
-            iconButton("forward", enabled: tab.history.canGoForward, id: "forward") {
+            iconButton(
+                "forward", tip: "Forward", enabled: tab.history.canGoForward, id: "forward"
+            ) {
                 session.goForward()
             }
-            iconButton("up", enabled: tab.history.canGoUp, id: "up") {
+            iconButton("up", tip: "Enclosing Folder", enabled: tab.history.canGoUp, id: "up") {
                 session.goUp()
             }
             TextField(
@@ -662,13 +666,14 @@ private struct Toolbar: View {
             // A press anywhere in a pane makes it the active one first, so
             // the session's current tab is this one by the time this runs.
             let canMake = !TrashPath.isTrash(tab.listing.path) && tab.listing.error == nil
-            iconButton("folder-plus", enabled: canMake, id: "new-folder") {
+            iconButton("folder-plus", tip: "New Folder", enabled: canMake, id: "new-folder") {
                 session.startNewFolder()
             }
             // Shows the view it switches to, as a button does — the one in
             // use needs no picture, it is on screen.
             iconButton(
                 tab.viewMode == .icons ? "view-list" : "view-grid",
+                tip: tab.viewMode == .icons ? "Show as List" : "Show as Icons",
                 enabled: true, id: "toggle-view"
             ) {
                 session.setViewMode(tab.viewMode == .icons ? .list : .icons)
@@ -676,6 +681,7 @@ private struct Toolbar: View {
             // A state rather than an action: lit while hidden files show.
             iconButton(
                 tab.showHidden ? "eye" : "eye-off",
+                tip: tab.showHidden ? "Hide Hidden Files" : "Show Hidden Files",
                 enabled: true, on: tab.showHidden, id: "toggle-hidden"
             ) {
                 session.toggleHidden()
@@ -686,7 +692,7 @@ private struct Toolbar: View {
     }
 
     private func iconButton(
-        _ glyph: String, enabled: Bool, on: Bool = false, id: String,
+        _ glyph: String, tip: String, enabled: Bool, on: Bool = false, id: String,
         action: @escaping () -> Void
     ) -> some View {
         let theme = Theme.current
@@ -707,6 +713,9 @@ private struct Toolbar: View {
         .cornerRadius(6)
         .cursor(enabled ? .pointer : .arrow)
         .flexShrink(0)
+        // Even while disabled: a greyed arrow is the one whose meaning a
+        // user most needs to read.
+        .tooltip(tip)
         .agentId(id)
     }
 }

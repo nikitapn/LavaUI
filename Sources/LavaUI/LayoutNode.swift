@@ -214,6 +214,8 @@ class YogaBoxNode: AnyViewNode {
     /// or anything inside it. Resolved by `HoverRegions`, not by the hover
     /// walk, which only ever names the innermost node.
     var hoverRegion: ((Bool) -> Void)?
+    /// `View.tooltip(_:)`. Resolved by `Tooltips`, from the same hover.
+    var tooltip: String?
     /// When true, the renderer drops this node's hover tint the frame the
     /// pointer leaves, instead of easing it out. See `View.hoverSnap(_:)`.
     var hoverSnap: Bool = false
@@ -1512,20 +1514,20 @@ extension LeafNode {
     var isRendererInteractive: Bool {
         if kind == .button, buttonStyle != nil, isEnabled { return true }
         return hoverFill != nil || hoverColor != nil || onHover != nil
-            || cursor != nil || hoverRegion != nil
+            || cursor != nil || hoverRegion != nil || tooltip != nil
     }
 }
 
 extension StackNode {
     var isRendererInteractive: Bool {
         hoverFill != nil || onHover != nil || onClick != nil || onPointer != nil
-            || cursor != nil || hoverRegion != nil
+            || cursor != nil || hoverRegion != nil || tooltip != nil
     }
 }
 
 extension StyleBoxNode {
     var isRendererInteractive: Bool {
-        hoverFill != nil || cursor != nil || hoverRegion != nil
+        hoverFill != nil || cursor != nil || hoverRegion != nil || tooltip != nil
     }
 }
 
