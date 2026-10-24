@@ -3655,6 +3655,9 @@ class SurfaceRegistry : public lava::CompositorHost {
   void placePopup(ClientSurface &surface, const ClientSurface &parent,
                   int32_t anchorX, int32_t anchorY, uint32_t anchorW,
                   uint32_t anchorH) {
+    // `LavaApp.SurfaceAnchor.leftOf` builds a pane beside a popup out of
+    // this rule — below the anchor by kGap, left-aligned unless that runs
+    // off the right. Change one, change the other.
     constexpr int kGap = 6;
     const int w = static_cast<int>(surface.width);
     const int h = static_cast<int>(surface.height);
@@ -3680,15 +3683,26 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// activate whatever was underneath.
   ///
   /// A press inside one popup still dismisses the others, and is not
-  /// swallowed: that popup is what the press was for.
+  /// swallowed: that popup is what the press was for — except the popups it
+  /// hangs off. A pane opened beside a popup (the network window's list of
+  /// networks) has that popup as its parent, and choosing in the pane is
+  /// not leaving the window it came from.
   bool dismissPopups(double lx, double ly) {
-    std::vector<uint32_t> close;
-    bool inside = false;
+    std::vector<uint32_t> keep;
     for (const auto &s : surfaces_) {
       if (!s->popup || !visible(*s)) continue;
       double sx = 0, sy = 0;
-      if (s->hit(lx, ly, sx, sy)) inside = true;
-      else close.push_back(s->id);
+      if (!s->hit(lx, ly, sx, sy)) continue;
+      for (const ClientSurface *walk = s.get(); walk != nullptr && walk->popup;
+           walk = find(walk->parentId)) {
+        keep.push_back(walk->id);
+      }
+    }
+    const bool inside = !keep.empty();
+    std::vector<uint32_t> close;
+    for (const auto &s : surfaces_) {
+      if (!s->popup || !visible(*s)) continue;
+      if (std::find(keep.begin(), keep.end(), s->id) == keep.end()) close.push_back(s->id);
     }
     if (close.empty()) return false;
     for (uint32_t id : close) destroySurface(id);

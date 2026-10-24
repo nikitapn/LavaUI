@@ -272,18 +272,40 @@ public enum LavaApp {
         public var w: Float
         /// Height, in pixels.
         public var h: Float
+        /// The window the rectangle is in, and the popup hangs off; nil for
+        /// the window the app started with. A popup of a popup — a pane
+        /// beside it — names the first one here, and the compositor keeps
+        /// the first open while the pane is pressed.
+        public var window: WindowID?
 
         /// Creates an anchor from a rectangle.
-        public init(x: Float, y: Float, w: Float, h: Float) {
+        public init(x: Float, y: Float, w: Float, h: Float, in window: WindowID? = nil) {
             self.x = x
             self.y = y
             self.w = w
             self.h = h
+            self.window = window
         }
 
         /// Creates an anchor from a view's laid-out frame.
-        public init(_ frame: LayoutFrame) {
-            self.init(x: frame.x, y: frame.y, w: frame.w, h: frame.h)
+        public init(_ frame: LayoutFrame, in window: WindowID? = nil) {
+            self.init(x: frame.x, y: frame.y, w: frame.w, h: frame.h, in: window)
+        }
+
+        /// A popup `width` wide placed against the left edge of `window` —
+        /// a pane beside a popup that is near the right of the screen —
+        /// its top `top` below the window's.
+        ///
+        /// Built on the compositor's placement rule (`Server::placePopup`):
+        /// a popup goes just below its anchor, `kGap` (6) down, at the
+        /// anchor's left edge unless that runs off the right of the work
+        /// area. A zero-height anchor `kGap` above where the pane should
+        /// start, and a pane's width plus a gap to the left of the window,
+        /// is a pane beside it.
+        public static func leftOf(
+            _ window: WindowID, width: Float, top: Float = 0, gap: Float = 8
+        ) -> SurfaceAnchor {
+            SurfaceAnchor(x: -(width + gap), y: top - 6, w: 0, h: 0, in: window)
         }
     }
 

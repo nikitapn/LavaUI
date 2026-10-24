@@ -1942,6 +1942,8 @@ public enum LavaClient {
         let surface: UInt32
         let w = UInt32(max(1, width.rounded()))
         let h = UInt32(max(1, height.rounded()))
+        // Read here, on the loop that writes the table, not in the call.
+        let parent = anchor?.window.map { Self.surface(forWindow: $0.rawValue) } ?? surfaceID
         do {
             surface = try blockingCall(timeout: 10) {
                 if submenu {
@@ -1952,12 +1954,13 @@ public enum LavaClient {
                     )
                 }
                 if let anchor {
-                    // Of the window this process started with. A popup does
-                    // not know where that window is; the anchor is in its
-                    // coordinates and the compositor adds the origin.
+                    // Of the window this process started with, or the one the
+                    // anchor names. A popup does not know where that window
+                    // is; the anchor is in its coordinates and the compositor
+                    // adds the origin.
                     return try await compositor.createPopupSurface(
                         arenaId: arenaName, width: w, height: h, title: title,
-                        parentId: surfaceID,
+                        parentId: parent,
                         anchorX: Int32(anchor.x.rounded()),
                         anchorY: Int32(anchor.y.rounded()),
                         anchorW: UInt32(max(0, anchor.w.rounded())),
