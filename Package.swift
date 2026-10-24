@@ -426,6 +426,9 @@ var targets: [Target] = [
     .executableTarget(
         name: "LavaExplorerApp",
         dependencies: ["LavaUI", "LavaHost", "LavaExplorerCore", "LavaShell"],
+        resources: [
+            .process("Resources"),
+        ],
         swiftSettings: interopCxx
     ),
     .executableTarget(

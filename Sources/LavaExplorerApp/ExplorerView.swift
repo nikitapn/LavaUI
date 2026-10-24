@@ -638,13 +638,13 @@ private struct Toolbar: View {
             set: { session.setPathDraft($0, in: paneID) }
         )
         return HStack(padding: 8, alignment: .center, spacing: 8) {
-            navButton("◀", enabled: tab.history.canGoBack, id: "back") {
+            iconButton("back", enabled: tab.history.canGoBack, id: "back") {
                 session.goBack()
             }
-            navButton("▶", enabled: tab.history.canGoForward, id: "forward") {
+            iconButton("forward", enabled: tab.history.canGoForward, id: "forward") {
                 session.goForward()
             }
-            navButton("▲", enabled: tab.history.canGoUp, id: "up") {
+            iconButton("up", enabled: tab.history.canGoUp, id: "up") {
                 session.goUp()
             }
             TextField(
@@ -662,63 +662,49 @@ private struct Toolbar: View {
             // A press anywhere in a pane makes it the active one first, so
             // the session's current tab is this one by the time this runs.
             let canMake = !TrashPath.isTrash(tab.listing.path) && tab.listing.error == nil
-            Text(
-                "New Folder",
-                color: canMake ? Theme.current.textSecondary : Theme.current.textDim,
-                align: .center,
-                onClick: canMake ? { session.startNewFolder() } : nil
-            )
-            .padding(6)
-            .hoverBackground(canMake ? Theme.current.hover : Color.clear)
-            .cornerRadius(4)
-            .cursor(canMake ? .pointer : .arrow)
-            .agentId("new-folder")
-            // Names the view it switches to, as a button does — the one in
-            // use needs no label, it is on screen.
-            Text(
-                tab.viewMode == .icons ? "List" : "Icons",
-                color: Theme.current.textSecondary,
-                align: .center,
-                onClick: { session.setViewMode(tab.viewMode == .icons ? .list : .icons) }
-            )
-            .padding(6)
-            .hoverBackground(Theme.current.hover)
-            .cornerRadius(4)
-            .cursor(.pointer)
-            .agentId("toggle-view")
-            Text(
-                "Hidden",
-                color: tab.showHidden
-                    ? Theme.current.textPrimary : Theme.current.textSecondary,
-                align: .center,
-                onClick: { session.toggleHidden() }
-            )
-            .padding(6)
-            .background(tab.showHidden ? Theme.current.selectionFill : Color.clear)
-            .hoverBackground(
-                tab.showHidden ? Theme.current.selectionFill : Theme.current.hover
-            )
-            .cornerRadius(4)
-            .cursor(.pointer)
-            .agentId("toggle-hidden")
+            iconButton("folder-plus", enabled: canMake, id: "new-folder") {
+                session.startNewFolder()
+            }
+            // Shows the view it switches to, as a button does — the one in
+            // use needs no picture, it is on screen.
+            iconButton(
+                tab.viewMode == .icons ? "view-list" : "view-grid",
+                enabled: true, id: "toggle-view"
+            ) {
+                session.setViewMode(tab.viewMode == .icons ? .list : .icons)
+            }
+            // A state rather than an action: lit while hidden files show.
+            iconButton(
+                tab.showHidden ? "eye" : "eye-off",
+                enabled: true, on: tab.showHidden, id: "toggle-hidden"
+            ) {
+                session.toggleHidden()
+            }
         }
         .frame(height: .pt(44))
         .background(Theme.current.panel)
     }
 
-    private func navButton(
-        _ glyph: String, enabled: Bool, id: String, action: @escaping () -> Void
+    private func iconButton(
+        _ glyph: String, enabled: Bool, on: Bool = false, id: String,
+        action: @escaping () -> Void
     ) -> some View {
-        Text(
-            glyph,
-            color: enabled ? Theme.current.textPrimary : Theme.current.textDim,
-            align: .center,
+        let theme = Theme.current
+        let color = !enabled
+            ? theme.textDim.opacity(0.6)
+            : (on ? theme.textPrimary : theme.textSecondary)
+        return HStack(
+            width: .pt(32), height: .pt(30), padding: 0,
+            alignment: .center, spacing: 0,
             onClick: enabled ? action : nil
-        )
-        .padding(6)
-        .frame(width: .pt(32), height: .pt(28))
-        .hoverBackground(enabled ? Theme.current.hover : Color.clear)
-        .cornerRadius(4)
+        ) {
+            Spacer()
+            Glyph(name: glyph, color: color, size: 18)
+            Spacer()
+        }
+        .background(on ? theme.selectionFill : Color.clear)
+        .hoverBackground(enabled ? (on ? theme.selectionFill : theme.hover) : Color.clear)
+        .cornerRadius(6)
         .cursor(enabled ? .pointer : .arrow)
         .flexShrink(0)
         .agentId(id)
@@ -766,12 +752,26 @@ private struct Sidebar: View {
         let fill = aimedAt
             ? theme.accent.opacity(0.28)
             : (on ? theme.selectionFill : Color.clear)
-        return Text(
-            place.title,
-            color: on ? theme.textPrimary : theme.textSecondary,
+        // One clickable row rather than a clickable `Text` beside a picture:
+        // a `Text` with a click carries its own hover fill at the width of its
+        // glyphs, and the row's would sit around it.
+        return HStack(
+            padding: 0, alignment: .center, spacing: 10,
             onClick: { session.go(place.path) }
-        )
-        .padding(8)
+        ) {
+            Glyph(
+                name: ExplorerIcons.place(place),
+                color: on ? theme.textPrimary : theme.textDim,
+                size: 18
+            )
+            Text(
+                place.title,
+                color: on ? theme.textPrimary : theme.textSecondary,
+                lineLimit: 1
+            )
+            .flexShrink(1)
+        }
+        .padding(EdgeInsets(top: 7, leading: 10, bottom: 7, trailing: 10))
         .background(fill)
         .hoverBackground(on ? theme.selectionFill : theme.hover)
         .cornerRadius(6)
@@ -1026,8 +1026,10 @@ enum TileMetrics {
     }
 }
 
-/// What a tile shows when there is no picture to show: a folder as a block of
-/// the accent colour, anything else as a page with its extension on it.
+/// What a tile shows when there is no picture to show: the theme's icon for the
+/// folder or the kind of file, or — on a machine with no icon theme — a folder
+/// as a block of the accent colour and anything else as a page with its
+/// extension on it.
 /// Shapes rather than the list's glyphs scaled up — those come from a fallback
 /// symbol face that a font loaded at another size would not carry.
 private struct BigIcon: View {
@@ -1042,7 +1044,12 @@ private struct BigIcon: View {
         // every icon.
         return VStack(alignment: .center, spacing: 0) {
             Spacer()
-            if entry.isDirectory {
+            if let icon = ExplorerIcons.file(entry) {
+                Image(
+                    path: icon, width: .pt(size * 0.8), height: .pt(size * 0.8),
+                    contentMode: .fit
+                )
+            } else if entry.isDirectory {
                 Spacer(flexGrow: 0)
                     .frame(width: .pt(size * 0.86), height: .pt(size * 0.64))
                     .background(theme.accent.opacity(0.8))
@@ -1151,6 +1158,13 @@ private struct FileRow: View {
             if let thumbnail = session.thumbnail(for: entry) {
                 Image(
                     path: thumbnail.path,
+                    width: .pt(FileListMetrics.iconSize),
+                    height: .pt(FileListMetrics.iconSize),
+                    contentMode: .fit
+                )
+            } else if let icon = ExplorerIcons.file(entry) {
+                Image(
+                    path: icon,
                     width: .pt(FileListMetrics.iconSize),
                     height: .pt(FileListMetrics.iconSize),
                     contentMode: .fit

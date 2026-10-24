@@ -97,6 +97,21 @@ public enum IconLookup {
         return found
     }
 
+    /// The file for an icon name filed under another context than `apps` —
+    /// `places` for folders, `mimetypes` for kinds of file.
+    ///
+    /// A theme files icons by what they stand for, and `themePath(forIconName:)`
+    /// only ever looks in the applications drawer: a file manager asking it
+    /// for `folder` would be told there is none.
+    public static func themePath(forIconName name: String, context: String) -> String? {
+        guard !name.isEmpty else { return nil }
+        let key = context + "/" + name
+        if let cached = namePathCache[key] { return cached }
+        let found = themeIcon(named: name, context: context)
+        namePathCache[key] = found
+        return found
+    }
+
     /// The file for a desktop entry, including ones that forgot `Icon=`.
     ///
     /// A hand-written `evince.desktop` often has a Name and an Exec and
@@ -272,7 +287,7 @@ public enum IconLookup {
     /// Built one path at a time rather than as a list to iterate: the answer
     /// is usually in the first few, and a list means allocating four hundred
     /// strings to look at six of them.
-    private static func themeIcon(named name: String) -> String? {
+    private static func themeIcon(named name: String, context: String = "apps") -> String? {
         let manager = FileManager.default
 
         func hit(_ path: String) -> Bool {
@@ -283,15 +298,15 @@ public enum IconLookup {
         for base in themeDirectories {
             // Vector first at every size: it is exact at whatever the dock
             // magnifies to.
-            for path in ["\(base)/scalable/apps/\(name).svg",
-                         "\(base)/apps/scalable/\(name).svg"] where hit(path) {
+            for path in ["\(base)/scalable/\(context)/\(name).svg",
+                         "\(base)/\(context)/scalable/\(name).svg"] where hit(path) {
                 return path
             }
             for size in sizes {
-                for path in ["\(base)/apps/\(size)/\(name).svg",
-                             "\(base)/\(size)x\(size)/apps/\(name).svg",
-                             "\(base)/apps/\(size)/\(name).png",
-                             "\(base)/\(size)x\(size)/apps/\(name).png"]
+                for path in ["\(base)/\(context)/\(size)/\(name).svg",
+                             "\(base)/\(size)x\(size)/\(context)/\(name).svg",
+                             "\(base)/\(context)/\(size)/\(name).png",
+                             "\(base)/\(size)x\(size)/\(context)/\(name).png"]
                 where hit(path) {
                     return path
                 }
@@ -301,7 +316,7 @@ public enum IconLookup {
         // The pre-theme dumping ground, still where a surprising number of
         // applications put their only icon. After every theme now rather than
         // after the first one, which is the order the comment always claimed.
-        if rootsOverride == nil {
+        if rootsOverride == nil, context == "apps" {
             for path in ["/usr/share/pixmaps/\(name).svg",
                          "/usr/share/pixmaps/\(name).png"] where hit(path) {
                 return path
