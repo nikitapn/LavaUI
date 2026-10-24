@@ -2,6 +2,7 @@ import Foundation
 import LavaArchive
 import LavaExplorerCore
 import LavaHost
+import LavaRemote
 import LavaShell
 import LavaUI
 import Observation
@@ -48,8 +49,13 @@ final class ExplorerSession: @unchecked Sendable {
 
     let places: [Place]
     let applications: [DesktopEntry]
-    /// The disk, and the Trash as one more folder on it (`trash:///`).
+    /// The disk, the Trash as one more folder on it (`trash:///`), and
+    /// servers (`sftp://…`), each answered by its own wrapper.
     let source: any FileSource
+    /// The server part of `source`: what was fetched, and what failed.
+    @ObservationIgnored let remote: RemoteListingSource
+    @ObservationIgnored let connections: RemoteConnections
+    @ObservationIgnored let logins: RemoteLogins
     let trash: TrashCan
     let openFile: (String) -> Bool
     /// Set when another app started this window as its file picker.
@@ -64,14 +70,23 @@ final class ExplorerSession: @unchecked Sendable {
         places: [Place]? = nil,
         trash: TrashCan = TrashCan(),
         chooser: ChooserRequest? = nil,
-        watchFolders: Bool = true
+        watchFolders: Bool = true,
+        connections: RemoteConnections = .standard(),
+        logins: RemoteLogins = RemoteLogins()
     ) {
         let filter = FilteredSource.Filter(
             chooser?.mode == .folder ? .folders : chooser?.filters.first
         )
-        let source = TrashListingSource(
-            base: FilteredSource(base: source, filter: filter), trash: trash
+        let remote = RemoteListingSource(
+            base: source, fetch: Self.fetcher(connections: connections, logins: logins)
         )
+        let source = TrashListingSource(
+            base: FilteredSource(base: remote, filter: filter), trash: trash
+        )
+        self.remote = remote
+        self.connections = connections
+        self.logins = logins
+        self.servers = Self.loadServers()
         self.chooser = chooser
         self.chooserFilter = filter
         self.saveName = chooser?.suggestedName ?? ""
@@ -100,6 +115,12 @@ final class ExplorerSession: @unchecked Sendable {
             syncWatches()
         }
         applyRememberedViews()
+        // Last: the callback needs `self`, and a fetch started by the tabs
+        // above can land before it is set — which `remoteFolderChanged`
+        // makes up for by reloading whatever is showing that folder then.
+        remote.onChange = { [weak self] path in
+            MainQueue.async { [weak self] in self?.remoteFolderChanged(path) }
+        }
     }
 
     // MARK: - Thumbnails
@@ -112,6 +133,9 @@ final class ExplorerSession: @unchecked Sendable {
     /// What a row draws in place of its glyph, or nil for the glyph. The
     /// first ask queues the work.
     func thumbnail(for entry: FileEntry, size: ThumbnailCache.Size = .normal) -> Thumbnail? {
+        // A server's pictures are not on this disk to make a thumbnail of;
+        // fetching every one to draw a row is a download nobody asked for.
+        if RemoteURL.isRemote(entry.path) { return nil }
         if ThumbnailCache.drawsItself(entry) { return Thumbnail(path: entry.path) }
         _ = thumbnailRevision
         return thumbnails.thumbnail(for: entry, size: size)
@@ -392,7 +416,7 @@ final class ExplorerSession: @unchecked Sendable {
     /// Where each pane and each tab was laid out, reported by the views
     /// themselves. Not observed — they change on layout, and nothing is drawn
     /// from them directly.
-    @ObservationIgnored private var paneFrames: [Int: PaneRect] = [:]
+    @ObservationIgnored var paneFrames: [Int: PaneRect] = [:]
     @ObservationIgnored private var tabFrames: [Int: PaneRect] = [:]
 
     func notePaneFrame(_ paneID: Int, _ frame: CanvasFrame) {
@@ -493,7 +517,8 @@ final class ExplorerSession: @unchecked Sendable {
     func go(_ path: String) {
         dismissContext()
         notice = nil
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A password typed into an address is used, and goes no further.
+        let trimmed = takePassword(from: path.trimmingCharacters(in: .whitespacesAndNewlines))
         guard !trimmed.isEmpty else { return }
         let landing = FolderHistory.landing(argument: trimmed, source: source)
         move { tab, scroll, source in
@@ -571,6 +596,8 @@ final class ExplorerSession: @unchecked Sendable {
 
     func reload() {
         let source = self.source
+        // A server's folder is fetched again; the disk's is read again anyway.
+        remote.invalidate(listing.path)
         tabSet.updateCurrent { $0.reload(from: source) }
         ViewInvalidation.markDirty()
     }
@@ -746,6 +773,11 @@ final class ExplorerSession: @unchecked Sendable {
             }
             return
         }
+        // Fetched first, then opened from here like any other file.
+        if RemoteURL.isRemote(entry.path) {
+            openRemote(entry) { [weak self] local in self?.openFile(local) ?? false }
+            return
+        }
         // An archive opens the way Archive Utility opens one: into a folder
         // beside it. Open With is still on the menu for anything else.
         if !inTrash, ArchiveUnpacker.looksLikeArchive(entry) {
@@ -788,6 +820,15 @@ final class ExplorerSession: @unchecked Sendable {
         dismissContext()
         if entry.isDirectory, app.id == "LavaExplorer" {
             go(entry.path)
+            return
+        }
+        if RemoteURL.isRemote(entry.path) {
+            guard !entry.isDirectory else {
+                notice = "Only LavaExplorer opens a folder on a server"
+                ViewInvalidation.markDirty()
+                return
+            }
+            openRemote(entry) { local in app.launch(files: [local]) }
             return
         }
         if app.launch(files: [entry.path]) {
@@ -911,6 +952,9 @@ final class ExplorerSession: @unchecked Sendable {
             if entry.isDirectory { newTab(path: entry.path) }
         case "ctx.copy-path":
             copySelectedPath()
+        case "ctx.download":
+            dismissContext()
+            download(targets(for: entry), into: Self.downloadsFolder())
         case "ctx.copy": stub("Copy")
         case "ctx.cut": stub("Cut")
         case "ctx.paste": stub("Paste")
@@ -966,6 +1010,14 @@ final class ExplorerSession: @unchecked Sendable {
     /// Open or Save. Open on a folder goes into it; Save over a file asks.
     func confirmChoice() {
         guard let chooser else { return }
+        // The app that asked opens a path; a server's address is not one.
+        // Browsing a server in a picker is still allowed — to look, or to
+        // download into a local folder and pick that.
+        if isOnServer, selectedEntries.contains(where: { !$0.isDirectory }) || chooser.mode == .save {
+            notice = "Pick a file on this computer — download it first to use one from a server"
+            ViewInvalidation.markDirty()
+            return
+        }
         switch chooser.mode {
         case .open, .openMultiple:
             if let answer = chooser.openAnswer(selected: selectedEntries) {
@@ -1035,6 +1087,7 @@ final class ExplorerSession: @unchecked Sendable {
     func startNewFolder() {
         dismissContext()
         cancelRename()
+        if refuseOnServer(listing.path, "Making folders") { return }
         let tab = tabSet.current
         guard !TrashPath.isTrash(tab.listing.path) else {
             notice = "Folders cannot be made in the Trash"
@@ -1112,6 +1165,7 @@ final class ExplorerSession: @unchecked Sendable {
 
     /// F2 or Rename: the lead row, or `entry` when a menu names one.
     func startRename(_ entry: FileEntry? = nil) {
+        if refuseOnServer(listing.path, "Renaming") { return }
         dismissContext()
         guard let entry = entry ?? selectedEntry else { return }
         guard !inTrash else {
@@ -1239,6 +1293,7 @@ final class ExplorerSession: @unchecked Sendable {
     /// Trash, asks and then removes it for good.
     func deleteSelected(permanently: Bool) {
         dismissContext()
+        if refuseOnServer(listing.path, "Deleting") { return }
         let entries = selectedEntries
         guard !entries.isEmpty else { return }
         if permanently || inTrash {
@@ -1252,6 +1307,9 @@ final class ExplorerSession: @unchecked Sendable {
     /// before the next frame whatever the size of what is thrown away.
     func moveToTrash(_ paths: [String]) {
         guard !paths.isEmpty else { return }
+        if let path = paths.first(where: RemoteURL.isRemote), refuseOnServer(path, "Deleting") {
+            return
+        }
         var moved: [TrashItem] = []
         var failures: [FileAccessError] = []
         for path in paths {
@@ -1325,6 +1383,11 @@ final class ExplorerSession: @unchecked Sendable {
     @ObservationIgnored private var erasing = false
 
     func askToErase(_ entries: [FileEntry]) {
+        if let entry = entries.first(where: { RemoteURL.isRemote($0.path) }),
+           refuseOnServer(entry.path, "Deleting")
+        {
+            return
+        }
         guard !entries.isEmpty, !erasing else { return }
         let named = entries.count == 1
             ? "\u{201C}\(entries[0].name)\u{201D}" : Self.items(entries.count)
@@ -1407,7 +1470,7 @@ final class ExplorerSession: @unchecked Sendable {
 
     /// Every tab on any of `folders`, and every tab on the Trash, which
     /// changes whenever anything goes in or comes out.
-    private func reloadAfterChange(in folders: [String]) {
+    func reloadAfterChange(in folders: [String]) {
         let source = self.source
         for folder in Set(folders + [TrashPath.uri]) {
             layout.updateTabs(showing: FolderHistory.normalize(folder)) { $0.reload(from: source) }
@@ -1464,6 +1527,11 @@ final class ExplorerSession: @unchecked Sendable {
     /// is passed over; a selection of three zips and a text file means the
     /// three zips. A locked one is asked about afterwards.
     func extractHere(_ entries: [FileEntry]) {
+        if let entry = entries.first(where: { RemoteURL.isRemote($0.path) }),
+           refuseOnServer(entry.path, "Extracting")
+        {
+            return
+        }
         let archives = entries.filter(ArchiveUnpacker.looksLikeArchive)
         guard !archives.isEmpty else { return }
         guard !extracting, passwordRequest == nil else {
@@ -1649,6 +1717,11 @@ final class ExplorerSession: @unchecked Sendable {
     /// Opens the Compress bar for `entries`, which become one archive in the
     /// folder they are in.
     func startCompress(_ entries: [FileEntry]) {
+        if let entry = entries.first(where: { RemoteURL.isRemote($0.path) }),
+           refuseOnServer(entry.path, "Compressing")
+        {
+            return
+        }
         dismissContext()
         guard !entries.isEmpty else { return }
         guard !inTrash else {
@@ -1780,6 +1853,27 @@ final class ExplorerSession: @unchecked Sendable {
         ViewInvalidation.markDirty()
     }
 
+    // MARK: - Servers
+
+    // What the window shows about servers. The behaviour is in
+    // RemoteSession.swift; stored properties cannot live in an extension.
+
+    /// A server that wants a password, asked in a bar. Observed.
+    var remoteLogin: RemoteLoginRequest?
+    /// Connect to Server…: the address being typed. Observed.
+    var connectDraft: String?
+    /// The sidebar's servers, most recently used first. Observed.
+    var servers: [RemoteURL]
+    /// A transfer is running; the status line's Cancel stops it. Observed.
+    var transferRunning = false
+    @ObservationIgnored var transferCancel = CancelFlag()
+    /// A transfer some of whose names are already taken, waiting on the
+    /// clash bar. Observed.
+    var pendingTransfer: RemoteTransferPlan?
+    /// Rows from a server being dragged inside the window, and the pane they
+    /// would be let go of on. Observed: the pane lights up from it.
+    var remoteDrag: RemoteDrag?
+
     // MARK: - Copying
 
     /// A drop some of whose names are already taken, waiting on one answer
@@ -1851,6 +1945,11 @@ final class ExplorerSession: @unchecked Sendable {
         // Dropped on the Trash is thrown away, not copied into it.
         if TrashPath.isTrash(directory) {
             moveToTrash(urls.map(\.path))
+            return
+        }
+        // Dropped on a server's folder is sent there.
+        if let folder = RemoteURL(directory) {
+            upload(urls.map(\.path), into: folder)
             return
         }
         guard !copying, pendingCopy == nil else {
@@ -1983,6 +2082,9 @@ final class ExplorerSession: @unchecked Sendable {
     /// is part of it, otherwise the row alone, selected first — the way every
     /// file manager selects what is being dragged.
     func dragPaths(for entry: FileEntry) -> [String] {
+        // A server's rows have no path another program could open; they are
+        // dragged inside the window instead (`dragRemote`).
+        if RemoteURL.isRemote(entry.path) { return [] }
         dismissContext()
         // It became a drag, so the press on one of several rows keeps them.
         collapseOnRelease = nil

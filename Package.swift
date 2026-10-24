@@ -151,6 +151,35 @@ var targets: [Target] = [
     // List, extract, create — blocking, for a worker thread. No engine, so
     // hostile archives are a unit test. See Sources/LavaArchive/Archive.swift.
     .target(name: "LavaArchive", dependencies: ["CArchive"]),
+    // libcurl for FTP, FTPS and SFTP, and libsecret for the passwords they
+    // need. Nothing to compile in either, like CArchive.
+    .systemLibrary(
+        name: "CCurl",
+        path: "Sources/CCurl",
+        pkgConfig: "libcurl",
+        providers: [.apt(["libcurl4-openssl-dev"])]
+    ),
+    .systemLibrary(
+        name: "CSecret",
+        path: "Sources/CSecret",
+        pkgConfig: "libsecret-1",
+        providers: [.apt(["libsecret-1-dev"])]
+    ),
+    // Both are variadic all the way down (`curl_easy_setopt`,
+    // `secret_password_lookup_sync`), which Swift cannot call, so a little C
+    // gives them fixed signatures. See Sources/CLavaRemote/include/lava_remote.h.
+    .target(
+        name: "CLavaRemote",
+        dependencies: ["CCurl", "CSecret"],
+        linkerSettings: [
+            .linkedLibrary("curl"), .linkedLibrary("secret-1"), .linkedLibrary("ssh2"),
+            .linkedLibrary("glib-2.0"), .linkedLibrary("gobject-2.0"),
+        ]
+    ),
+    // Connections, transfers and the keyring, blocking, for worker threads.
+    // What a remote folder *is* — its address, its listing — stays in
+    // LavaExplorerCore, where it is a test.
+    .target(name: "LavaRemote", dependencies: ["CLavaRemote", "LavaExplorerCore"]),
     // poppler-cpp, for opening, rendering and reading PDFs. Like CArchive,
     // nothing to compile: it is here for the pkg-config flags and the link.
     .systemLibrary(
@@ -425,7 +454,7 @@ var targets: [Target] = [
     ),
     .executableTarget(
         name: "LavaExplorerApp",
-        dependencies: ["LavaUI", "LavaHost", "LavaExplorerCore", "LavaShell"],
+        dependencies: ["LavaUI", "LavaHost", "LavaExplorerCore", "LavaRemote", "LavaShell"],
         resources: [
             .process("Resources"),
         ],
@@ -453,6 +482,7 @@ var targets: [Target] = [
     .testTarget(name: "LavaFindCoreTests", dependencies: ["LavaFindCore"]),
     .testTarget(name: "LavaShotCoreTests", dependencies: ["LavaShotCore"]),
     .testTarget(name: "LavaExplorerCoreTests", dependencies: ["LavaExplorerCore"]),
+    .testTarget(name: "LavaRemoteTests", dependencies: ["LavaRemote", "LavaExplorerCore"]),
     .testTarget(name: "LavaArchiveTests", dependencies: ["LavaArchive", "CArchive"]),
 ]
 

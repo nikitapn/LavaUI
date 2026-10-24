@@ -59,6 +59,7 @@ public struct ExplorerTab: Equatable, Identifiable, Sendable {
     public var title: String {
         let path = listing.path
         if TrashPath.isTrash(path) { return "Trash" }
+        if let remote = RemoteURL(path) { return remote.name }
         let name = (path as NSString).lastPathComponent
         if name.isEmpty || path == "/" { return "Computer" }
         return name
@@ -73,7 +74,12 @@ public struct ExplorerTab: Equatable, Identifiable, Sendable {
             descending: sortDescending
         )
         pathDraft = listing.path
-        selection.keep(only: Set(listing.entries.map(\.path)))
+        // Not while the folder cannot be read: a server still connecting has
+        // no rows yet, and Up's "the folder you came out of" would be gone by
+        // the time they arrive.
+        if listing.error == nil {
+            selection.keep(only: Set(listing.entries.map(\.path)))
+        }
     }
 
     /// A folder was renamed or moved: this tab follows it if it is in it, or

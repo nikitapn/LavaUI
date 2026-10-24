@@ -40,8 +40,11 @@ public struct FolderHistory: Equatable, Sendable {
 
     public var canGoBack: Bool { !backward.isEmpty }
     public var canGoForward: Bool { !forward.isEmpty }
-    /// The Trash is not inside anything.
-    public var canGoUp: Bool { path != "/" && !TrashPath.isTrash(path) }
+    /// The Trash is not inside anything, and neither is a server's root.
+    public var canGoUp: Bool {
+        if let remote = RemoteURL(path) { return !remote.isRoot }
+        return path != "/" && !TrashPath.isTrash(path)
+    }
 
     /// Move to `next` if it is a different folder, remembering `leaving` as
     /// the state of the folder being left. Returns whether anything changed,
@@ -78,6 +81,10 @@ public struct FolderHistory: Equatable, Sendable {
     /// says where it went.
     public mutating func goUp(leaving: FolderVisit? = nil) {
         guard canGoUp else { return }
+        if let parent = RemoteURL(path)?.parent {
+            _ = visit(parent.string, leaving: leaving)
+            return
+        }
         let parent = (path as NSString).deletingLastPathComponent
         _ = visit(parent.isEmpty ? "/" : parent, leaving: leaving)
     }
@@ -113,6 +120,8 @@ public struct FolderHistory: Equatable, Sendable {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         // An address, not a path: standardizing would make it "trash:".
         if TrashPath.isTrash(trimmed) { return TrashPath.uri }
+        // A server's address, with any typed password left out of it.
+        if let remote = RemoteURL(trimmed) { return remote.string }
         let expanded = (trimmed as NSString).expandingTildeInPath
         let standardized = (expanded as NSString).standardizingPath
         return standardized.isEmpty ? "/" : standardized
@@ -128,6 +137,9 @@ public struct FolderHistory: Equatable, Sendable {
         argument: String, source: any FileSource
     ) -> (directory: String, select: String?) {
         let path = normalize(argument)
+        // Whether it is a file or a folder would be a round trip to ask. It is
+        // opened as a folder, and says "Not a folder" if it is not one.
+        if RemoteURL.isRemote(path) { return (path, nil) }
         if let entry = try? source.entry(at: path) {
             if entry.isDirectory { return (path, nil) }
             let parent = (path as NSString).deletingLastPathComponent

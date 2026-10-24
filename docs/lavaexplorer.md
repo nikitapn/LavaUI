@@ -245,12 +245,96 @@ file.
 - **A second window.** One surface per process; navigate in place.
 - **Browsing inside an archive.** It is extracted or it is not; there is no
   looking around in one first.
-- **Removable media, search, remote.** Later.
+- **Changing a server.** New Folder, Rename, Delete and the Trash say
+  "not supported yet" on a server rather than reaching for the local disk
+  with a URL; only uploads write there. Server to server is refused too.
+- **Asking about a new host key.** A host seen for the first time is
+  trusted and written down (`accept-new`); only a *changed* key is refused.
+  A certificate that the system does not trust is refused with no way to
+  accept it — a self-signed FTPS server cannot be reached yet.
+- **A chip under the pointer for a server's rows.** The pane they would
+  land in lights up; nothing follows the pointer.
+- **Removable media, search.** Later.
+
+## Servers — FTP, FTPS and SFTP
+
+Type `sftp://host`, `ftp://host` or `ftps://host` (with `user@`, a port,
+a path) into the address bar, or File → Connect to Server…. A server's
+folder is the same tab, list, history and panes as a local one; its
+address is its path (`sftp://alice@host/srv/www`), so Back, Up, new tabs
+and splitting all just work.
+
+- **Logging in.** SFTP connects the way `ssh host` would: `~/.ssh/config`'s
+  `HostName`, `Port`, `User`, `IdentityFile` and `IdentitiesOnly` for the
+  host (`Host` patterns, `!`, `Include`; `Match` blocks are skipped), the
+  address winning where it names a port or user itself. Its keys are tried
+  in order — OpenSSH's default `id_*` names when it names none — then the
+  agent, unless `IdentitiesOnly`; the key that worked is tried first next
+  time. With no user anywhere it is you. A typed password doubles as the
+  passphrase of an encrypted key. Without this a server with password logins
+  off could not be reached at all: curl alone tries only `~/.ssh/id_rsa`. FTP with no user is
+  anonymous. A server that refuses asks in a bar along the bottom (user and
+  password, or just the password); a password that works is saved in the
+  desktop's keyring under the network-password schema GNOME Files and gvfs
+  use — so servers saved there open here without asking, and the other way
+  round. A password typed into the address (`user:pw@host`) is used and
+  taken out of it: it is never in a tab, the history, or the sidebar.
+- **Host keys.** Checked against `~/.ssh/known_hosts` (`$HOME`'s), under the
+  name OpenSSH files it by — `host`, or `[host]:port` off port 22 — with
+  hashed entries understood. A new host gets one line appended, never a
+  rewrite of the file; a changed key is refused. Not curl's own check: given
+  the file, curl looks a host up *without its port* and narrows the key
+  exchange to whatever kind of key it found, so an SFTP server on 2222 next
+  to the machine's sshd could not be reached at all.
+- **FTPS** is explicit (`AUTH TLS` on 21), required, never falling back to
+  the clear; port 990 is spoken as the old implicit kind. The certificate
+  is checked against the system's roots (`LAVA_REMOTE_CA_FILE` replaces them
+  — a test's own CA).
+- **Listing** is MLSD where the server has it (exact sizes, UTC times), else
+  `ls -l` text, which is also what every SFTP server sends — read in this
+  machine's time zone, since it carries the server's wall clock with no
+  zone — or IIS's DOS format. `RemoteListing` parses all three.
+- **Never on the frame loop.** A folder not fetched yet shows
+  "Connecting to …" and is fetched on a worker; the tab reloads when it
+  lands, the way an inotify change reloads a local one. One gone back to
+  shows what was last fetched at once and catches up behind it. Two
+  connections per server, kept open — browsing and transfers — so a long
+  download does not hold up opening the next folder.
+- **Opening** a file downloads it to `~/.cache/lava-explorer/remote/` first,
+  then opens that; Open With the same.
+- **Uploading** is a drop: on a server's pane, a folder row in it, or the
+  server in the sidebar. Folders go whole. Names already there get the
+  clash bar (Replace, Keep Both, Skip, Cancel); an upload cut short is
+  removed from the server.
+- **Downloading** is Download to Downloads on the context menu, or a drag of
+  the rows onto a local pane — inside the window: a server's row has no
+  path any other program could open, so it never becomes an OS drag. A file
+  comes down under a hidden name and is renamed into place when complete.
+- **Progress and Cancel** in the status line, as for archives.
+- **The sidebar's Servers**: those used lately, most recent first, eight at
+  most. The cross forgets one, its saved password too.
+
+Tested against pyftpdlib (FTP, FTPS) and asyncssh (SFTP), which
+`tools/remote_test_servers.py` starts — its header says how. `swift test`
+runs `Tests/LavaRemoteTests` against them when `LAVA_REMOTE_TEST_ROOT`
+names the folder they serve as `alice`/`secret` on 2121 (FTP), 2122 (FTPS)
+and 2222 (SFTP), with `LAVA_REMOTE_TEST_CA` the FTPS certificate, and skips
+them otherwise. The keyring tests run only with
+`LAVA_REMOTE_TEST_KEYRING=private`, inside a `dbus-run-session` with a
+`gnome-keyring-daemon` of its own — never against a real keyring.
+
+| Concern | Where |
+|---|---|
+| Addresses, listings, the async source, transfer plans | `LavaExplorerCore` (`RemoteURL`, `RemoteListing`, `RemoteSource`, `RemoteTransfer`) |
+| Connections, transfers, logins, the keyring | `Sources/LavaRemote` |
+| curl, libssh2 and libsecret behind fixed signatures | `Sources/CLavaRemote` |
+| Login bar, Servers, drags, uploads | `Sources/LavaExplorerApp/RemoteSession.swift` |
 
 ## The `FileSource` seam
 
 `list` and `stat` (as `entries(in:)` and `entry(at:)`), implemented first for
-the local disk. A later SFTP or gvfs source is another type.
-`TrashListingSource` wraps one and answers for `trash:///` as well; entries
-listed there keep their real path in the trash's `files/`, which is what
-opens, drags and restores. Write and delete stay off the protocol.
+the local disk. `TrashListingSource` wraps one and answers for `trash:///` as
+well; entries listed there keep their real path in the trash's `files/`,
+which is what opens, drags and restores. `RemoteListingSource` wraps one and
+answers for servers, from what it last fetched — see Servers above. Write
+and delete stay off the protocol.

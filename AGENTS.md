@@ -515,7 +515,8 @@ Sources/
                    with `CaptureScreen`, select and annotate, copy or save.
                    Client mode only
   LavaExplorer*/   File manager (core headless + app). Split panes and tabs,
-                   copy by drop, rename, the freedesktop Trash
+                   copy by drop, rename, the freedesktop Trash; FTP, FTPS and
+                   SFTP servers through LavaRemote (curl, libssh2, libsecret)
   FBDModel/        Function-block diagram model
 canvas/            C++ Vulkan engine + Yoga (SwiftPM C++ targets)
 compositor/        wlroots compositor + canvas surfaces + control plane
@@ -1317,6 +1318,7 @@ so headless test runs skip it too.
 | Restoring where an editor was | `EditorPosition`, `EditorController.position()/restore(_:)` |
 | TraceLoom tabs and workspaces | `Sources/TraceLoomApp/{LogDocument,TraceLoomSession}.swift`, `TraceLoomCore/Workspace.swift` |
 | File explorer browse / list | `Sources/LavaExplorerCore`, `Sources/LavaExplorerApp` |
+| File explorer on a server (FTP/FTPS/SFTP) | `RemoteURL` / `RemoteListing` / `RemoteSource` in `LavaExplorerCore`, `Sources/LavaRemote`, `Sources/CLavaRemote`, `LavaExplorerApp/RemoteSession.swift`; `docs/lavaexplorer.md` → Servers |
 | Panel global menu (import side) | `canvas/src/menu/menu_import.*`, `Sources/LavaUI/PanelMenu.swift` |
 | Window list / dock | `SubscribeWindows` in the IDL, `Sources/LavaDock/` |
 | Dock window preview (hover a stack) | `Sources/LavaDock/WindowPreview.swift`; live thumbnails are `ImageSurface`, room comes from `SetPanelThickness`, freshness from `ForgetWindowPoster` |

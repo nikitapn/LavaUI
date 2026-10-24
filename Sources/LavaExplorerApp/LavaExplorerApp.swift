@@ -88,6 +88,9 @@ struct LavaExplorerApp {
                 ) { session.closeTab(id: session.tabSet.currentID) }
                 // Ctrl+Shift+N in `keys`, for the reason Delete is there.
                 MenuItem("New Folder", id: "file.new-folder") { session.startNewFolder() }
+                MenuItem("Connect to Server\u{2026}", id: "file.connect") {
+                    session.startConnect()
+                }
                 MenuItem("Extract Here", id: "file.extract-here") {
                     session.extractHere(session.selectedEntries)
                 }
@@ -186,6 +189,18 @@ struct LavaExplorerApp {
         }
         if event.button == KeyCode.escape, session.passwordRequest != nil {
             session.cancelPassword()
+            return true
+        }
+        if event.button == KeyCode.escape, session.remoteLogin != nil {
+            session.cancelLogin()
+            return true
+        }
+        if event.button == KeyCode.escape, session.connectDraft != nil {
+            session.cancelConnect()
+            return true
+        }
+        if event.button == KeyCode.escape, session.pendingTransfer != nil {
+            session.resolveTransfer(nil)
             return true
         }
         // A picker's Escape is Cancel, as in every dialog — the name field

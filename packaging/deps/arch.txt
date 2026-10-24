@@ -53,6 +53,9 @@ xorg-xwayland
 # ── apps ───────────────────────────────────────────────────────────────────
 libpulse
 libarchive
+# LavaExplorer's servers: FTP/FTPS/SFTP (curl, above), host keys, saved passwords.
+libssh2
+libsecret
 poppler
 poppler-glib
 mpv

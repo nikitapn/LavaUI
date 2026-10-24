@@ -1,6 +1,7 @@
 import Foundation
 import LavaArchive
 import LavaExplorerCore
+import LavaRemote
 import LavaShell
 import LavaUI
 
@@ -33,6 +34,15 @@ struct ExplorerView: View {
             }
             if let pending = session.pendingCopy {
                 ClashBar(session: session, pending: pending)
+            }
+            if let plan = session.pendingTransfer {
+                TransferClashBar(session: session, plan: plan)
+            }
+            if let request = session.remoteLogin {
+                LoginBar(session: session, request: request)
+            }
+            if session.connectDraft != nil {
+                ConnectBar(session: session)
             }
             if let pending = session.pendingErase {
                 EraseBar(session: session, pending: pending)
@@ -440,6 +450,111 @@ private struct ClashBar: View {
     }
 }
 
+/// The clash bar for a transfer to or from a server: the same one question
+/// for the whole drop, the same four answers.
+private struct TransferClashBar: View {
+    @Bindable var session: ExplorerSession
+    let plan: RemoteTransferPlan
+
+    var body: some View {
+        let clashes = plan.clashes
+        let total = plan.items.count
+        let folder = plan.destinationTitle
+        let message = clashes.count == 1 && total == 1
+            ? "\u{201C}\(clashes[0].name)\u{201D} is already in \(folder)."
+            : "\(clashes.count) of \(ExplorerSession.items(total)) are already in \(folder)."
+        return HStack(padding: 8, alignment: .center, spacing: 8) {
+            Text(message, color: Theme.current.textPrimary, lineLimit: 1)
+                .flexShrink(1)
+                .agentId("transfer-clash-message")
+            Spacer()
+            Button("Replace") { session.resolveTransfer(.replace) }
+                .agentId("transfer-replace")
+            Button("Keep Both") { session.resolveTransfer(.keepBoth) }
+                .agentId("transfer-keep-both")
+            Button("Skip") { session.resolveTransfer(.skip) }
+                .agentId("transfer-skip")
+            Button("Cancel") { session.resolveTransfer(nil) }
+                .agentId("transfer-cancel")
+        }
+        .background(Theme.current.selectionFill)
+    }
+}
+
+/// A server wants a password. Enter is Connect, Escape is Cancel; one that
+/// works is saved to the keyring, one that does not asks again.
+private struct LoginBar: View {
+    @Bindable var session: ExplorerSession
+    let request: RemoteLoginRequest
+
+    var body: some View {
+        let theme = Theme.current
+        let asksUser = request.server.user == nil
+        // SFTP got here only after every key was refused, which is worth
+        // saying: on a server with passwords switched off, typing one will
+        // not help, and the fix is in ~/.ssh/config.
+        let message = request.wrong
+            ? "\(request.server.title) did not take that password. Try again:"
+            : request.server.scheme == .sftp
+                ? "\(request.server.title) did not accept your SSH keys. Password or key passphrase:"
+                : "Log in to \(request.server.title):"
+        return HStack(padding: 10, alignment: .center, spacing: 10) {
+            Text(message, color: theme.textPrimary, lineLimit: 1)
+                .flexShrink(1)
+                .agentId("login-message")
+            if asksUser {
+                TextField(
+                    text: session.loginUser,
+                    placeholder: "User",
+                    autoFocus: true,
+                    onSubmit: { session.submitLogin() }
+                )
+                .frame(width: .pt(140))
+                .agentId("login-user")
+            }
+            TextField(
+                text: session.loginPassword,
+                placeholder: "Password",
+                autoFocus: !asksUser,
+                secure: true,
+                onSubmit: { session.submitLogin() }
+            )
+            .flexGrow(1)
+            .agentId("login-password")
+            Button("Cancel") { session.cancelLogin() }
+                .agentId("login-cancel")
+            Button("Connect") { session.submitLogin() }
+                .agentId("login-connect")
+        }
+        .background(theme.selectionFill)
+    }
+}
+
+/// Connect to Server…: an address, started for you.
+private struct ConnectBar: View {
+    @Bindable var session: ExplorerSession
+
+    var body: some View {
+        let theme = Theme.current
+        return HStack(padding: 10, alignment: .center, spacing: 10) {
+            Text("Connect to", color: theme.textSecondary, lineLimit: 1)
+            TextField(
+                text: session.connectBinding,
+                placeholder: "sftp://user@host, ftp://host or ftps://host",
+                autoFocus: true,
+                onSubmit: { session.submitConnect() }
+            )
+            .flexGrow(1)
+            .agentId("connect-address")
+            Button("Cancel") { session.cancelConnect() }
+                .agentId("connect-cancel")
+            Button("Connect") { session.submitConnect() }
+                .agentId("connect-confirm")
+        }
+        .background(theme.panel)
+    }
+}
+
 // MARK: - Tabs
 
 /// One pane's folder names, the way Explorer and every browser do it. Drag a
@@ -663,6 +778,7 @@ private struct Toolbar: View {
             // A press anywhere in a pane makes it the active one first, so
             // the session's current tab is this one by the time this runs.
             let canMake = !TrashPath.isTrash(tab.listing.path) && tab.listing.error == nil
+                && !RemoteURL.isRemote(tab.listing.path)
             iconButton("folder-plus", tip: "New Folder", enabled: canMake, id: "new-folder") {
                 session.startNewFolder()
             }
@@ -747,10 +863,58 @@ private struct Sidebar: View {
                 ForEach(session.places) { place in
                     placeRow(place)
                 }
+                if !session.servers.isEmpty {
+                    Text("SERVERS", color: Theme.current.textDim)
+                        .padding(EdgeInsets(top: 14, leading: 10, bottom: 6, trailing: 10))
+                    ForEach(session.servers, id: \.string) { url in
+                        serverRow(url)
+                    }
+                }
                 Spacer()
             }
         }
         .background(Theme.current.panel)
+    }
+
+    /// A server lately used: a click goes back, a drop uploads to its login
+    /// folder, and the cross forgets it — its password too.
+    private func serverRow(_ url: RemoteURL) -> some View {
+        let theme = Theme.current
+        let on = RemoteURL(session.listing.path)?.server == url.server
+        let aimedAt = session.dropHover == .place(url.string)
+        let fill = aimedAt
+            ? theme.accent.opacity(0.28)
+            : (on ? theme.selectionFill : Color.clear)
+        return HStack(
+            padding: 0, alignment: .center, spacing: 12,
+            onClick: { session.go(url.string) }
+        ) {
+            Glyph(name: "place-server", color: on ? theme.textPrimary : theme.textDim, size: 18)
+            Text(
+                url.server.title,
+                color: on ? theme.textPrimary : theme.textSecondary,
+                lineLimit: 1
+            )
+            .flexShrink(1)
+            Spacer()
+            HStack(padding: 4, alignment: .center, onClick: { session.forgetServer(url) }) {
+                Mark(.cross, size: 8, color: theme.textDim)
+            }
+            .hoverBackground(theme.hover)
+            .cornerRadius(4)
+            .tooltip("Forget Server")
+            .agentId("forget-\(url.server.host)")
+        }
+        .padding(EdgeInsets(top: 9, leading: 10, bottom: 9, trailing: 6))
+        .background(fill)
+        .hoverBackground(on ? theme.selectionFill : theme.hover)
+        .cornerRadius(6)
+        .cursor(.pointer)
+        .tooltip(url.string)
+        .onDrop(targeted: { session.setDropHover(.place(url.string), $0) }) { urls in
+            session.upload(urls.map(\.path), into: url)
+        }
+        .agentId("server-\(url.server.host)")
     }
 
     private func placeRow(_ place: Place) -> some View {
@@ -865,7 +1029,11 @@ private struct FilePane: View {
         .onDrop(targeted: { session.setDropHover(.pane(paneID), $0) }) { urls in
             session.dropInPane(paneID, urls)
         }
-        .overlayLayer { DropOutline(active: session.dropHover == .pane(paneID)) }
+        .overlayLayer {
+            DropOutline(
+                active: session.dropHover == .pane(paneID) || session.remoteDrag?.paneID == paneID
+            )
+        }
     }
 
     /// The row's geometry, so a column's heading and its separators sit
@@ -1263,18 +1431,28 @@ private struct FileRow: View {
         .cornerRadius(6)
     }
 
+    /// A local row goes out as an OS drag, which any app can take. A server's
+    /// row has nothing an app could open, so it is dragged inside the window,
+    /// to be let go of over a local pane — a download.
+    @ViewBuilder
+    private func dragged<Content: View>(_ content: Content) -> some View {
+        if RemoteURL.isRemote(entry.path) {
+            content.onDragGesture { value in session.dragRemote(entry, value) }
+        } else {
+            content.onFileDrag(paths: { session.dragPaths(for: entry) }) {
+                // Built after `paths`, so it knows how many went with this row.
+                FileDragChip(entry: entry, others: max(0, session.ownDrag.count - 1))
+            }
+        }
+    }
+
     /// What rows and tiles have in common, around whichever they are.
     private func decorated<Content: View>(_ content: Content) -> some View {
         let theme = Theme.current
         let menuX = session.menuX
         let menuY = session.menuY
         let paneID = self.paneID
-        return content
-            .agentId("file-\(entry.name)")
-            .onFileDrag(paths: { session.dragPaths(for: entry) }) {
-                // Built after `paths`, so it knows how many went with this row.
-                FileDragChip(entry: entry, others: max(0, session.ownDrag.count - 1))
-            }
+        return dragged(content.agentId("file-\(entry.name)"))
             .overlay(
                 isPresented: Binding(
                     get: {
@@ -1358,6 +1536,7 @@ private struct FileContextMenu: View {
         handlers: [DesktopEntry], defaultId: String?
     ) -> [MenuEntry] {
         if session.inTrash { return trashEntries }
+        if session.isOnServer { return serverEntries(handlers: handlers, defaultId: defaultId) }
         let many = session.targets(for: entry).count
         let what = many > 1 ? " \(many) Items" : ""
         var items: [MenuEntry] = [
@@ -1402,6 +1581,28 @@ private struct FileContextMenu: View {
             id: MenuID("ctx.copy-path"), title: "Copy Path"
         )))
         return items
+    }
+
+    /// A server's file: open it (fetched first), take a copy, or name it.
+    /// What changes the server — rename, delete — is not done yet, so it is
+    /// not offered.
+    private func serverEntries(handlers: [DesktopEntry], defaultId: String?) -> [MenuEntry] {
+        let many = session.targets(for: entry).count
+        let what = many > 1 ? " \(many) Items" : ""
+        return [
+            .item(MenuItemModel(id: MenuID("ctx.open"), title: "Open")),
+            .item(MenuItemModel(
+                id: MenuID("ctx.open-tab"), title: "Open in New Tab", isEnabled: entry.isDirectory
+            )),
+            .submenu(MenuNode(
+                id: MenuID("ctx.open-with"), title: "Open With",
+                items: appItems(handlers, prefix: "ctx.open-with.", defaultId: defaultId)
+            )),
+            .separator,
+            .item(MenuItemModel(id: MenuID("ctx.download"), title: "Download\(what) to Downloads")),
+            .separator,
+            .item(MenuItemModel(id: MenuID("ctx.copy-path"), title: "Copy Address")),
+        ]
     }
 
     /// Something in the Trash is there to be put back or got rid of.
@@ -1464,9 +1665,13 @@ private struct StatusBar: View {
             Text(session.status, color: Theme.current.textDim, lineLimit: 1)
                 .flexShrink(1)
                 .agentId("status")
-            if session.archiveWorkRunning {
+            if session.archiveWorkRunning || session.transferRunning {
                 Text("Cancel", color: Theme.current.accent, onClick: {
-                    session.cancelArchiveWork()
+                    if session.transferRunning {
+                        session.cancelTransfer()
+                    } else {
+                        session.cancelArchiveWork()
+                    }
                 })
                 .padding(EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4))
                 .agentId("archive-cancel")

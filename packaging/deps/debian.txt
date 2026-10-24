@@ -68,6 +68,10 @@ libboost-program-options-dev
 # ── apps ───────────────────────────────────────────────────────────────────
 libpulse-dev
 libarchive-dev
+# LavaExplorer's servers: FTP/FTPS/SFTP, host keys, saved passwords.
+libcurl4-openssl-dev
+libssh2-1-dev
+libsecret-1-dev
 libpoppler-cpp-dev
 libpoppler-glib-dev
 libmpv-dev
