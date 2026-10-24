@@ -196,6 +196,7 @@ public enum MimeApps {
         "xml": "text/xml",
         "json": "application/json",
         "pdf": "application/pdf",
+        "kdbx": "application/x-keepass2",
         "zip": "application/zip",
         "gz": "application/gzip",
         "tar": "application/x-tar",

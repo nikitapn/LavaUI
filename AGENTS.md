@@ -1317,6 +1317,7 @@ so headless test runs skip it too.
 | Dropdown / one-of-many switcher | `Sources/LavaUI/ComboBox.swift` |
 | Restoring where an editor was | `EditorPosition`, `EditorController.position()/restore(_:)` |
 | TraceLoom tabs and workspaces | `Sources/TraceLoomApp/{LogDocument,TraceLoomSession}.swift`, `TraceLoomCore/Workspace.swift` |
+| KeePass password manager | `Sources/LavaPassCore`, `Sources/LavaPassApp`, `Sources/CLavaPass`; `docs/lavapass.md`. Real vaults disable the development agent; use `--demo` for UI tests. |
 | File explorer browse / list | `Sources/LavaExplorerCore`, `Sources/LavaExplorerApp` |
 | File explorer on a server (FTP/FTPS/SFTP) | `RemoteURL` / `RemoteListing` / `RemoteSource` in `LavaExplorerCore`, `Sources/LavaRemote`, `Sources/CLavaRemote`, `LavaExplorerApp/RemoteSession.swift`; `docs/lavaexplorer.md` → Servers |
 | Panel global menu (import side) | `canvas/src/menu/menu_import.*`, `Sources/LavaUI/PanelMenu.swift` |

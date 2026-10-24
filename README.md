@@ -72,6 +72,7 @@ Every one of these is a LavaUI app and runs with `swift run <name>`:
 | `LavaTerm` | Terminal emulator |
 | `LavaEditor` | Text editor |
 | `LavaExplorer` | File manager — tabs, split panes, Trash |
+| `LavaPass` | KeePass-compatible password vaults — [guide](docs/lavapass.md) |
 | `LavaView` | Image viewer |
 | `LavaPDF` | PDF reader |
 | `LavaPlayer` | Video player |
@@ -108,7 +109,7 @@ The docs site is at [lavaui.nikitapn.com](https://lavaui.nikitapn.com).
 
 ## Built with
 
-- **Swift 6** with C++ interop, and **C++23** for the engine and compositor
+- **Swift 6.1+** with C++ interop, and **C++23** for the engine and compositor
 - **Vulkan** — rendering
 - **Yoga** — flexbox layout
 - **FreeType** and **HarfBuzz** — fonts and text shaping

@@ -74,6 +74,8 @@ libarchive-dev
 libcurl4-openssl-dev
 libssh2-1-dev
 libsecret-1-dev
+# LavaPass / KDBXKit compressed KeePass vaults.
+zlib1g-dev
 libpoppler-cpp-dev
 libpoppler-glib-dev
 libmpv-dev

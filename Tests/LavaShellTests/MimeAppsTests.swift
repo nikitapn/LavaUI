@@ -15,6 +15,7 @@ struct MimeAppsTests {
         #expect(MimeApps.typeFromExtension("photo.JPG") == "image/jpeg")
         #expect(MimeApps.typeFromExtension("notes.txt") == "text/plain")
         #expect(MimeApps.typeFromExtension("doc.pdf") == "application/pdf")
+        #expect(MimeApps.typeFromExtension("Passwords.kdbx") == "application/x-keepass2")
         #expect(MimeApps.typeFromExtension("no-ext") == "application/octet-stream")
         #expect(MimeApps.type(of: "photo.png", isDirectory: false) == "image/png")
     }

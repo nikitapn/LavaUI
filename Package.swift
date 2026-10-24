@@ -39,6 +39,7 @@ let interopCxx: [SwiftSetting] = [.interoperabilityMode(.Cxx)]
 
 var packageDependencies: [Package.Dependency] = [
     .package(path: "canvas"),
+    .package(url: "https://github.com/shadone/KDBXKit.git", exact: "1.3.0"),
 ]
 if haveNprpc {
     packageDependencies.append(.package(path: nprpcPath))
@@ -54,6 +55,7 @@ var products: [Product] = [
     .executable(name: "LavaPlayer", targets: ["LavaPlayerApp"]),
     .executable(name: "LavaShot", targets: ["LavaShotApp"]),
     .executable(name: "LavaExplorer", targets: ["LavaExplorerApp"]),
+    .executable(name: "LavaPass", targets: ["LavaPassApp"]),
     .executable(name: "LavaTerm", targets: ["LavaTermApp"]),
     .executable(name: "LavaEditor", targets: ["LavaEditorApp"]),
     .executable(name: "LavaBench", targets: ["LavaBench"]),
@@ -139,6 +141,16 @@ var targets: [Target] = [
     .target(name: "LavaShotCore"),
     // Folder listing, sort, history and the FileSource seam. No engine —
     // a file manager that lists the wrong names is a test, not a screenshot.
+    .target(name: "LavaPassCore", dependencies: [.product(name: "KDBXKit", package: "KDBXKit")]),
+    .target(name: "CLavaPass", dependencies: ["CSecret"], publicHeadersPath: "include"),
+    .executableTarget(
+        name: "LavaPassApp", dependencies: ["LavaUI", "LavaHost", "LavaPassCore", "CLavaPass"],
+        swiftSettings: interopCxx
+    ),
+    .testTarget(
+        name: "LavaPassCoreTests", dependencies: ["LavaPassCore", .product(name: "KDBXKit", package: "KDBXKit")],
+        resources: [.copy("Resources")]
+    ),
     .target(name: "LavaExplorerCore", dependencies: ["LavaArchive"]),
     .target(
         name: "CUDisks",

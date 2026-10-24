@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+<title id="title">LavaPass</title><desc id="desc">A gold keyhole and lock on a dark blue vault.</desc>
+<defs><linearGradient id="tile" x2="1" y2="1"><stop stop-color="#35456b"/><stop offset="1" stop-color="#181e35"/></linearGradient><linearGradient id="lock" x2="0" y2="1"><stop stop-color="#ffe2a0"/><stop offset="1" stop-color="#d99a46"/></linearGradient></defs>
+<rect x="24" y="24" width="464" height="464" rx="100" fill="url(#tile)"/>
+<path d="M170 220v-55a86 86 0 0 1 172 0v55" fill="none" stroke="#e5edff" stroke-width="30"/>
+<rect x="132" y="204" width="248" height="212" rx="36" fill="url(#lock)"/>
+<circle cx="256" cy="288" r="27" fill="#25304e"/><path d="m244 300-7 59h38l-7-59" fill="#25304e"/>
+</svg>

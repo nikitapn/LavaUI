@@ -58,6 +58,8 @@ libarchive
 # LavaExplorer's servers: FTP/FTPS/SFTP (curl, above), host keys, saved passwords.
 libssh2
 libsecret
+# LavaPass / KDBXKit compressed KeePass vaults.
+zlib
 poppler
 poppler-glib
 mpv
