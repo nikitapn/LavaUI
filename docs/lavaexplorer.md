@@ -26,6 +26,16 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   Places includes Home, the XDG user directories that exist, and Computer (`/`).
   Right-click a folder and choose **Add to Favorites**. Local paths and exact FTP/FTPS/SFTP folders
   are saved across launches; the cross removes a favorite without deleting it.
+- **Devices.** Internal Linux/Windows filesystems and connected USB drives
+  appear in a collapsible sidebar section. Click a mounted volume to browse it;
+  click an unmounted one to mount and open it. The unmount icon releases a mounted
+  data volume; system volumes have no unmount button. Boot, reserved and recovery
+  partitions stay hidden. UDisks2 on the system bus performs both operations,
+  using the desktop's polkit authentication agent when authorization is needed.
+  Busy-drive and filesystem errors appear in the status line; unmounts are never
+  forced. The device list refreshes on a worker every two seconds without
+  repainting unchanged results. Unmounting or unplugging a volume returns its
+  open tabs to Home. The section's expanded state is saved per profile.
 - **Profiles.** Use the sidebar's profile selector or the Profiles menu to
   switch setups, and **New Profile…** to create one with a custom name. Each
   keeps its own tabs and pane splits, sidebar width and expanded sections,

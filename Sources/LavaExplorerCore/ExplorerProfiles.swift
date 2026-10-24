@@ -9,6 +9,7 @@ public struct ExplorerProfile: Codable, Equatable, Sendable, Identifiable {
     public var placesExpanded = true
     public var favoritesExpanded = true
     public var serversExpanded = true
+    public var devicesExpanded = true
     public var favorites: [String] = []
     public var servers: [String] = []
     public var folderViews = FolderViewMemory()
@@ -17,6 +18,27 @@ public struct ExplorerProfile: Codable, Equatable, Sendable, Identifiable {
         self.id = id
         self.name = name
     }
+    private enum CodingKeys: String, CodingKey {
+        case id, name, workspace, sidebarFraction, placesExpanded, favoritesExpanded
+        case serversExpanded, devicesExpanded, favorites, servers, folderViews
+    }
+
+    // New controls must not invalidate profiles saved by an older Explorer.
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        workspace = try values.decodeIfPresent(PaneLayout.Workspace.self, forKey: .workspace)
+        sidebarFraction = try values.decodeIfPresent(Float.self, forKey: .sidebarFraction) ?? 0.22
+        placesExpanded = try values.decodeIfPresent(Bool.self, forKey: .placesExpanded) ?? true
+        favoritesExpanded = try values.decodeIfPresent(Bool.self, forKey: .favoritesExpanded) ?? true
+        serversExpanded = try values.decodeIfPresent(Bool.self, forKey: .serversExpanded) ?? true
+        devicesExpanded = try values.decodeIfPresent(Bool.self, forKey: .devicesExpanded) ?? true
+        favorites = try values.decodeIfPresent([String].self, forKey: .favorites) ?? []
+        servers = try values.decodeIfPresent([String].self, forKey: .servers) ?? []
+        folderViews = try values.decodeIfPresent(FolderViewMemory.self, forKey: .folderViews) ?? FolderViewMemory()
+    }
+
 }
 
 public struct ExplorerProfiles: Codable, Equatable, Sendable {

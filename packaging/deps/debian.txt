@@ -67,6 +67,8 @@ libboost-program-options-dev
 
 # ── apps ───────────────────────────────────────────────────────────────────
 libpulse-dev
+# LavaExplorer: volume discovery, mounting and unmounting through the system bus.
+udisks2
 libarchive-dev
 # LavaExplorer's servers: FTP/FTPS/SFTP, host keys, saved passwords.
 libcurl4-openssl-dev

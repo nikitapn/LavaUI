@@ -43,6 +43,12 @@ final class ExplorerSession: @unchecked Sendable {
     var placesExpanded = true { didSet { saveProfile() } }
     var favoritesExpanded = true { didSet { saveProfile() } }
     var serversExpanded = true { didSet { saveProfile() } }
+    var devicesExpanded = true { didSet { saveProfile() } }
+    var devices: [DiskVolume] = []
+    var devicesLoaded = false
+    var devicesError: String?
+    var deviceBusy: String?
+    @ObservationIgnored var deviceMonitor: DeviceMonitor?
     var favorites: [String] = [] { didSet { saveProfile() } }
 
     private static func loadProfiles() -> ExplorerProfiles {
@@ -70,6 +76,7 @@ final class ExplorerSession: @unchecked Sendable {
         profile.placesExpanded = placesExpanded
         profile.favoritesExpanded = favoritesExpanded
         profile.serversExpanded = serversExpanded
+        profile.devicesExpanded = devicesExpanded
         profile.favorites = favorites
         profile.servers = servers.map(\.string)
         profile.folderViews = viewMemory
@@ -84,13 +91,21 @@ final class ExplorerSession: @unchecked Sendable {
         placesExpanded = profile.placesExpanded
         favoritesExpanded = profile.favoritesExpanded
         serversExpanded = profile.serversExpanded
+        devicesExpanded = profile.devicesExpanded
         favorites = profile.favorites
         servers = profile.servers.compactMap(RemoteURL.init)
         viewMemory = profile.folderViews
     }
 
+    var canUnmountDevices: Bool {
+        !copying && !erasing && !archiveWorkRunning && !transferRunning
+            && pendingCopy == nil && pendingTransfer == nil && pendingErase == nil
+            && pendingOverwrite == nil && newFolderDraft == nil && renameDraft == nil
+            && compressDraft == nil && passwordRequest == nil
+    }
+
     var canSelectProfile: Bool {
-        chooser == nil && !copying && !erasing && !archiveWorkRunning && !transferRunning
+        chooser == nil && deviceBusy == nil && !copying && !erasing && !archiveWorkRunning && !transferRunning
             && pendingCopy == nil && pendingTransfer == nil && pendingErase == nil
             && pendingOverwrite == nil && newFolderDraft == nil && renameDraft == nil
             && compressDraft == nil && passwordRequest == nil && remoteLogin == nil
@@ -250,6 +265,7 @@ final class ExplorerSession: @unchecked Sendable {
                 MainQueue.async { [weak self] in self?.foldersChanged(changed) }
             }
             syncWatches()
+            startDevices()
         }
         applyRememberedViews()
         loadingProfile = false

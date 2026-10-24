@@ -52,6 +52,8 @@ xorg-xwayland
 
 # ── apps ───────────────────────────────────────────────────────────────────
 libpulse
+# LavaExplorer: volume discovery, mounting and unmounting through the system bus.
+udisks2
 libarchive
 # LavaExplorer's servers: FTP/FTPS/SFTP (curl, above), host keys, saved passwords.
 libssh2

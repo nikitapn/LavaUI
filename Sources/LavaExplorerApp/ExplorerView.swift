@@ -887,12 +887,12 @@ private struct Sidebar: View {
             ScrollView(.vertical) {
                 VStack(padding: 8, spacing: 2) {
                     if session.chooser == nil {
-                        sectionHeader("PROFILE: \(session.profiles.selected.name)", expanded: session.profilePickerExpanded) {
+                        sectionHeader("PROFILE: \(session.profiles.selected.name)", icon: "section-profile", expanded: session.profilePickerExpanded) {
                             session.profilePickerExpanded.toggle()
                         }
                         if session.profilePickerExpanded {
                             ForEach(session.profiles.profiles) { profile in
-                                HStack(padding: 10, alignment: .center, spacing: 8, onClick: {
+                                HStack(padding: 0, alignment: .center, spacing: 8, onClick: {
                                     session.selectProfile(profile.id)
                                 }) {
                                     Text(profile.name, color: Theme.current.textPrimary, lineLimit: 1)
@@ -901,6 +901,7 @@ private struct Sidebar: View {
                                         Text("✓", color: Theme.current.accent)
                                     }
                                 }
+                                .padding(EdgeInsets(top: 10, leading: 32, bottom: 10, trailing: 10))
                                 .background(profile.id == session.profiles.selectedID
                                             ? Theme.current.selectionFill : Color.clear)
                                 .hoverBackground(Theme.current.hover)
@@ -909,10 +910,11 @@ private struct Sidebar: View {
                                 .agentId("profile-\(profile.id)")
                             }
                             Button("New Profile…") { session.profileDraft = "" }
+                                .padding(EdgeInsets(top: 0, leading: 22, bottom: 0, trailing: 0))
                                 .agentId("new-profile")
                         }
                     }
-                    sectionHeader("PLACES", expanded: session.placesExpanded) {
+                    sectionHeader("PLACES", icon: "section-places", expanded: session.placesExpanded) {
                         session.placesExpanded.toggle()
                     }
                     if session.placesExpanded {
@@ -920,7 +922,7 @@ private struct Sidebar: View {
                             placeRow(place)
                         }
                     }
-                    sectionHeader("FAVORITES", expanded: session.favoritesExpanded) {
+                    sectionHeader("FAVORITES", icon: "section-favorites", expanded: session.favoritesExpanded) {
                         session.favoritesExpanded.toggle()
                     }
                     if session.favoritesExpanded {
@@ -929,10 +931,27 @@ private struct Sidebar: View {
                         }
                         if session.favorites.isEmpty {
                             Text("Right-click a folder to add", color: Theme.current.textDim)
-                                .padding(10)
+                                .padding(EdgeInsets(top: 10, leading: 32, bottom: 10, trailing: 10))
                         }
                     }
-                    sectionHeader("SERVERS", expanded: session.serversExpanded) {
+                    sectionHeader("DEVICES", icon: "section-devices", expanded: session.devicesExpanded) {
+                        session.devicesExpanded.toggle()
+                    }
+                    if session.devicesExpanded {
+                        ForEach(session.devices) { volume in
+                            deviceRow(volume)
+                        }
+                        if let error = session.devicesError {
+                            Text(error, color: Theme.current.textDim, lineLimit: 2)
+                                .padding(EdgeInsets(top: 10, leading: 32, bottom: 10, trailing: 10))
+                                .tooltip(error)
+                        } else if session.devices.isEmpty {
+                            Text(session.devicesLoaded ? "No devices" : "Looking for devices…",
+                                 color: Theme.current.textDim)
+                                .padding(EdgeInsets(top: 10, leading: 32, bottom: 10, trailing: 10))
+                        }
+                    }
+                    sectionHeader("SERVERS", icon: "section-servers", expanded: session.serversExpanded) {
                         session.serversExpanded.toggle()
                     }
                     if session.serversExpanded {
@@ -947,11 +966,13 @@ private struct Sidebar: View {
     }
 
     private func sectionHeader(
-        _ title: String, expanded: Bool, toggle: @escaping () -> Void
+        _ title: String, icon: String, expanded: Bool, toggle: @escaping () -> Void
     ) -> some View {
         HStack(padding: 0, alignment: .center, spacing: 8, onClick: toggle) {
             DisclosureChevron(isExpanded: expanded, color: Theme.current.textDim)
-            Text(title, color: Theme.current.textDim)
+            Glyph(name: icon, color: Theme.current.textDim, size: 18)
+            Text(title, color: Theme.current.textDim, lineLimit: 1)
+                .flexShrink(1)
             Spacer()
         }
         .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
@@ -959,6 +980,58 @@ private struct Sidebar: View {
         .cornerRadius(4)
         .cursor(.pointer)
         .agentId("section-\(title.lowercased())")
+    }
+
+    private func deviceRow(_ volume: DiskVolume) -> some View {
+        let theme = Theme.current
+        let selected = DiskVolume.selected(in: session.devices, path: session.listing.path) == volume.id
+        let busy = session.deviceBusy == volume.id
+        let detail = busy ? "Working…" : (volume.mountPoint ?? "Click to mount")
+        return HStack(padding: 0, alignment: .center, spacing: 12,
+                      onClick: { session.openDevice(volume) }) {
+            Glyph(name: "place-computer", color: selected ? theme.textPrimary : theme.textDim, size: 18)
+            VStack(padding: 0, spacing: 2) {
+                Text(volume.title, color: selected ? theme.textPrimary : theme.textSecondary, lineLimit: 1)
+                Text(detail, color: theme.textDim, lineLimit: 1)
+            }
+            .flexShrink(1)
+            Spacer()
+            if volume.canUnmount && !busy {
+                HStack(padding: 5, alignment: .center, onClick: { session.unmountDevice(volume) }) {
+                    Canvas(label: "Unmount", width: .pt(14), height: .pt(14)) { list, frame in
+                        let cx = frame.x + 7
+                        let cy = frame.y + 7
+                        list.line(x1: cx - 4, y1: cy + 1, x2: cx, y2: cy - 4,
+                                  color: theme.textDim, width: 1.5)
+                        list.line(x1: cx, y1: cy - 4, x2: cx + 4, y2: cy + 1,
+                                  color: theme.textDim, width: 1.5)
+                        list.line(x1: cx - 4, y1: cy + 1, x2: cx + 4, y2: cy + 1,
+                                  color: theme.textDim, width: 1.5)
+                        list.line(x1: cx - 4, y1: cy + 4, x2: cx + 4, y2: cy + 4,
+                                  color: theme.textDim, width: 1.5)
+                    }
+                }
+                .hoverBackground(theme.hover)
+                .cornerRadius(4)
+                .tooltip("Unmount \(volume.title)")
+                .agentId("unmount-\(volume.device)")
+            }
+        }
+        .padding(EdgeInsets(top: 9, leading: 32, bottom: 9, trailing: 6))
+        .background(selected ? theme.selectionFill : Color.clear)
+        .hoverBackground(selected ? theme.selectionFill : theme.hover)
+        .cornerRadius(6)
+        .cursor(.pointer)
+        .tooltip("\(volume.device) · \(volume.model) · \(volume.filesystem)\n\(detail)")
+        .onDrop { urls in
+            if let path = volume.mountPoint {
+                session.dropOnPlace(Place(title: volume.title, path: path), urls)
+            } else {
+                session.notice = "Mount \(volume.title) before dropping files onto it"
+                ViewInvalidation.markDirty()
+            }
+        }
+        .agentId("device-\(volume.device)")
     }
 
     private func favoriteRow(_ path: String) -> some View {
@@ -981,7 +1054,7 @@ private struct Sidebar: View {
             .cornerRadius(4)
             .tooltip("Remove from Favorites")
         }
-        .padding(EdgeInsets(top: 9, leading: 10, bottom: 9, trailing: 6))
+        .padding(EdgeInsets(top: 9, leading: 32, bottom: 9, trailing: 6))
         .background(on ? theme.selectionFill : Color.clear)
         .hoverBackground(on ? theme.selectionFill : theme.hover)
         .cornerRadius(6)
@@ -1019,7 +1092,7 @@ private struct Sidebar: View {
             .tooltip("Forget Server")
             .agentId("forget-\(url.server.host)")
         }
-        .padding(EdgeInsets(top: 9, leading: 10, bottom: 9, trailing: 6))
+        .padding(EdgeInsets(top: 9, leading: 32, bottom: 9, trailing: 6))
         .background(fill)
         .hoverBackground(on ? theme.selectionFill : theme.hover)
         .cornerRadius(6)
@@ -1057,7 +1130,7 @@ private struct Sidebar: View {
             )
             .flexShrink(1)
         }
-        .padding(EdgeInsets(top: 9, leading: 10, bottom: 9, trailing: 10))
+        .padding(EdgeInsets(top: 9, leading: 32, bottom: 9, trailing: 10))
         .background(fill)
         .hoverBackground(on ? theme.selectionFill : theme.hover)
         .cornerRadius(6)
