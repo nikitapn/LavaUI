@@ -174,6 +174,7 @@ extension DesktopEntry {
             )
             return false
         }
+        ChildProcessMonitor.shared.track(pid)
         return true
     }
 
