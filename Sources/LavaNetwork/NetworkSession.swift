@@ -24,6 +24,10 @@ public final class NetworkSession: @unchecked Sendable {
     @ObservationIgnored public var onPromptGone: ((UInt64) -> Void)?
     /// A save or an import went through: what, and the profile's path.
     @ObservationIgnored public var onDone: ((String, String) -> Void)?
+    /// The first snapshot has arrived — `state` is NetworkManager's, not the
+    /// empty default. Settings opens its page on this.
+    @ObservationIgnored public private(set) var isReady = false
+    @ObservationIgnored public var onReady: (() -> Void)?
 
     private var handle: OpaquePointer?
     private var box: Unmanaged<NetworkSession>?
@@ -101,6 +105,12 @@ public final class NetworkSession: @unchecked Sendable {
     }
 
     private func adopt(_ next: NetworkState) {
+        // Before the comparison: "not running" is equal to the default state,
+        // and is an answer all the same.
+        if !isReady {
+            isReady = true
+            do { onReady?(); onReady = nil }
+        }
         guard next != state else { return }
         state = next
         // Paint closures are not observation-tracked; the strip glyph is one.

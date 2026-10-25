@@ -71,14 +71,18 @@ private struct SidebarRow: View {
     let section: SettingsSection
     let store: SettingsStore
 
-    @DrawState private var hovered = false
-
     var body: some View {
         let selected = store.section == section
         return VStack(
             padding: 0,
             spacing: 4,
             onClick: {
+                // Shown when its data is in, not a frame before: see
+                // `NetworkSettings.start`.
+                if section == .network {
+                    networkSettings.start { store.section = .network }
+                    return
+                }
                 store.section = section
                 // The layout catalogue is a parse of the xkb rules on the
                 // compositor's loop. Paid for on the way into the page that
@@ -87,9 +91,7 @@ private struct SidebarRow: View {
                 // must not be the thing that changes what it is drawing.
                 if section == .keyboard { store.ensureLayouts() }
                 if section == .background { store.ensurePictures() }
-                if section == .network { networkSettings.start() }
-            },
-            onHover: { hovered = $0 }
+            }
         ) {
             Text(section.title,
                  color: selected ? Theme.current.textPrimary
@@ -101,9 +103,11 @@ private struct SidebarRow: View {
             // `selectionFill`, not `selected`: the latter is the bright
             // highlight a menu draws behind *dark* text, and light text on it
             // is unreadable — which is what it looked like.
-            selected ? Theme.current.selectionFill
-                     : (hovered ? Theme.current.hover : .clear)
+            selected ? Theme.current.selectionFill : .clear
         )
+        // The renderer's: no body pass, no round trip. A hover colour equal
+        // to the fill is no tint at all, which keeps the selection as it is.
+        .hoverBackground(selected ? Theme.current.selectionFill : Theme.current.hover)
         .cornerRadius(8)
     }
 }
@@ -150,6 +154,16 @@ struct SettingsContent: View {
 
     @ViewBuilder
     private func page(_ section: SettingsSection) -> some View {
+        if section == .network {
+            // Scrolls itself: an overview and an editor, each with its own
+            // place — see `NetworkPage`.
+            NetworkPage()
+        } else {
+            scrolled(section)
+        }
+    }
+
+    private func scrolled(_ section: SettingsSection) -> some View {
         ScrollView {
             VStack(padding: 26, spacing: 22) {
                 Text(section.title, color: Theme.current.textPrimary)
@@ -164,7 +178,7 @@ struct SettingsContent: View {
                 case .display:
                     DisplayPage(store: store)
                 case .network:
-                    NetworkPage()
+                    EmptyView()
                 case .lock:
                     LockPage(store: store)
                 case .search:
@@ -264,15 +278,12 @@ struct PickerRow: View {
     let selected: Bool
     let action: () -> Void
 
-    @DrawState private var hovered = false
-
     var body: some View {
         HStack(
             padding: 0,
             alignment: .center,
             spacing: 12,
-            onClick: action,
-            onHover: { hovered = $0 }
+            onClick: action
         ) {
             // A dot rather than a tick: it is the same width in both states,
             // so a list does not shift sideways as the selection moves.
@@ -285,10 +296,8 @@ struct PickerRow: View {
             }
         }
         .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
-        .background(
-            selected ? Theme.current.selectionFill
-                     : (hovered ? Theme.current.hover : .clear)
-        )
+        .background(selected ? Theme.current.selectionFill : .clear)
+        .hoverBackground(selected ? Theme.current.selectionFill : Theme.current.hover)
         .cornerRadius(6)
     }
 }

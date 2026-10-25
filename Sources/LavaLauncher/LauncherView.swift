@@ -236,8 +236,6 @@ private struct Results: View {
 private struct AppCard: View {
     let entry: DesktopEntry
 
-    @DrawState private var hovered = false
-
     var body: some View {
         // Read here so the card re-renders when the selection moves onto or
         // off it; `matches` is stable while the query is.
@@ -253,8 +251,7 @@ private struct AppCard: View {
             padding: 10,
             alignment: .center,
             spacing: 8,
-            onClick: { model.launch(entry) },
-            onHover: { hovered = $0 }
+            onClick: { model.launch(entry) }
         ) {
             Spacer()
             Icon(entry: entry)
@@ -266,7 +263,13 @@ private struct AppCard: View {
         }
         .background(
             isSelected ? tint(saturation: 0.75, lightness: 0.24)
-                       : tint(saturation: 0.55, lightness: hovered ? 0.16 : 0.10)
+                       : tint(saturation: 0.55, lightness: 0.10)
+        )
+        // The renderer lifts it under the pointer; the selected card already
+        // stands out, and a hover equal to its fill leaves it alone.
+        .hoverBackground(
+            isSelected ? tint(saturation: 0.75, lightness: 0.24)
+                       : tint(saturation: 0.55, lightness: 0.16)
         )
         .cornerRadius(70)
         .glassEffect(refraction: 0, rim: 1, frost: 0)

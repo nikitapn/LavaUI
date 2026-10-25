@@ -31,16 +31,44 @@ final class NetworkSettings {
     /// "Forget" asks twice; this is the profile the second click forgets.
     private(set) var confirmingForget: String?
     private(set) var message: String?
+    /// The editor's scroll view. Back at the top for every profile opened:
+    /// one view serves them all, and the last one's place means nothing to
+    /// the next.
+    @ObservationIgnored let editorScroll = ScrollPosition()
 
     /// Started on the way into the page, as the Keyboard page's catalogue
     /// is: a settings window opened for the wallpaper need not talk to
     /// NetworkManager at all.
-    func start() {
-        guard session == nil else { return }
-        let session = NetworkSession(agent: false)
-        session.onDone = { [weak self] what, path in self?.finished(what, path) }
-        self.session = session
+    ///
+    /// `ready` runs once the first snapshot is in, so the page is shown with
+    /// its contents rather than a frame of "Loading…" before them — or after
+    /// `deadline`, so a NetworkManager that is slow to answer, or absent,
+    /// still lets the click go through.
+    func start(deadline: TimeInterval = 0.3, then ready: @escaping () -> Void) {
+        if session == nil {
+            let session = NetworkSession(agent: false)
+            session.onDone = { [weak self] what, path in self?.finished(what, path) }
+            self.session = session
+        }
+        guard let session, !session.isReady else { return ready() }
+        // A second click while waiting replaces the first: one page switch.
+        let ticket = UUID()
+        waiting = (ticket, ready)
+        session.onReady = { [weak self] in self?.fire(ticket) }
+        DispatchQueue.global().asyncAfter(deadline: .now() + deadline) {
+            MainQueue.async { networkSettings.fire(ticket) }
+        }
     }
+
+    /// Whichever comes first, the snapshot or the deadline; the other finds
+    /// nothing waiting.
+    private func fire(_ ticket: UUID) {
+        guard let waiting, waiting.ticket == ticket else { return }
+        self.waiting = nil
+        waiting.ready()
+    }
+
+    @ObservationIgnored private var waiting: (ticket: UUID, ready: () -> Void)?
 
     var state: NetworkState { session?.state ?? NetworkState() }
 
@@ -48,6 +76,7 @@ final class NetworkSettings {
 
     func open(_ connection: NetConnection) {
         editing = connection.path
+        editorScroll.scrollToTop()
         form = ProfileForm(connection)
         original = form
         confirmingForget = nil
@@ -136,24 +165,63 @@ final class NetworkSettings {
 
 nonisolated(unsafe) let networkSettings = NetworkSettings()
 
+/// The page, as two scroll views of its own with one showing — the shape
+/// `SettingsContent` gives whole pages, and for the same reason.
+///
+/// One scroll view holding first the list and then an editor kept the list's
+/// offset for the editor: a VPN opened from the bottom of the page opened at
+/// the bottom of its settings, after a frame drawn at the top. Two keep two
+/// places — the list is where it was on the way back, and the editor starts
+/// at the top (`NetworkSettings.editorScroll`).
 struct NetworkPage: View {
     var body: some View {
         let model = networkSettings
         let state = model.state
-        return VStack(spacing: 18) {
-            if model.session == nil {
-                Text("Loading…", color: Theme.current.textDim)
-            } else if !state.running {
-                SettingRow(
-                    "NetworkManager is not running",
-                    "Everything on this page is NetworkManager's. Start it with: "
-                    + "systemctl start NetworkManager"
-                ) { EmptyView() }
-            } else if let path = model.editing {
-                ProfileEditor(model: model, path: path)
-            } else {
-                NetworkOverview(model: model, state: state)
+        let editing = model.editing
+        return HStack(flexGrow: 1, alignment: .stretch, spacing: 0) {
+            ScrollView {
+                NetworkColumn {
+                    if model.session == nil {
+                        Text("Loading…", color: Theme.current.textDim)
+                    } else if !state.running {
+                        SettingRow(
+                            "NetworkManager is not running",
+                            "Everything on this page is NetworkManager's. Start it with: "
+                            + "systemctl start NetworkManager"
+                        ) { EmptyView() }
+                    } else {
+                        NetworkOverview(model: model, state: state)
+                    }
+                }
             }
+            .flexGrow(1)
+            .hidden(editing != nil && state.running)
+
+            ScrollView(position: model.editorScroll) {
+                NetworkColumn {
+                    if let editing {
+                        ProfileEditor(model: model, path: editing)
+                    }
+                }
+            }
+            .flexGrow(1)
+            .hidden(editing == nil || !state.running)
+        }
+    }
+}
+
+/// What every settings page is inside its scroll view: the title, then the
+/// page. See `SettingsContent.scrolled`.
+private struct NetworkColumn<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) { self.content = content() }
+
+    var body: some View {
+        VStack(padding: 26, spacing: 22) {
+            Text(SettingsSection.network.title, color: Theme.current.textPrimary)
+            content
+            Spacer()
         }
     }
 }
@@ -374,15 +442,12 @@ private struct ProfileListRow: View {
     let connection: NetConnection
     var isOn: Binding<Bool>?
 
-    @DrawState private var hovered = false
-
     var body: some View {
         HStack(
             padding: 0,
             alignment: .center,
             spacing: 12,
-            onClick: { model.open(connection) },
-            onHover: { hovered = $0 }
+            onClick: { model.open(connection) }
         ) {
             VStack(spacing: 2) {
                 Text(title, color: Theme.current.textPrimary)
@@ -395,10 +460,10 @@ private struct ProfileListRow: View {
             if let isOn {
                 Toggle(isOn: isOn)
             }
-            Text("›", color: Theme.current.textDim)
+            Chevron(pointing: .right, color: Theme.current.textDim)
         }
         .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
-        .background(hovered ? Theme.current.hover : .clear)
+        .hoverBackground(Theme.current.hover)
         .cornerRadius(6)
     }
 }
@@ -415,7 +480,7 @@ private struct ProfileEditor: View {
         let form = model.form
         return VStack(spacing: 18) {
             HStack {
-                ActionButton("‹ All networks") { model.close() }
+                BackButton(title: "All networks") { model.close() }
                 Spacer()
             }
             if let row, let form {
@@ -600,6 +665,50 @@ private struct EditorBody: View {
             ? "A WireGuard tunnel's address is its own; the file it came from names it."
             : "Automatic is right for nearly every network. Manual is for a "
               + "network with no DHCP, or a machine that must keep one address."
+    }
+}
+
+/// "›" and "‹" drawn rather than typed. The font's are a third of the
+/// line's height, and sit on the baseline rather than in the middle of the
+/// row; this is `DisclosureChevron`'s stroke, turned whichever way is asked.
+private struct Chevron: View {
+    enum Direction { case left, right }
+
+    let pointing: Direction
+    var size: Float = 16
+    var color: Color
+
+    var body: some View {
+        let left = pointing == .left
+        let color = color
+        return Canvas(label: "Chevron", width: .pt(size), height: .pt(size)) { list, frame in
+            let cx = frame.x + frame.w * 0.5
+            let cy = frame.y + frame.h * 0.5
+            let arm = min(frame.w, frame.h) * (4.5 / 16.0)
+            // The tip, and the two ends it is drawn back to.
+            let tip = left ? cx - arm * 0.5 : cx + arm * 0.5
+            let back = left ? cx + arm * 0.5 : cx - arm * 0.5
+            list.line(x1: back, y1: cy - arm, x2: tip, y2: cy, color: color, width: 1.75)
+            list.line(x1: tip, y1: cy, x2: back, y2: cy + arm, color: color, width: 1.75)
+        }
+    }
+}
+
+/// `ActionButton` with a drawn chevron in front. The whole pill is the
+/// target: the click is the stack's, padded first so it is one node.
+private struct BackButton: View {
+    let title: String
+    let action: () -> Void
+
+    var body: some View {
+        HStack(padding: 0, alignment: .center, spacing: 4, onClick: action) {
+            Chevron(pointing: .left, color: Theme.current.textPrimary)
+            Text(title, color: Theme.current.textPrimary)
+        }
+        .padding(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 14))
+        .background(Theme.current.selectionFill)
+        .hoverBackground(Theme.current.accent)
+        .cornerRadius(6)
     }
 }
 

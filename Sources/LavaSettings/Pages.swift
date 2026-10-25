@@ -286,8 +286,6 @@ private struct Swatch: View {
     let selected: Bool
     let action: () -> Void
 
-    @DrawState private var hovered = false
-
     var body: some View {
         // The selection ring is an outer box painted the accent colour with
         // the swatch inset into it. There is no border modifier, and a ring
@@ -295,8 +293,7 @@ private struct Swatch: View {
         VStack(
             padding: 3,
             spacing: 0,
-            onClick: action,
-            onHover: { hovered = $0 }
+            onClick: action
         ) {
             VStack(spacing: 0) {
                 Spacer()
@@ -305,10 +302,8 @@ private struct Swatch: View {
             .background(colorOf(color))
             .cornerRadius(5)
         }
-        .background(
-            selected ? Theme.current.accent
-                     : (hovered ? Theme.current.hover : .clear)
-        )
+        .background(selected ? Theme.current.accent : .clear)
+        .hoverBackground(selected ? Theme.current.accent : Theme.current.hover)
         .cornerRadius(8)
     }
 }

@@ -76,14 +76,11 @@ private struct SidebarRow: View {
     let section: DebugSection
     let store: GpuStore
 
-    @DrawState private var hovered = false
-
     var body: some View {
         let selected = store.section == section
         return VStack(
             padding: 0, spacing: 4,
-            onClick: { store.section = section },
-            onHover: { hovered = $0 }
+            onClick: { store.section = section }
         ) {
             Text(section.title,
                  color: selected ? Theme.current.textPrimary
@@ -91,8 +88,8 @@ private struct SidebarRow: View {
             Text(section.subtitle, color: Theme.current.textDim)
         }
         .padding(EdgeInsets(top: 11, leading: 13, bottom: 11, trailing: 13))
-        .background(selected ? Theme.current.selectionFill
-                             : (hovered ? Theme.current.hover : .clear))
+        .background(selected ? Theme.current.selectionFill : .clear)
+        .hoverBackground(selected ? Theme.current.selectionFill : Theme.current.hover)
         .cornerRadius(8)
     }
 }

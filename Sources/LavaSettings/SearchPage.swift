@@ -235,10 +235,8 @@ private struct RootRow: View {
     let root: String
     let detail: String
 
-    @DrawState private var hovered = false
-
     var body: some View {
-        HStack(padding: 0, alignment: .center, spacing: 12, onHover: { hovered = $0 }) {
+        HStack(padding: 0, alignment: .center, spacing: 12) {
             VStack(spacing: 4) {
                 Text(Self.shortened(FindFormat.tilde(root, home: NSHomeDirectory())),
                      color: Theme.current.textPrimary, lineLimit: 1)
@@ -250,7 +248,7 @@ private struct RootRow: View {
             ActionText("Remove") { indexSettings.remove(root) }
         }
         .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
-        .background(hovered ? Theme.current.hover : .clear)
+        .hoverBackground(Theme.current.hover)
         .cornerRadius(6)
     }
 

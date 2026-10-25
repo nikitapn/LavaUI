@@ -1546,7 +1546,10 @@ static gpointer thread_main(gpointer data) {
       g_async_initable_init_async(G_ASYNC_INITABLE(n->agent), G_PRIORITY_DEFAULT, NULL,
                                   on_agent_ready, n);
     }
-    schedule_snapshot(n);
+    // Now, not after the debounce: `nm_client_new` has already loaded the
+    // whole tree, and a caller that opens a page on this snapshot would
+    // otherwise show it empty for those 60 ms. The debounce is for bursts.
+    publish(n);
   }
 
   g_mutex_lock(&n->start_lock);
