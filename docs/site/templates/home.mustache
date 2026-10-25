@@ -1,10 +1,10 @@
 <article class="prose">
-  <h1>LavaUI documentation</h1>
+  <h1>Lava</h1>
   <p class="lead">
-    LavaUI is a declarative UI framework in Swift that draws with Vulkan. Views
-    are written the way SwiftUI writes them; underneath, Yoga lays them out,
-    HarfBuzz shapes the text and one pipeline draws everything, in a window of
-    its own or as a client of the Lava compositor.
+    Lava is a desktop environment for Linux: a Wayland compositor, the shell
+    around it, and the everyday applications, all written with one UI
+    framework of its own, LavaUI. The framework is declarative Swift, shaped
+    like SwiftUI, and it is documented here.
   </p>
 </article>
 
@@ -22,6 +22,32 @@
 </figure>
 
 <article class="prose">
+  <h2>What is in it</h2>
+  <ul>
+    <li>
+      <strong>The compositor.</strong> Windows, workspaces, title bars,
+      shadows and frosted glass, multiple monitors, and fullscreen games
+      handed straight to the display.
+    </li>
+    <li>
+      <strong>The shell.</strong> A panel with the global menu, clock and
+      calendar, network, Bluetooth, sound and media controls, and
+      notifications; a dock, a launcher, an app switcher, a lock screen and
+      Settings.
+    </li>
+    <li>
+      <strong>The applications.</strong> A terminal, a file manager that also
+      reaches FTP and SFTP servers, a text editor, an image viewer, a PDF
+      reader, a video player, a screenshot tool and a password manager.
+    </li>
+  </ul>
+  <p>
+    Each is an ordinary LavaUI app. It lays out and records what to draw, and
+    the compositor draws it on the one GPU, so an app needs no graphics stack
+    of its own. The same app also runs in a window of its own on any other
+    desktop.
+  </p>
+
   <h2>Why this exists</h2>
   <p>
     Writing a native application for Linux is a mess. There are two toolkits
@@ -78,17 +104,17 @@
       whichever browser window happened to be used last, on some other
       workspace. That one annoyed the hell out of me on XFCE.
     </li>
-    <li>
-      <strong>Keybindings borrowed from dwm, hardcoded.</strong> Mod+P opens
-      the launcher, Mod+Return a terminal, Mod+Q closes a window, Mod+1…9
-      switches workspace and Mod+Shift+1…9 sends a window there. The mod is
-      Alt by default, as in dwm, or Super if you prefer — and that is about
-      as far as the configuration goes.
-    </li>
   </ul>
   <p>
     Overall, the desktop does what most people need, nothing more, and does
     it fast.
+  </p>
+
+  <h2>The framework</h2>
+  <p>
+    Views are written the way SwiftUI writes them, and everything underneath
+    belongs to Lava: Yoga for layout, FreeType and HarfBuzz for text, and a
+    renderer in C++ and Vulkan that draws everything in a single pipeline.
   </p>
 
   <h2>Documentation</h2>
