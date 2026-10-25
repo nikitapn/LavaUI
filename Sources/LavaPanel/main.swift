@@ -679,7 +679,7 @@ final class MenuSession {
                 }
             }
         ) {
-            AboutWindow(image: image, font: font)
+            AboutWindow(image: image, font: font).glassEffect(frost: 1)
         }
         aboutWindow = opened
     }
@@ -1006,7 +1006,7 @@ final class MenuSession {
                 }
             }
         ) {
-            CalendarWindow(model: model)
+            CalendarWindow(model: model).glassEffect(frost: 1)
         }
         calendarWindow = opened
     }
@@ -1037,7 +1037,7 @@ final class MenuSession {
                 }
             }
         ) {
-            YearWindow(model: model)
+            YearWindow(model: model).glassEffect(frost: 1)
         }
         yearWindow = opened
     }
@@ -1076,7 +1076,7 @@ final class MenuSession {
                 }
             }
         ) {
-            PlayerWindow(mpris: mpris)
+            PlayerWindow(mpris: mpris).glassEffect(frost: 1)
         }
         playerWindow = opened
     }

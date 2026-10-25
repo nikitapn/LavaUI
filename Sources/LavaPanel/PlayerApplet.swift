@@ -108,7 +108,7 @@ struct PlayerWindow: View {
 
     var body: some View {
         let theme = Theme.current
-        VStack(padding: 4, spacing: 10) {
+        VStack(padding: 4, spacing: 6) {
             HStack(padding: 0, alignment: .center, spacing: 10) {
                 PlayerArt(mpris: mpris, size: 72, radius: 6)
                 VStack(padding: 0, alignment: .start, spacing: 6) {
@@ -132,24 +132,27 @@ struct PlayerWindow: View {
 
             HStack(padding: 0, alignment: .center, spacing: 8) {
                 Spacer()
-                transport("‹‹", enabled: mpris.canGoPrevious, id: "player.prev") {
+                transport(.previous, enabled: mpris.canGoPrevious, id: "player.prev") {
                     mpris.previous()
                 }
                 transport(
-                    mpris.isPlaying ? "❚❚" : "▶",
+                    mpris.isPlaying ? .pause : .play,
                     enabled: mpris.canPlay || mpris.canPause,
                     id: "player.playpause"
                 ) {
                     mpris.playPause()
                 }
-                transport("››", enabled: mpris.canGoNext, id: "player.next") {
+                transport(.next, enabled: mpris.canGoNext, id: "player.next") {
                     mpris.next()
                 }
                 Spacer()
             }
 
             if !mpris.identity.isEmpty {
-                Text(mpris.identity, color: theme.textDim)
+                HStack() {
+                    Spacer()
+                    Text(mpris.identity, color: theme.textDim)
+                }
             }
         }
         .padding(12)
@@ -159,7 +162,7 @@ struct PlayerWindow: View {
     }
 
     private func transport(
-        _ label: String, enabled: Bool, id: String, action: @escaping () -> Void
+        _ kind: TransportMark.Kind, enabled: Bool, id: String, action: @escaping () -> Void
     ) -> some View {
         let theme = Theme.current
         return HStack(
@@ -167,9 +170,9 @@ struct PlayerWindow: View {
             alignment: .center,
             onClick: enabled ? action : nil
         ) {
-            Text(label, color: enabled ? theme.textPrimary : theme.textDim, align: .center)
+            TransportMark(kind, size: 16, color: enabled ? theme.textPrimary : theme.textDim)
         }
-        .padding(EdgeInsets(top: 8, leading: 18, bottom: 8, trailing: 18))
+        .padding(EdgeInsets(top: 10, leading: 18, bottom: 10, trailing: 18))
         .hoverBackground(enabled ? theme.hover : .clear)
         .cornerRadius(6)
         .agentId(id)

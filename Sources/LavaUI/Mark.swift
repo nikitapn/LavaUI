@@ -65,3 +65,64 @@ public struct Mark: View {
         }
     }
 }
+
+/// Media transport symbols — play, pause, previous, next — drawn as filled
+/// shapes, for the same reason `Mark` is not a character: "▶" and "⏮" are
+/// whatever the fallback font made of them, sat on its baseline, at a size
+/// and weight that never match each other, and "❚❚" is two letters.
+///
+/// Geometry rather than a picture: a few triangles and rectangles cost what
+/// a glyph does, need no texture, stay sharp at any scale, and take the
+/// theme's colour as it changes. No input of its own, as `Mark`.
+public struct TransportMark: View {
+    public enum Kind: Sendable {
+        case play
+        case pause
+        /// Back a track: a bar, then a triangle pointing at it.
+        case previous
+        /// Forward a track.
+        case next
+    }
+
+    public var kind: Kind
+    public var size: Float
+    public var color: Color
+
+    public init(_ kind: Kind, size: Float = 16, color: Color = .primary) {
+        self.kind = kind
+        self.size = size
+        self.color = color
+    }
+
+    public var body: some View {
+        let kind = kind
+        let color = color
+        return Canvas(label: "TransportMark", width: .pt(size), height: .pt(size)) { list, frame in
+            let s = min(frame.w, frame.h)
+            let x = frame.x + (frame.w - s) * 0.5
+            let y = frame.y + (frame.h - s) * 0.5
+            func p(_ u: Float, _ v: Float) -> (x: Float, y: Float) { (x + u * s, y + v * s) }
+            switch kind {
+            case .play:
+                // A triangle's weight sits left of its box's centre; nudged
+                // right so it looks centred beside a pause.
+                list.polygon([p(0.24, 0.12), p(0.88, 0.5), p(0.24, 0.88)], color: color)
+            case .pause:
+                let w = s * 0.24
+                let h = s * 0.72
+                list.roundedRect(x: x + s * 0.2, y: y + s * 0.14, w: w, h: h, color: color,
+                                 radius: max(1, s * 0.05))
+                list.roundedRect(x: x + s * 0.56, y: y + s * 0.14, w: w, h: h, color: color,
+                                 radius: max(1, s * 0.05))
+            case .next:
+                list.polygon([p(0.14, 0.16), p(0.68, 0.5), p(0.14, 0.84)], color: color)
+                list.roundedRect(x: x + s * 0.70, y: y + s * 0.16, w: s * 0.14, h: s * 0.68,
+                                 color: color, radius: max(0.75, s * 0.03))
+            case .previous:
+                list.polygon([p(0.86, 0.16), p(0.32, 0.5), p(0.86, 0.84)], color: color)
+                list.roundedRect(x: x + s * 0.16, y: y + s * 0.16, w: s * 0.14, h: s * 0.68,
+                                 color: color, radius: max(0.75, s * 0.03))
+            }
+        }
+    }
+}
