@@ -248,13 +248,52 @@ final class MenuSession {
             menuObjectPath: window.menuObjectPath,
             pid: window.pid
         )
-        refreshModel()
+        // Once now, so the bar sees the importer emptied for the new window.
+        _ = menus?.poll()
+        if window.surfaceId != 0, menus?.model.menus.isEmpty ?? true {
+            awaitMenu(for: window.surfaceId)
+        } else {
+            awaitingMenu = 0
+            refreshModel()
+        }
     }
+
+    /// A window just focused whose menu has not been read yet — the usual
+    /// case for an app that has only just started, which registers its menu
+    /// and is asked for the layout over D-Bus after its window is up.
+    ///
+    /// Showing what the panel has in the meantime is showing the fallback
+    /// (its name over a Quit) and then, a moment later, the real menus: the
+    /// bar blinks on every launch. So the bar stays as it was until the menu
+    /// arrives, and falls back only if none has after `menuGrace` — an app
+    /// that exports nothing pays that much delay on its name, once per focus.
+    private func awaitMenu(for surface: UInt32) {
+        awaitingMenu = surface
+        DispatchQueue.global().asyncAfter(deadline: .now() + Self.menuGrace) {
+            MainQueue.async {
+                guard session.awaitingMenu == surface else { return }
+                session.awaitingMenu = 0
+                session.refreshModel()
+            }
+        }
+    }
+
+    /// The focused surface whose menu the bar is waiting on, or 0.
+    @ObservationIgnored var awaitingMenu: UInt32 = 0
+    static let menuGrace: TimeInterval = 0.4
 
     /// Pumps DBus and publishes a new model when there is one. Menus are
     /// not drawn here, so this no longer grows the panel to hold one.
     func poll() {
-        if menus?.poll() == true { refreshModel() }
+        if menus?.poll() == true {
+            // Still nothing for the window waited on: a change on the way
+            // there, not the menu. Keep waiting.
+            let stillWaiting = awaitingMenu != 0 && (menus?.model.menus.isEmpty ?? true)
+            if !stillWaiting {
+                awaitingMenu = 0
+                refreshModel()
+            }
+        }
         _ = tray?.poll()
         flushPendingMenu()
         syncSurface()
@@ -308,7 +347,7 @@ final class MenuSession {
     /// The system menu (Lava icon) always stays first. A focused window's
     /// titles follow it; a focused window with nothing to export gets an
     /// application menu made up here — its name, over a Quit.
-    private func refreshModel() {
+    func refreshModel() {
         let desktop = Self.desktopMenu(icon: brandIcon)
         if focusedSurface == 0 {
             hasAppMenu = false
@@ -452,6 +491,9 @@ final class MenuSession {
         // not tell libdbusmenu to refetch — `aboutToShow` has already asked
         // for the layout itself and rebuilt the model.
         menus?.aboutToShow(id)
+        // Opened while a launch's menu is still on its way: what is known
+        // now is what a dropdown can honestly show.
+        awaitingMenu = 0
         refreshModel()
         openMenu = id
         closePlayer()
