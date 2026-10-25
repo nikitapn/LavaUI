@@ -10,6 +10,7 @@ enum SettingsSection: String, CaseIterable, Sendable {
     case appearance
     case background
     case keyboard
+    case pointer
     case display
     case network
     case bluetooth
@@ -21,6 +22,7 @@ enum SettingsSection: String, CaseIterable, Sendable {
         case .appearance: return "Appearance"
         case .background: return "Background"
         case .keyboard: return "Keyboard"
+        case .pointer: return "Mouse & Touchpad"
         case .display: return "Display"
         case .network: return "Network"
         case .bluetooth: return "Bluetooth"
@@ -36,6 +38,7 @@ enum SettingsSection: String, CaseIterable, Sendable {
         case .appearance: return "Colours, corners, shadows"
         case .background: return "Picture or colour"
         case .keyboard: return "Layout, repeat, shortcuts"
+        case .pointer: return "Speed, tapping, scrolling"
         case .display: return "Screens, arrangement, primary"
         case .network: return "Wi-Fi, wired, VPN"
         case .bluetooth: return "Devices, pairing, visibility"
@@ -131,6 +134,17 @@ final class SettingsStore {
         var id: String { code }
     }
 
+    // MARK: Mouse & Touchpad
+
+    /// `[mouse]`, `[touchpad]`, `[render] scroll-easing`. See `PointerSettings`.
+    var pointer = PointerSettings(
+        mouseSpeed: 0, mouseAccel: "adaptive", mouseNaturalScroll: false,
+        touchpadSpeed: 0, touchpadAccel: "adaptive", touchpadNaturalScroll: true,
+        tapToClick: true, disableWhileTyping: true, touchpadScroll: "two-finger",
+        touchpadClick: "", scrollEasingMs: 75, hasMouse: false, hasTouchpad: false,
+        scrollEasingOverridden: false
+    )
+
     // MARK: Lock & Screen
 
     /// `[idle]`, in seconds; 0 is never. See `IdleSettings`.
@@ -185,6 +199,9 @@ final class SettingsStore {
 
             bindings = try DesktopSettings.keyBindings()
             if let idle = try? DesktopSettings.idle() { apply(idle) }
+            // Absent from a compositor older than the call; the page then
+            // shows the defaults and a push reports the failure.
+            if let pointer = try? DesktopSettings.pointer() { self.pointer = pointer }
             if let mode = try? DesktopSettings.arrangement() {
                 arrangement = mode
             }
@@ -242,6 +259,22 @@ final class SettingsStore {
             }
         }
         pictures = found
+    }
+
+    // MARK: - Writing mouse & touchpad
+
+    /// Changes one field and pushes the lot, then reads back what was kept:
+    /// a speed past the ends comes back clamped, an unknown method dropped.
+    func setPointer<T>(_ keyPath: WritableKeyPath<PointerSettings, T>, _ value: T) {
+        pointer[keyPath: keyPath] = value
+        guard connected else { return }
+        do {
+            try DesktopSettings.setPointer(pointer)
+            clearStatus()
+        } catch {
+            report(error)
+        }
+        if let taken = try? DesktopSettings.pointer() { pointer = taken }
     }
 
     // MARK: - Writing lock & screen

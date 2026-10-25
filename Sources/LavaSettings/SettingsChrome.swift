@@ -184,6 +184,8 @@ struct SettingsContent: View {
                     BackgroundPage(store: store)
                 case .keyboard:
                     KeyboardPage(store: store)
+                case .pointer:
+                    PointerPage(store: store)
                 case .display:
                     DisplayPage(store: store)
                 case .network, .bluetooth:

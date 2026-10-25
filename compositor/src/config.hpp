@@ -5,6 +5,8 @@
 #include <string_view>
 #include <vector>
 
+#include "pointer_settings.hpp"
+
 /// The compositor's configuration file.
 ///
 /// Everything here is a decision that cannot be made from the code, because it
@@ -281,6 +283,9 @@ struct Config {
   ThemeConfig theme;
   ShellConfig shell;
   IdleConfig idle;
+  /// `[mouse]` and `[touchpad]`: see `PointerConfig`.
+  PointerConfig mouse;
+  PointerConfig touchpad = PointerConfig::touchpadDefaults();
   std::vector<OutputConfig> outputs;
 
   /// Where the file lives: `$LAVA_CONFIG`, else

@@ -2092,6 +2092,52 @@ class CompositorImpl final : public ICompositor_Servant {
 
   void LockSession() override { host_.lockSession(); }
 
+  PointerSettings GetPointer() override {
+    CompositorHost::PointerState state;
+    host_.pointerSettings(state);
+    PointerSettings out{};
+    out.mouseSpeed = static_cast<float>(state.mouse.speed);
+    out.mouseAccel = state.mouse.accel;
+    out.mouseNaturalScroll = state.mouse.naturalScroll;
+    out.touchpadSpeed = static_cast<float>(state.touchpad.speed);
+    out.touchpadAccel = state.touchpad.accel;
+    out.touchpadNaturalScroll = state.touchpad.naturalScroll;
+    out.tapToClick = state.touchpad.tapToClick;
+    out.disableWhileTyping = state.touchpad.disableWhileTyping;
+    out.touchpadScroll = state.touchpad.scroll;
+    out.touchpadClick = state.touchpad.click;
+    out.scrollEasingMs = state.scrollEasingMs;
+    out.hasMouse = state.hasMouse;
+    out.hasTouchpad = state.hasTouchpad;
+    out.scrollEasingOverridden = state.scrollEasingOverridden;
+    return out;
+  }
+
+  void SetPointer(flat::PointerSettings_Direct settings) override {
+    CompositorHost::PointerState state;
+    // Through the parser, so a value the file could not hold is clamped or
+    // dropped the same way here as there.
+    auto set = [](lava::PointerConfig &c, const char *key, std::string value) {
+      lava::parsePointerKey(c, key, value);
+    };
+    state.mouse.speed = std::clamp(static_cast<double>(settings.mouseSpeed()), -1.0, 1.0);
+    set(state.mouse, "acceleration", std::string{settings.mouseAccel()});
+    state.mouse.naturalScroll = static_cast<bool>(settings.mouseNaturalScroll());
+    state.touchpad.speed =
+        std::clamp(static_cast<double>(settings.touchpadSpeed()), -1.0, 1.0);
+    set(state.touchpad, "acceleration", std::string{settings.touchpadAccel()});
+    state.touchpad.naturalScroll = static_cast<bool>(settings.touchpadNaturalScroll());
+    state.touchpad.tapToClick = static_cast<bool>(settings.tapToClick());
+    state.touchpad.disableWhileTyping = static_cast<bool>(settings.disableWhileTyping());
+    set(state.touchpad, "scroll", std::string{settings.touchpadScroll()});
+    set(state.touchpad, "click", std::string{settings.touchpadClick()});
+    state.scrollEasingMs = std::clamp<int32_t>(settings.scrollEasingMs(), 0, 2000);
+
+    std::string error;
+    host_.setPointerSettings(state, error);
+    if (!error.empty()) throw SettingsWriteFailed(host_.configPath(), error);
+  }
+
   nprpc::Task<> SubscribeLock(
       uint32_t surfaceId,
       nprpc::BidiStream<LockAttempt, LockState> stream) override {

@@ -223,6 +223,8 @@ compositor = executable(
   'src/focus_history.cpp',
   'src/uri_list.cpp',
   'src/png_file.cpp',
+  'src/pointer_config.cpp',
+  'src/pointer_settings.cpp',
   lava_idl_sources,
   protocol_headers,
   protocol_sources,
@@ -255,6 +257,10 @@ compositor = executable(
     # screen — see `lock_auth.hpp`. Linux-PAM ships no pkg-config file on
     # every distribution, so it is found as a library.
     pam_dep,
+    # Pointer speed, tapping, natural scrolling: `[mouse]` / `[touchpad]`
+    # are libinput's per-device settings. wlroots' libinput backend already
+    # needs it; the calls here are ours to link.
+    dependency('libinput', required: false),
   ],
   # wlroots guards every header behind this. It is not opt-in extra features:
   # without it `wlr/backend.h` is a hard #error, so nothing compiles at all.
@@ -317,3 +323,12 @@ uri_list_test = executable(
   build_by_default: false,
 )
 test('uri list', uri_list_test)
+
+# Headless: `[mouse]` / `[touchpad]` parsing is string work.
+pointer_settings_test = executable(
+  'pointer_settings_test',
+  ['tests/pointer_settings_test.cpp', 'src/pointer_settings.cpp'],
+  include_directories: include_directories('src'),
+  build_by_default: false,
+)
+test('pointer settings', pointer_settings_test)

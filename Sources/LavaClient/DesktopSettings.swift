@@ -62,6 +62,16 @@ public enum DesktopSettings {
         try call { try await $0.setIdle(idle: idle) }
     }
 
+    /// The mouse, the touchpad, and how a scroll settles.
+    public static func pointer() throws -> PointerSettings {
+        try call { try await $0.getPointer() }
+    }
+
+    /// Applies to every pointer now and to ones plugged in later, and saves.
+    public static func setPointer(_ settings: PointerSettings) throws {
+        try call { try await $0.setPointer(settings: settings) }
+    }
+
     /// Locks the session now, as Mod+L does.
     public static func lockSession() throws {
         try call { try await $0.lockSession() }

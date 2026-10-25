@@ -57,6 +57,7 @@
 #include "lock_auth.hpp"
 #include "logind.hpp"
 #include "window_memory.hpp"
+#include "pointer_config.hpp"
 #include "wlr.hpp"
 
 extern "C" {
@@ -1019,6 +1020,20 @@ struct Keyboard {
   static void on_destroy(wl_listener *listener, void *data);
 };
 
+/// A pointer device, kept so a settings change can reach the ones already
+/// plugged in. The cursor needs no list — wlroots keeps that — but libinput's
+/// settings are per device, and wlroots hands each device over exactly once.
+struct PointerDevice {
+  Server *server;
+  wlr_input_device *device;
+  Listener<PointerDevice> destroy;
+
+  PointerDevice(Server *server, wlr_input_device *device);
+  ~PointerDevice();
+
+  static void on_destroy(wl_listener *listener, void *data);
+};
+
 // ─── Input method relay ────────────────────────────────────────────────────
 
 struct InputMethodRelay;
@@ -1211,6 +1226,8 @@ struct Server {
   /// Kept here because `wlr_seat` does not expose one, and seat capabilities
   /// have to be recomputed whenever a keyboard comes or goes.
   std::list<Keyboard *> keyboards;
+  /// Every pointer, for `[mouse]` / `[touchpad]` changes.
+  std::list<PointerDevice *> pointers;
   /// Every screen, so a config reload can re-apply itself to all of them.
   std::list<Output *> outputs;
 
@@ -5927,6 +5944,53 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   void lockSession() override {
     if (server_ != nullptr) server_->lockSession("requested");
+  }
+
+  void pointerSettings(PointerState &out) const override {
+    if (server_ == nullptr) return;
+    out.mouse = server_->config.mouse;
+    out.touchpad = server_->config.touchpad;
+    out.scrollEasingMs = server_->config.render.scrollEasingMs;
+    for (const PointerDevice *pointer : server_->pointers) {
+      if (!lava::isConfigurable(pointer->device)) continue;
+      (lava::isTouchpad(pointer->device) ? out.hasTouchpad : out.hasMouse) = true;
+    }
+    const char *override = std::getenv("LAVA_SCROLL_EASING");
+    out.scrollEasingOverridden = override != nullptr && *override != '\0';
+  }
+
+  void setPointerSettings(const PointerState &settings,
+                          std::string &outError) override {
+    if (server_ == nullptr) return;
+    lava::Config &config = server_->config;
+    config.mouse = settings.mouse;
+    config.touchpad = settings.touchpad;
+    for (PointerDevice *pointer : server_->pointers) {
+      lava::applyPointerConfig(pointer->device, config.mouse, config.touchpad);
+    }
+    // Every other setting on the page arrives with this one unchanged.
+    if (config.render.scrollEasingMs != settings.scrollEasingMs) {
+      config.render.scrollEasingMs = settings.scrollEasingMs;
+      lava::CanvasRenderer::setScrollEasing(config.render.scrollEasingMs);
+    }
+
+    auto onOff = [](bool on) { return std::string(on ? "on" : "off"); };
+    const lava::PointerConfig &m = config.mouse;
+    const lava::PointerConfig &t = config.touchpad;
+    save({{"mouse", "speed", lava::formatSpeed(m.speed)},
+          {"mouse", "acceleration", m.accel},
+          {"mouse", "natural-scroll", onOff(m.naturalScroll)},
+          {"touchpad", "speed", lava::formatSpeed(t.speed)},
+          {"touchpad", "acceleration", t.accel},
+          {"touchpad", "natural-scroll", onOff(t.naturalScroll)},
+          {"touchpad", "tap-to-click", onOff(t.tapToClick)},
+          {"touchpad", "disable-while-typing", onOff(t.disableWhileTyping)},
+          {"touchpad", "scroll", t.scroll},
+          {"touchpad", "click", t.click.empty() ? "default" : t.click},
+          {"render", "scroll-easing",
+           config.render.scrollEasingMs == 0 ? "off"
+                                             : std::to_string(config.render.scrollEasingMs)}},
+         outError);
   }
 
   /// Seconds as `lava.conf` spells them for a person: `off`, `10m`, `90s`.
@@ -11206,6 +11270,23 @@ void Keyboard::on_key(wl_listener *listener, void *data) {
                                event->state);
 }
 
+PointerDevice::PointerDevice(Server *server, wlr_input_device *device)
+    : server(server), device(device) {
+  lava::applyPointerConfig(device, server->config.mouse, server->config.touchpad);
+  destroy.attach(&device->events.destroy, this, on_destroy);
+  server->pointers.push_back(this);
+  if (lava::isConfigurable(device)) {
+    wlr_log(WLR_INFO, "input: %s '%s'", lava::isTouchpad(device) ? "touchpad" : "mouse",
+            device->name ? device->name : "");
+  }
+}
+
+PointerDevice::~PointerDevice() { server->pointers.remove(this); }
+
+void PointerDevice::on_destroy(wl_listener *listener, void *) {
+  delete owner_of<PointerDevice>(listener);
+}
+
 void Keyboard::on_destroy(wl_listener *listener, void *) {
   auto *keyboard = owner_of<Keyboard>(listener);
   Server *server = keyboard->server;
@@ -11706,6 +11787,7 @@ void Server::on_new_input(wl_listener *listener, void *data) {
     // The cursor merges every pointer into one position, so two mice move the
     // same arrow rather than fighting over it.
     wlr_cursor_attach_input_device(server->cursor, device);
+    new PointerDevice(server, device);
     break;
   default:
     break;
@@ -12312,6 +12394,9 @@ void Server::reloadConfig() {
     // Every client is sent the new keymap by wlroots as a side effect, so a
     // layout change reaches applications that are already running.
     keyboard->applyKeymap(config.keyboard);
+  }
+  for (PointerDevice *pointer : pointers) {
+    lava::applyPointerConfig(pointer->device, config.mouse, config.touchpad);
   }
   // Corners are the one appearance setting that can be re-applied while
   // running: it is a number the renderer reads per frame, so every window on

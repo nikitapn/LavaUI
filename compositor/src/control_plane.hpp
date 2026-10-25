@@ -1,5 +1,6 @@
 #pragma once
 
+#include "pointer_settings.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -623,6 +624,21 @@ struct CompositorHost {
                           std::string &outError) = 0;
   /// Locks the session, as Mod+L does.
   virtual void lockSession() = 0;
+
+  /// `[mouse]`, `[touchpad]` and `[render] scroll-easing`. See
+  /// `PointerSettings` in the IDL.
+  struct PointerState {
+    lava::PointerConfig mouse;
+    lava::PointerConfig touchpad;
+    int32_t scrollEasingMs = 75;
+    bool hasMouse = false;
+    bool hasTouchpad = false;
+    bool scrollEasingOverridden = false;
+  };
+  virtual void pointerSettings(PointerState &out) const = 0;
+  /// Applies to every pointer, then saves. `outError` is a failed save.
+  virtual void setPointerSettings(const PointerState &settings,
+                                  std::string &outError) = 0;
 };
 
 /// What the lock screen is told. `LockState` in the IDL; `status` is a

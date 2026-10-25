@@ -204,6 +204,29 @@ layout = us
 # key rather than the one in force.
 # mod-key = alt
 
+[mouse]
+# libinput's settings, per kind of pointer; Settings → Mouse & Touchpad writes
+# them. Applied to every device as it is plugged in, and again on SIGHUP. A
+# nested or headless session has no libinput devices, so they do nothing there.
+# Speed is libinput's own scale, -1 (slowest) to 1 (fastest), 0 its default.
+# speed = 0.00
+# adaptive (faster hand, further pointer) or flat (one ratio: games, trackballs)
+# acceleration = adaptive
+# natural-scroll = off
+
+[touchpad]
+# speed = 0.00
+# acceleration = adaptive
+# natural-scroll = on
+# tap-to-click = on
+# A moment's deafness after a key, so a palm does not move the pointer.
+# disable-while-typing = on
+# two-finger, edge or off
+# scroll = two-finger
+# Pressing the pad: areas (bottom corners are the buttons), fingers (one, two,
+# three fingers are left, right, middle), or default (the pad's own).
+# click = default
+
 [render]
 # Multisampling for every surface the compositor draws: 1, 2, 4 (default) or 8,
 # clamped to what the GPU supports. A memory setting as much as a quality one —

@@ -1113,6 +1113,42 @@ message IdleSettings {
   lockOnSuspend: boolean;
 }
 
+/// `[mouse]` and `[touchpad]` in `lava.conf`, and `[render] scroll-easing`:
+/// how the pointer moves and how a scroll feels.
+///
+/// The mouse and touchpad halves are the same settings twice because people
+/// want them different — a natural-scrolling touchpad beside a wheel that
+/// scrolls the old way is the common case — and libinput keeps them per
+/// device anyway. Settings a kind of device cannot have (a mouse taps on
+/// nothing) are sent and stored all the same, and simply not applied.
+message PointerSettings {
+  /// libinput's scale, -1 (slowest) … 1 (fastest); 0 is its default.
+  mouseSpeed: f32;
+  /// "adaptive" or "flat".
+  mouseAccel: string;
+  mouseNaturalScroll: boolean;
+  touchpadSpeed: f32;
+  touchpadAccel: string;
+  touchpadNaturalScroll: boolean;
+  tapToClick: boolean;
+  disableWhileTyping: boolean;
+  /// "two-finger", "edge" or "off".
+  touchpadScroll: string;
+  /// "areas", "fingers", or "" for the pad's own default.
+  touchpadClick: string;
+  /// How long a wheel scroll takes to settle, in ms; 0 is none, each notch
+  /// landing in one frame.
+  scrollEasingMs: i32;
+  /// Read-only, ignored by `SetPointer`. What is plugged in now, through
+  /// libinput: a nested or headless session has neither, whatever is on the
+  /// desk.
+  hasMouse: boolean;
+  hasTouchpad: boolean;
+  /// Read-only: `LAVA_SCROLL_EASING` is set in the compositor's environment
+  /// and wins over `scrollEasingMs`, which is still saved.
+  scrollEasingOverridden: boolean;
+}
+
 /// `CreateLockSurface` was refused: the session is not locked, or the caller
 /// is not the lock screen the compositor started for this lock.
 exception LockRefused {
@@ -2536,6 +2572,16 @@ interface Compositor {
   /// Last in the interface, for the reason `SetBackdropRefraction` gives.
   void SetBackdropFrost(surfaceId: in u32, frost: in f32)
       raises(SurfaceNotFound);
+
+  /// The mouse and the touchpad as libinput is set up now, and how a wheel
+  /// scroll settles. See `PointerSettings`.
+  ///
+  /// Last in the interface, for the reason `SetBackdropRefraction` gives.
+  PointerSettings GetPointer();
+
+  /// Applies to every pointer plugged in and every one plugged in later,
+  /// then saves to `[mouse]`, `[touchpad]` and `[render] scroll-easing`.
+  void SetPointer(settings: in PointerSettings) raises(SettingsWriteFailed);
 }
 
 /// Image registration that does not stop the desktop.

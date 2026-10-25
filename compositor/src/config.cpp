@@ -421,6 +421,10 @@ Config Config::load(const std::string &path) {
       } else {
         known = false;
       }
+    } else if (section == "mouse") {
+      known = parsePointerKey(config.mouse, key, value);
+    } else if (section == "touchpad") {
+      known = parsePointerKey(config.touchpad, key, value);
     } else if (section == "idle") {
       if (key == "lock" || key == "lock-after") {
         const auto seconds = parseDuration(value);
