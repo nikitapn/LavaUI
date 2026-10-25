@@ -248,9 +248,14 @@ final class ExplorerSession: @unchecked Sendable {
             tabs.open(path: path, source: source)
         }
         if !paths.isEmpty { tabs.select(id: 1) }
-        if chooser == nil, paths.isEmpty,
+        if chooser == nil,
            let saved = initialProfiles.selected.workspace,
-           let restored = PaneLayout(workspace: saved, source: source) {
+           var restored = PaneLayout(workspace: saved, source: source) {
+            // A folder asked for on the command line — the panel's Go menu,
+            // a file manager's "open folder" — joins the saved tabs rather
+            // than replacing them. Replaced, they were gone for good the
+            // moment this window closed and saved over them.
+            for path in paths { Self.show(path, in: &restored, source: source) }
             self.layout = restored
         } else {
             self.layout = PaneLayout(tabs: tabs)
@@ -780,6 +785,25 @@ final class ExplorerSession: @unchecked Sendable {
         dismissContext()
         layout.selectTab(id)
         ViewInvalidation.markDirty()
+    }
+
+    /// A folder handed over by a second launch (`ExplorerInstance`): shown
+    /// here, in a tab of its own unless one already shows it.
+    func showHandedOver(_ paths: [String]) {
+        dismissContext()
+        for path in paths { Self.show(path, in: &layout, source: source) }
+        syncWatches()
+        ViewInvalidation.markDirty()
+    }
+
+    /// Selects a tab of the active pane that shows `path`, or opens one.
+    static func show(_ path: String, in layout: inout PaneLayout, source: any FileSource) {
+        let wanted = FolderHistory.normalize(path)
+        if let tab = layout.activeTabs.tabs.first(where: { $0.history.path == wanted }) {
+            layout.activeTabs.select(id: tab.id)
+        } else {
+            layout.openTab(path: wanted, source: source)
+        }
     }
 
     func newTab(path: String? = nil) {

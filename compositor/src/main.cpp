@@ -5946,6 +5946,14 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (server_ != nullptr) server_->lockSession("requested");
   }
 
+  void switchWorkspace(uint32_t index) override {
+    if (server_ != nullptr) server_->switchWorkspace(index);
+  }
+
+  void toggleShowDesktop() override {
+    if (server_ != nullptr) server_->toggleShowDesktop();
+  }
+
   void pointerSettings(PointerState &out) const override {
     if (server_ == nullptr) return;
     out.mouse = server_->config.mouse;

@@ -119,6 +119,14 @@ public enum LavaHost {
         #endif
     }
 
+    /// Brings the window to the front and focuses it, as a click on its
+    /// dock entry would. Client mode only: a windowed app is the toolkit's.
+    public static func raise() {
+        #if LAVA_HAS_CLIENT
+        if isClient { LavaClient.raise() }
+        #endif
+    }
+
     /// Give that frost the grain of frosted glass, 0…1; 0 is none and the
     /// default. Client mode only, like the frost itself.
     public static func setBackdropFrost(_ frost: Float) {

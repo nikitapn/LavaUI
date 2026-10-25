@@ -42,6 +42,13 @@ store.loadCore()
 // The index is another daemon, asked separately; its page works (as a file
 // editor) even when that daemon is not running.
 indexSettings.load()
+// `--section background`: the panel's "Change Background…" and the like open
+// on the page they are about. The names are `SettingsSection`'s raw values.
+if let i = CommandLine.arguments.firstIndex(of: "--section"),
+   i + 1 < CommandLine.arguments.count,
+   let section = SettingsSection(rawValue: CommandLine.arguments[i + 1]) {
+    show(section, store: store)
+}
 
 LavaClient.run(editor: editor) { SettingsWindow(store: store) }
 

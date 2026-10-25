@@ -854,6 +854,12 @@ public enum LavaClient {
 
     /// Brings a window forward: restores, raises and focuses it in one go.
     /// What a dock icon does when it is clicked.
+    /// Brings this app's own window to the front and focuses it — for a
+    /// single-instance app asked by a second launch to show something.
+    public static func raise() {
+        activateWindow(surfaceID)
+    }
+
     public static func activateWindow(_ surfaceId: UInt32) {
         guard let compositor = Self.compositor else { return }
         report("ActivateWindow") {
@@ -895,6 +901,22 @@ public enum LavaClient {
             try blockingCall {
                 try await compositor.centerWindow(surfaceId: surfaceId)
             }
+        }
+    }
+
+    /// Shows workspace `index` (0-based), as Mod+1…9 does.
+    public static func switchWorkspace(_ index: UInt32) {
+        guard let compositor = Self.compositor else { return }
+        report("SwitchWorkspace") {
+            try blockingCall { try await compositor.switchWorkspace(index: index) }
+        }
+    }
+
+    /// Hides every window, or brings them back, as Mod+D does.
+    public static func toggleShowDesktop() {
+        guard let compositor = Self.compositor else { return }
+        report("ToggleShowDesktop") {
+            try blockingCall { try await compositor.toggleShowDesktop() }
         }
     }
 

@@ -2092,6 +2092,10 @@ class CompositorImpl final : public ICompositor_Servant {
 
   void LockSession() override { host_.lockSession(); }
 
+  void SwitchWorkspace(uint32_t index) override { host_.switchWorkspace(index); }
+
+  void ToggleShowDesktop() override { host_.toggleShowDesktop(); }
+
   PointerSettings GetPointer() override {
     CompositorHost::PointerState state;
     host_.pointerSettings(state);

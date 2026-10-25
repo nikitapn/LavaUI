@@ -221,7 +221,7 @@ final class MenuSession {
         self.brandIcon = MenuIcon(size: 18, path: brandIcon.path)
         menus = PanelMenu(editor: editor)
         // Start on the desktop menu: nothing is focused yet.
-        model = Self.desktopMenu(icon: self.brandIcon)
+        model = emptyBar()
     }
 
     /// Called on the frame loop when the compositor's focus changes.
@@ -300,7 +300,31 @@ final class MenuSession {
     }
 
     func activate(_ id: MenuID) {
+        if id.raw.hasPrefix(DesktopMenus.goPrefix) {
+            closeMenu()
+            let path = String(id.raw.dropFirst(DesktopMenus.goPrefix.count))
+            launchDesktopProgram("LavaExplorer", arguments: [path])
+            return
+        }
+        if id.raw.hasPrefix(DesktopMenus.workspacePrefix),
+           let index = UInt32(id.raw.dropFirst(DesktopMenus.workspacePrefix.count)) {
+            closeMenu()
+            LavaClient.switchWorkspace(index)
+            return
+        }
         switch id {
+        case DesktopMenus.showDesktop:
+            closeMenu()
+            LavaClient.toggleShowDesktop()
+        case DesktopMenus.background:
+            closeMenu()
+            launchDesktopProgram("LavaSettings", arguments: ["--section", "background"])
+        case DesktopMenus.displays:
+            closeMenu()
+            launchDesktopProgram("LavaSettings", arguments: ["--section", "display"])
+        case DesktopMenus.shortcuts:
+            closeMenu()
+            openShortcuts()
         case DesktopMenuID.about:
             openAbout()
         case DesktopMenuID.settings:
@@ -351,7 +375,7 @@ final class MenuSession {
         let desktop = Self.desktopMenu(icon: brandIcon)
         if focusedSurface == 0 {
             hasAppMenu = false
-            model = desktop
+            model = emptyBar()
             return
         }
         var imported = menus?.model ?? MenuModel()
@@ -474,6 +498,68 @@ final class MenuSession {
     }
 
     @ObservationIgnored var brandIcon: MenuIcon?
+
+    // ─── The bar with nothing focused ────────────────────────────────────
+
+    /// Which workspace is on screen and what is on each, for the Workspaces
+    /// menu. From `SubscribeWindows`, the dock's own feed.
+    @ObservationIgnored var workspaces = DesktopMenus.Workspaces()
+    /// The compositor's shortcut modifier, for the shortcuts beside each
+    /// workspace. Read at startup; the next panel start shows a change.
+    @ObservationIgnored var modKey = "alt"
+    @ObservationIgnored var shortcutsWindow: WindowID?
+
+    /// The Lava menu, then the desktop's own.
+    func emptyBar() -> MenuModel {
+        MenuModel(
+            menus: Self.desktopMenu(icon: brandIcon).menus
+                + DesktopMenus.menus(workspaces: workspaces, modKey: modKey)
+        )
+    }
+
+    func refreshDesktopBar() {
+        if focusedSurface == 0 { refreshModel() }
+    }
+
+    func setWorkspaces(_ current: UInt32, _ windows: [WindowInfo]) {
+        let next = DesktopMenus.Workspaces(current: current, windows: DesktopMenus.counts(windows))
+        guard next != workspaces else { return }
+        workspaces = next
+        // The empty bar is the only one that shows them. A dropdown already
+        // open keeps the rows it was drawn with until it is opened again.
+        if focusedSurface == 0 { refreshModel() }
+    }
+
+    /// Help → Keyboard Shortcuts: a card under the Help title, like the
+    /// calendar under the clock. A window had a title bar and a maximize
+    /// button for a list that is read and dismissed; this goes away with a
+    /// click anywhere else.
+    func openShortcuts() {
+        if let id = shortcutsWindow, LavaApp.isWindowOpen(id) { return }
+        let bindings = (try? DesktopSettings.keyBindings()) ?? []
+        let panelW = editor?.framebufferSize().w ?? 1280
+        let anchor = LavaApp.SurfaceAnchor(
+            x: max(8, (panelW - ShortcutsWindow.width) / 2),
+            y: 0,
+            w: ShortcutsWindow.width,
+            h: Self.stripHeight
+        )
+        var opened: WindowID?
+        opened = LavaApp.openPopup(
+            title: "Keyboard Shortcuts",
+            width: ShortcutsWindow.width,
+            height: ShortcutsWindow.height(bindings.count),
+            anchor: anchor,
+            backdropBlur: PanelChrome.popupBlurRadius,
+            refraction: PanelChrome.popupRefraction,
+            onClose: {
+                if let id = opened, session.shortcutsWindow == id { session.shortcutsWindow = nil }
+            }
+        ) {
+            ShortcutsWindow(bindings: bindings).glassEffect(frost: 1)
+        }
+        shortcutsWindow = opened
+    }
 
     // ─── Menus the compositor draws ──────────────────────────────────────
     //
@@ -1524,7 +1610,7 @@ struct LogoutWindow: View {
 /// Starts a sibling desktop program the way the compositor starts the
 /// panel: look beside this binary first (tree build / installed layout),
 /// then fall through to PATH.
-func launchDesktopProgram(_ name: String) {
+func launchDesktopProgram(_ name: String, arguments: [String] = []) {
     let candidates: [String] = {
         var paths: [String] = []
         let args = CommandLine.arguments
@@ -1550,10 +1636,11 @@ func launchDesktopProgram(_ name: String) {
                 continue
             }
             process.executableURL = url
+            process.arguments = arguments
         } else {
             // Let the shell resolve PATH for a bare name.
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = [path]
+            process.arguments = [path] + arguments
         }
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
@@ -1675,6 +1762,15 @@ notifications = Notifications(editor: editor)
 
 // Focus, from the compositor. Delivered on the frame loop, so touching
 // observable state from it is the same as touching it from a click handler.
+// Workspaces for the empty bar's menu. The first answer is the state now.
+LavaClient.onWindowList { current, windows in
+    session.setWorkspaces(current, windows)
+}
+if let keyboard = try? DesktopSettings.keyboard() {
+    session.modKey = keyboard.modKey == "super" ? "super" : "alt"
+    session.refreshDesktopBar()
+}
+
 LavaClient.onActiveWindow { window in
     session.focus(window)
 }

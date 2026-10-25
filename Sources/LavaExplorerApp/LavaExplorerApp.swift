@@ -21,6 +21,10 @@ struct LavaExplorerApp {
     static func main() {
         AppSettings.configure(appName: "LavaExplorer")
         let chooser = ChooserRequest.parse(Array(CommandLine.arguments.dropFirst()))
+        let paths = Array(CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") })
+        // A folder for the explorer already open: it becomes a tab there, and
+        // this process has nothing left to do. See `ExplorerInstance`.
+        if chooser == nil, ExplorerInstance.handOff(paths) { exit(0) }
 
         // A picker is a dialog: a little smaller, named for what it asks, and
         // opened as a dialog of the window that asked — so the compositor
@@ -38,11 +42,18 @@ struct LavaExplorerApp {
         )
         Theme.current = .nebula
 
-        let paths = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
         let session = ExplorerSession(
-            paths: Array(paths),
+            paths: paths,
             chooser: chooser
         )
+        // Not for a picker: it is a dialog of somebody else's, and gone the
+        // moment it is answered.
+        if chooser == nil {
+            ExplorerInstance.listen { handed in
+                session.showHandedOver(handed)
+                LavaHost.raise()
+            }
+        }
         // Closing the last tab of a picker is Cancel, not a window left open
         // with nothing in it.
         session.requestClose = chooser == nil

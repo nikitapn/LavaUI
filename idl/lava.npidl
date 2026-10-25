@@ -2582,6 +2582,15 @@ interface Compositor {
   /// Applies to every pointer plugged in and every one plugged in later,
   /// then saves to `[mouse]`, `[touchpad]` and `[render] scroll-easing`.
   void SetPointer(settings: in PointerSettings) raises(SettingsWriteFailed);
+
+  /// Shows workspace `index`, 0-based, as Mod+1…9 does. Out of range, or
+  /// the one already on screen, does nothing. For the panel's Workspaces
+  /// menu; last in the interface, for the reason `SetBackdropRefraction`
+  /// gives.
+  void SwitchWorkspace(index: in u32);
+
+  /// Hides every window, or brings them back, as Mod+D does.
+  void ToggleShowDesktop();
 }
 
 /// Image registration that does not stop the desktop.

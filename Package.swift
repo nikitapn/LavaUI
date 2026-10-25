@@ -323,7 +323,7 @@ var targets: [Target] = [
     .executableTarget(
         name: "LavaPanel",
         dependencies: ["LavaUI", "CPulse", "LavaMpris", "LavaShell", "LavaNetwork", "LavaNetworkCore",
-                       "LavaBluetooth", "LavaBluetoothCore"]
+                       "LavaBluetooth", "LavaBluetoothCore", "LavaExplorerCore"]
             + (haveNprpc ? [Target.Dependency("LavaClient"),
                             Target.Dependency("LavaIDL")] : []),
         resources: [

@@ -67,6 +67,31 @@ struct SettingsSidebar: View {
     }
 }
 
+/// Goes to `section`: the sidebar's click, and `--section` at startup.
+func show(_ section: SettingsSection, store: SettingsStore) {
+    // A search runs for the page that started it, not for whichever page
+    // is looked at next.
+    if section != .bluetooth { bluetoothSettings.leave() }
+    // Shown when its data is in, not a frame before: see
+    // `NetworkSettings.start`.
+    if section == .network {
+        networkSettings.start { store.section = .network }
+        return
+    }
+    if section == .bluetooth {
+        bluetoothSettings.start { store.section = .bluetooth }
+        return
+    }
+    store.section = section
+    // The layout catalogue is a parse of the xkb rules on the compositor's
+    // loop. Paid for on the way into the page that needs it, rather than at
+    // startup for a page nobody may open — and here rather than in that
+    // page's `body`, which must not be the thing that changes what it is
+    // drawing.
+    if section == .keyboard { store.ensureLayouts() }
+    if section == .background { store.ensurePictures() }
+}
+
 private struct SidebarRow: View {
     let section: SettingsSection
     let store: SettingsStore
@@ -76,29 +101,7 @@ private struct SidebarRow: View {
         return VStack(
             padding: 0,
             spacing: 4,
-            onClick: {
-                // A search runs for the page that started it, not for
-                // whichever page is looked at next.
-                if section != .bluetooth { bluetoothSettings.leave() }
-                // Shown when its data is in, not a frame before: see
-                // `NetworkSettings.start`.
-                if section == .network {
-                    networkSettings.start { store.section = .network }
-                    return
-                }
-                if section == .bluetooth {
-                    bluetoothSettings.start { store.section = .bluetooth }
-                    return
-                }
-                store.section = section
-                // The layout catalogue is a parse of the xkb rules on the
-                // compositor's loop. Paid for on the way into the page that
-                // needs it, rather than at startup for a page nobody may
-                // open — and here rather than in that page's `body`, which
-                // must not be the thing that changes what it is drawing.
-                if section == .keyboard { store.ensureLayouts() }
-                if section == .background { store.ensurePictures() }
-            }
+            onClick: { show(section, store: store) }
         ) {
             Text(section.title,
                  color: selected ? Theme.current.textPrimary

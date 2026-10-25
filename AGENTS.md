@@ -1340,6 +1340,7 @@ so headless test runs skip it too.
 | Window position / maximize restore | `compositor/src/window_memory.*`, `SurfaceRegistry::applyInitialPlacement` |
 | Popups (a client's own) | `Server::on_new_popup`, `Popup::on_commit`, `Server::popupBounds` |
 | The desktop's context menu | `Server::openContextMenu` / `applyMenuChoice` (what is on it, what it does), `Sources/LavaContextMenu/` (drawing), IDL `SubscribeMenu` |
+| The bar with nothing focused (Desktop, Go, Workspaces, Help) | `Sources/LavaPanel/DesktopMenus.swift`; places are `Places.standard` from LavaExplorerCore, opened by launching `LavaExplorer <path>`; workspaces from `SubscribeWindows`, switched with `SwitchWorkspace`; Show Desktop is `ToggleShowDesktop`; "Change Background…" is `LavaSettings --section background` |
 | The panel's Window menu (any focused window) | `MenuSession.windowMenu` in `Sources/LavaPanel/main.swift`, `SurfaceRegistry::centerWindow` / `closeWindow` |
 | Always on top / overlay stacking | `ClientSurface::StackRank`, `SurfaceRegistry::setAlwaysOnTop`, `restackRanked` |
 | Which pixels of a surface take input | `point_accepts_input` hooks, `ClientSurface::acceptsInput`, `SetInputRegion` |

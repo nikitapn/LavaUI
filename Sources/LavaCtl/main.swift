@@ -19,7 +19,8 @@ let usage = """
 usage: lavactl <command>
 
   windows                  every window: id, workspace, focused, app id, title
-  workspace                the workspace on screen right now
+  workspace [n]            the workspace on screen right now, or show n (from 0)
+  desktop                  hide every window, or bring them back (Mod+D)
   activate <id>            restore, raise and focus a window by surface id
   minimize <id>            put one window away by surface id
   pin <id> on|off          keep a window above the rest of its workspace, or stop
@@ -65,7 +66,16 @@ case "windows":
     }
 
 case "workspace":
-    print(snapshot().workspace)
+    // `workspace N` shows N, counted as this prints it and `windows` lists
+    // it: from 0, so Mod+1 is 0.
+    if args.count > 1, let n = UInt32(args[1]) {
+        LavaClient.switchWorkspace(n)
+    } else {
+        print(snapshot().workspace)
+    }
+
+case "desktop":
+    LavaClient.toggleShowDesktop()
 
 case "keyboard":
     // What the compositor believes, which is not always what lava.conf says:

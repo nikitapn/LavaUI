@@ -639,6 +639,10 @@ struct CompositorHost {
   /// Applies to every pointer, then saves. `outError` is a failed save.
   virtual void setPointerSettings(const PointerState &settings,
                                   std::string &outError) = 0;
+
+  /// The workspace keys and Mod+D, for the panel's desktop menus.
+  virtual void switchWorkspace(uint32_t index) = 0;
+  virtual void toggleShowDesktop() = 0;
 };
 
 /// What the lock screen is told. `LockState` in the IDL; `status` is a
