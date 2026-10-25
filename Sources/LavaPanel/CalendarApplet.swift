@@ -1,5 +1,6 @@
 import Foundation
 import LavaUI
+import Observation
 
 /// Clock label. The month grid is a popup of its own — the strip is 32pt,
 /// and a calendar does not fit there.
@@ -21,8 +22,23 @@ struct CalendarApplet: View {
     }
 }
 
-/// The month grid. A fresh window each time it opens, so the page starts
-/// on today — paging only lasts as long as the popup does.
+/// Which month the calendar shows, shared with the year beside it: a month
+/// picked there turns this page. Reset to today whenever the calendar opens,
+/// so paging only lasts as long as the popup does.
+@Observable
+final class CalendarModel {
+    /// First day of the month on the page.
+    var visibleMonth: Date = CalendarMonth.startOfMonth(Date())
+    /// The year the year window shows.
+    var year: Int = Calendar.current.component(.year, from: Date())
+
+    func reset() {
+        visibleMonth = CalendarMonth.startOfMonth(Date())
+        year = Calendar.current.component(.year, from: Date())
+    }
+}
+
+/// The month grid.
 ///
 /// Same glass as the volume card. `WindowBackdrop` is the whole process
 /// and the panel is `.none`, so the wash has to be this view's.
@@ -30,11 +46,12 @@ struct CalendarWindow: View {
     static let width: Float = 276
     static let height: Float = 320
 
-    /// First day of the month currently shown.
-    @State private var visibleMonth: Date = CalendarMonth.startOfMonth(Date())
+    var model: CalendarModel
 
     var body: some View {
         let theme = Theme.current
+        let model = model
+        let visibleMonth = model.visibleMonth
         let cal = Calendar.current
         let today = Date()
         let cells = CalendarMonth.cells(for: visibleMonth, calendar: cal)
@@ -44,33 +61,26 @@ struct CalendarWindow: View {
         VStack(padding: 2, spacing: 8) {
             // ── Header: prev / month / next ──────────────────────────────
             HStack(padding: 0, alignment: .center, spacing: 8) {
-                Text(
-                    "‹",
-                    color: theme.accent,
-                    onClick: {
-                        visibleMonth = CalendarMonth.shift(visibleMonth, by: -1)
-                    }
-                )
-                .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
-                .hoverBackground(theme.hover)
-                .cornerRadius(4)
-                .agentId("calendar.prev")
+                CalendarArrow(pointing: .left, id: "calendar.prev") {
+                    model.visibleMonth = CalendarMonth.shift(visibleMonth, by: -1)
+                }
 
                 Spacer()
-                Text(title, color: theme.textPrimary)
+                // The whole year, beside this window.
+                let yearOpen = session.yearWindow.map { LavaApp.isWindowOpen($0) } ?? false
+                Text(
+                    title,
+                    color: yearOpen ? theme.accent : theme.textPrimary,
+                    onClick: { session.toggleYear() }
+                )
+                .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
+                .cornerRadius(4)
+                .agentId("calendar.title")
                 Spacer()
 
-                Text(
-                    "›",
-                    color: theme.accent,
-                    onClick: {
-                        visibleMonth = CalendarMonth.shift(visibleMonth, by: 1)
-                    }
-                )
-                .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
-                .hoverBackground(theme.hover)
-                .cornerRadius(4)
-                .agentId("calendar.next")
+                CalendarArrow(pointing: .right, id: "calendar.next") {
+                    model.visibleMonth = CalendarMonth.shift(visibleMonth, by: 1)
+                }
             }
 
             // ── Weekday strip ────────────────────────────────────────────
@@ -98,9 +108,7 @@ struct CalendarWindow: View {
                 Text(
                     "Today",
                     color: theme.accent,
-                    onClick: {
-                        visibleMonth = CalendarMonth.startOfMonth(Date())
-                    }
+                    onClick: { model.reset() }
                 )
                 .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
                 .hoverBackground(theme.hover)
@@ -149,6 +157,164 @@ struct CalendarWindow: View {
     }
 }
 
+/// Previous / next, for a month or a year: a drawn chevron, since the font's
+/// "‹" is a third of the line high and sits on the baseline. The click is the
+/// stack's, padded first so it is one node — the hover box and the target are
+/// the same rectangle.
+private struct CalendarArrow: View {
+    let pointing: Chevron.Direction
+    let id: String
+    let action: () -> Void
+
+    var body: some View {
+        HStack(padding: 0, alignment: .center, onClick: action) {
+            Chevron(pointing: pointing, color: Theme.current.accent)
+        }
+        .padding(EdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 6))
+        .hoverBackground(Theme.current.hover)
+        .cornerRadius(4)
+        .agentId(id)
+    }
+}
+
+/// The whole year: twelve months, every day of each, in four columns. A
+/// popup of the calendar window, to its left, opened from the month title.
+/// Click a month's name and the calendar turns to it.
+struct YearWindow: View {
+    var model: CalendarModel
+
+    static let columns = 4
+    static let cell: (w: Float, h: Float) = (26, 20)
+    /// The ISO week number down each month's left side.
+    static let weekColumn: Float = 24
+    static let padding: Float = 16
+    static let columnGap: Float = 18
+    static let rowGap: Float = 14
+    static let headerHeight: Float = 34
+    static let monthTitleHeight: Float = 24
+    static let weekdayHeight: Float = 18
+
+    static var monthWidth: Float { weekColumn + cell.w * 7 }
+    /// Title, weekday strip, six weeks: every month the same height, so a
+    /// row of them lines up whatever day each starts on.
+    static var monthHeight: Float { monthTitleHeight + weekdayHeight + cell.h * 6 }
+    static var width: Float {
+        padding * 2 + monthWidth * Float(columns) + columnGap * Float(columns - 1)
+    }
+    static var height: Float {
+        let rows = Float(12 / columns)
+        return padding * 2 + headerHeight + rowGap + monthHeight * rows + rowGap * (rows - 1)
+    }
+
+    var body: some View {
+        let theme = Theme.current
+        let cal = Calendar.current
+        let model = model
+        let year = model.year
+        let today = Date()
+        let weekdays = CalendarMonth.weekdaySymbols(calendar: cal)
+        let months = (1...12).compactMap { cal.date(from: DateComponents(year: year, month: $0)) }
+        let rows = stride(from: 0, to: 12, by: Self.columns).map { Array(months[$0..<min($0 + Self.columns, 12)]) }
+
+        VStack(padding: 0, spacing: Self.rowGap) {
+            HStack(padding: 0, alignment: .center, spacing: 8) {
+                CalendarArrow(pointing: .left, id: "year.prev") { model.year -= 1 }
+                Spacer()
+                Text(String(year), color: theme.textPrimary)
+                    .agentId("year.title")
+                Spacer()
+                if year != cal.component(.year, from: today) {
+                    Text("This year", color: theme.accent,
+                         onClick: { model.year = cal.component(.year, from: Date()) })
+                        .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
+                        .hoverBackground(theme.hover)
+                        .cornerRadius(3)
+                        .agentId("year.today")
+                }
+                CalendarArrow(pointing: .right, id: "year.next") { model.year += 1 }
+            }
+            .frame(height: .pt(Self.headerHeight))
+
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                HStack(padding: 0, alignment: .start, spacing: Self.columnGap) {
+                    ForEach(row, id: \.self) { month in
+                        monthBlock(month, today: today, weekdays: weekdays, calendar: cal)
+                    }
+                }
+            }
+        }
+        .padding(Self.padding)
+        .frame(width: .pt(Self.width), height: .pt(Self.height))
+        .background(PanelChrome.popupWash)
+        .agentId("year.window")
+    }
+
+
+    private func monthBlock(
+        _ month: Date, today: Date, weekdays: [String], calendar: Calendar
+    ) -> some View {
+        let theme = Theme.current
+        let model = model
+        let shown = calendar.isDate(month, equalTo: model.visibleMonth, toGranularity: .month)
+        let current = calendar.isDate(month, equalTo: today, toGranularity: .month)
+        let f = DateFormatter()
+        f.locale = .current
+        f.calendar = calendar
+        f.dateFormat = "LLLL"
+        // Days outside the month are left out: in a page of twelve, the
+        // neighbours' days are noise, where a single month uses them to fill
+        // its first and last week.
+        let cells = CalendarMonth.cells(for: month, calendar: calendar)
+        let weeks = cells.chunked(into: 7)
+        return VStack(padding: 0, spacing: 0) {
+            HStack(padding: 0, alignment: .center) {
+                Text(
+                    f.string(from: month),
+                    color: shown || current ? theme.accent : theme.textPrimary,
+                    onClick: {
+                        model.visibleMonth = month
+                        session.closeYear()
+                    }
+                )
+                .padding(EdgeInsets(top: 3, leading: 4, bottom: 3, trailing: 4))
+                .cornerRadius(4)
+                .agentId("year.month.\(calendar.component(.month, from: month))")
+                Spacer()
+            }
+            .frame(height: .pt(Self.monthTitleHeight))
+            HStack(padding: 0, alignment: .center, spacing: 0) {
+                Text("", color: theme.textDim)
+                    .frame(width: .pt(Self.weekColumn), height: .pt(Self.weekdayHeight))
+                ForEach(Array(weekdays.enumerated()), id: \.offset) { _, name in
+                    Text(name, color: theme.textDim, align: .center)
+                        .frame(width: .pt(Self.cell.w), height: .pt(Self.weekdayHeight))
+                }
+            }
+            ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
+                HStack(padding: 0, alignment: .center, spacing: 0) {
+                    Text(CalendarMonth.isoWeek(of: week).map(String.init) ?? "",
+                         color: theme.textDim.opacity(0.7), align: .center)
+                        .frame(width: .pt(Self.weekColumn), height: .pt(Self.cell.h))
+                    ForEach(week) { cell in
+                        miniDay(cell, today: today, calendar: calendar)
+                    }
+                }
+            }
+        }
+        .frame(width: .pt(Self.monthWidth), height: .pt(Self.monthHeight))
+    }
+
+    private func miniDay(_ cell: CalendarMonth.DayCell, today: Date, calendar: Calendar) -> some View {
+        let theme = Theme.current
+        let isToday = cell.inMonth && (cell.date.map { calendar.isDate($0, inSameDayAs: today) } ?? false)
+        let label = cell.inMonth ? cell.day.map(String.init) ?? "" : ""
+        return Text(label, color: isToday ? theme.background : theme.textPrimary, align: .center)
+            .frame(width: .pt(Self.cell.w), height: .pt(Self.cell.h))
+            .background(isToday ? theme.accent : Color(r: 0, g: 0, b: 0, a: 0))
+            .cornerRadius(5)
+    }
+}
+
 // MARK: - Month math
 
 enum CalendarMonth {
@@ -157,6 +323,18 @@ enum CalendarMonth {
         var day: Int?
         var date: Date?
         var inMonth: Bool
+    }
+
+    /// The ISO 8601 week a row of the grid is, for the column beside it:
+    /// that of its Monday, which in a Sunday-first grid is the second cell.
+    /// Nil for a row with no day of the month in it — the sixth row of a
+    /// short month, left blank in the year view.
+    static func isoWeek(of week: [DayCell]) -> Int? {
+        guard week.contains(where: \.inMonth) else { return nil }
+        let iso = Calendar(identifier: .iso8601)
+        let monday = week.compactMap(\.date).first { iso.component(.weekday, from: $0) == 2 }
+        guard let day = monday ?? week.compactMap(\.date).first else { return nil }
+        return iso.component(.weekOfYear, from: day)
     }
 
     static func startOfMonth(_ date: Date, calendar: Calendar = .current) -> Date {

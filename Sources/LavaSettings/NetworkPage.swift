@@ -678,32 +678,6 @@ private struct EditorBody: View {
     }
 }
 
-/// "›" and "‹" drawn rather than typed. The font's are a third of the
-/// line's height, and sit on the baseline rather than in the middle of the
-/// row; this is `DisclosureChevron`'s stroke, turned whichever way is asked.
-struct Chevron: View {
-    enum Direction { case left, right }
-
-    let pointing: Direction
-    var size: Float = 16
-    var color: Color
-
-    var body: some View {
-        let left = pointing == .left
-        let color = color
-        return Canvas(label: "Chevron", width: .pt(size), height: .pt(size)) { list, frame in
-            let cx = frame.x + frame.w * 0.5
-            let cy = frame.y + frame.h * 0.5
-            let arm = min(frame.w, frame.h) * (4.5 / 16.0)
-            // The tip, and the two ends it is drawn back to.
-            let tip = left ? cx - arm * 0.5 : cx + arm * 0.5
-            let back = left ? cx + arm * 0.5 : cx - arm * 0.5
-            list.line(x1: back, y1: cy - arm, x2: tip, y2: cy, color: color, width: 1.75)
-            list.line(x1: tip, y1: cy, x2: back, y2: cy + arm, color: color, width: 1.75)
-        }
-    }
-}
-
 /// `ActionButton` with a drawn chevron in front. The whole pill is the
 /// target: the click is the stack's, padded first so it is one node.
 struct BackButton: View {

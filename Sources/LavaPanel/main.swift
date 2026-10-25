@@ -193,6 +193,11 @@ final class MenuSession {
     @ObservationIgnored var codeFont: UIFont?
     /// The calendar window, if it is up. Clicking the clock again closes it.
     @ObservationIgnored var calendarWindow: WindowID?
+    /// The year beside it, if that is up. Observed: the month title it was
+    /// opened from shows whether it is.
+    var yearWindow: WindowID?
+    /// The month the calendar shows, and the year the year window does.
+    @ObservationIgnored let calendarModel = CalendarModel()
     /// The player window, if it is up.
     @ObservationIgnored var playerWindow: WindowID?
     /// The log-out confirm, if it is up.
@@ -982,6 +987,9 @@ final class MenuSession {
                 x: panelW - 180, y: 0, w: 160, h: Self.stripHeight
             )
         }
+        // Opens on today, wherever it was paged to last time.
+        calendarModel.reset()
+        let model = calendarModel
         var opened: WindowID?
         opened = LavaApp.openPopup(
             title: "Calendar",
@@ -993,12 +1001,51 @@ final class MenuSession {
             onClose: {
                 if let id = opened, session.calendarWindow == id {
                     session.calendarWindow = nil
+                    // The year hangs off this window; it goes with it.
+                    session.closeYear()
                 }
             }
         ) {
-            CalendarWindow()
+            CalendarWindow(model: model)
         }
         calendarWindow = opened
+    }
+
+    /// The month title: the whole year, to the calendar's left, top edges
+    /// level. A popup of the calendar rather than of the panel, so a click
+    /// in it does not count as a click outside the calendar.
+    func toggleYear() {
+        if let id = yearWindow, LavaApp.isWindowOpen(id) {
+            closeYear()
+            return
+        }
+        guard let parent = calendarWindow, LavaApp.isWindowOpen(parent) else { return }
+        calendarModel.year = Calendar.current.component(.year, from: calendarModel.visibleMonth)
+        let model = calendarModel
+        let width = YearWindow.width
+        var opened: WindowID?
+        opened = LavaApp.openPopup(
+            title: "Year",
+            width: width,
+            height: YearWindow.height,
+            anchor: .leftOf(parent, width: width),
+            backdropBlur: PanelChrome.popupBlurRadius,
+            refraction: PanelChrome.popupRefraction,
+            onClose: {
+                if let id = opened, session.yearWindow == id {
+                    session.yearWindow = nil
+                }
+            }
+        ) {
+            YearWindow(model: model)
+        }
+        yearWindow = opened
+    }
+
+    func closeYear() {
+        guard let id = yearWindow else { return }
+        yearWindow = nil
+        if LavaApp.isWindowOpen(id) { LavaApp.closeWindow(id) }
     }
 
     func togglePlayer() {

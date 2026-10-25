@@ -37,6 +37,43 @@ public struct DisclosureChevron: View {
     }
 }
 
+/// "‹" and "›" drawn rather than typed. A font's are a third of the line's
+/// height and sit on the baseline rather than in the middle of the row, which
+/// is too small to aim at and never quite centred in a button. This is
+/// `DisclosureChevron`'s stroke, turned whichever way is asked.
+public struct Chevron: View {
+    public enum Direction: Sendable { case left, right }
+
+    public var pointing: Direction
+    public var size: Float
+    public var color: Color
+    public var lineWidth: Float
+
+    public init(pointing: Direction, size: Float = 16, color: Color = .primary,
+                lineWidth: Float = 1.75) {
+        self.pointing = pointing
+        self.size = size
+        self.color = color
+        self.lineWidth = lineWidth
+    }
+
+    public var body: some View {
+        let left = pointing == .left
+        let color = color
+        let lineWidth = lineWidth
+        return Canvas(label: "Chevron", width: .pt(size), height: .pt(size)) { list, frame in
+            let cx = frame.x + frame.w * 0.5
+            let cy = frame.y + frame.h * 0.5
+            let arm = min(frame.w, frame.h) * (4.5 / 16.0)
+            // The tip, and the two ends it is drawn back to.
+            let tip = left ? cx - arm * 0.5 : cx + arm * 0.5
+            let back = left ? cx + arm * 0.5 : cx - arm * 0.5
+            list.line(x1: back, y1: cy - arm, x2: tip, y2: cy, color: color, width: lineWidth)
+            list.line(x1: tip, y1: cy, x2: back, y2: cy + arm, color: color, width: lineWidth)
+        }
+    }
+}
+
 /// Disclosure control: chevron + title in a rounded outline, content below when open.
 ///
 /// Matches the common “expand block” pattern (› header, bordered pill). Use it to
