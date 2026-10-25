@@ -304,8 +304,13 @@ struct PickerRow: View {
                  color: selected ? Theme.current.accent : Theme.current.textDim)
             Text(title, color: Theme.current.textPrimary)
             Spacer()
+            // The one child that may give way. Nothing in a row shrinks
+            // unless it says so (`LayoutNode.flexShrink`), so a detail longer
+            // than the card had left ran out past its edge, one line long,
+            // instead of wrapping.
             if !detail.isEmpty {
                 Text(detail, color: Theme.current.textDim)
+                    .flexShrink(1)
             }
         }
         .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))

@@ -247,7 +247,7 @@ public struct Theme: Equatable, Sendable {
         inset: Color(r: 0.07, g: 0.07, b: 0.08),
         canvas: Color(r: 0.08, g: 0.08, b: 0.09),
         hover: Color(r: 0.28, g: 0.28, b: 0.32),
-        selectionFill: Color(r: 0.20, g: 0.32, b: 0.52),
+        selectionFill: Color(r: 0.15, g: 0.24, b: 0.42),
         border: Color(r: 0.32, g: 0.32, b: 0.36)
     )
 
