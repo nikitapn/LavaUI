@@ -11,10 +11,10 @@ enum Site {
     static let name = "LavaUI"
     /// The words someone looking for this would type, rather than its name —
     /// "LavaUI documentation" only matched people who already knew it.
-    static let homeTitle = "LavaUI — SwiftUI-style UI framework for Linux, drawn with Vulkan"
+    static let homeTitle = "Lava — a Linux desktop and SwiftUI-style UI framework, drawn with Vulkan"
     static let homeDescription =
-        "A declarative UI framework in Swift for Linux: SwiftUI-style views, Yoga layout, "
-        + "HarfBuzz text and a Vulkan renderer — and a Wayland desktop built with it."
+        "A Wayland desktop environment for Linux — compositor, panel, dock and everyday apps — "
+        + "built with LavaUI, its own declarative UI framework in Swift."
     /// Where the site is served, for canonical links, the sitemap and link
     /// previews. `DOCS_BASE_URL` overrides it (a staging host, a local run).
     static let defaultBaseURL = "https://lavaui.nikitapn.com"
