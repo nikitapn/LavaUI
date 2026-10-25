@@ -7208,10 +7208,19 @@ class SurfaceRegistry : public lava::CompositorHost {
         surface->deferredWhileOccluded = false;
         if (surface->canvas->redraw()) damage(*surface);
       }
-      if (!surface->canvas->takeInternalRepaint()) continue;
-      if (!surface->drawnThisFrame && surface->canvas->redraw()) {
-        damage(*surface);
+      // Drawn already this vblank by `flushPresents`, whose repaint stepped the
+      // scene and left its answer — "still fading" — in the flag. Taking it
+      // here, with nothing to draw, threw that answer away: the next step
+      // found no flag, and a hover tint froze wherever it was until some input
+      // came along. A client that presents on hover, or simply while a fade is
+      // running, hit it every time. Left for the next step to take.
+      if (surface->drawnThisFrame) {
+        drain(*surface);
+        again = true;
+        continue;
       }
+      if (!surface->canvas->takeInternalRepaint()) continue;
+      if (surface->canvas->redraw()) damage(*surface);
       drain(*surface);
       again = true;
     }
