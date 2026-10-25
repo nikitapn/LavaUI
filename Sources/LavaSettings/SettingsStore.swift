@@ -12,6 +12,7 @@ enum SettingsSection: String, CaseIterable, Sendable {
     case keyboard
     case display
     case network
+    case bluetooth
     case lock
     case search
 
@@ -22,6 +23,7 @@ enum SettingsSection: String, CaseIterable, Sendable {
         case .keyboard: return "Keyboard"
         case .display: return "Display"
         case .network: return "Network"
+        case .bluetooth: return "Bluetooth"
         case .lock: return "Lock & Screen"
         case .search: return "Search"
         }
@@ -36,6 +38,7 @@ enum SettingsSection: String, CaseIterable, Sendable {
         case .keyboard: return "Layout, repeat, shortcuts"
         case .display: return "Screens, arrangement, primary"
         case .network: return "Wi-Fi, wired, VPN"
+        case .bluetooth: return "Devices, pairing, visibility"
         case .lock: return "Lock, screens off, suspend"
         case .search: return "Where LavaFind looks"
         }

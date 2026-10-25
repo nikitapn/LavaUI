@@ -218,6 +218,29 @@ var targets: [Target] = [
     // The live session over CLavaNet: snapshots, commands, the agent's prompts.
     .target(name: "LavaNetwork", dependencies: ["CLavaNet", "LavaNetworkCore", "LavaUI"],
             swiftSettings: interopCxx),
+    // GIO's D-Bus client, for BlueZ: it has no client library of its own, its
+    // API is the bus. The .pc brings GLib's include paths along.
+    .systemLibrary(
+        name: "CGio",
+        path: "Sources/CGio",
+        pkgConfig: "gio-2.0",
+        providers: [.apt(["libglib2.0-dev"])]
+    ),
+    // BlueZ's object tree on a thread of its own, posting snapshots, and the
+    // panel's pairing agent. See Sources/CLavaBluetooth/include/lava_bt.h.
+    .target(
+        name: "CLavaBluetooth",
+        dependencies: ["CGio"],
+        linkerSettings: [
+            .linkedLibrary("gio-2.0"), .linkedLibrary("glib-2.0"), .linkedLibrary("gobject-2.0"),
+        ]
+    ),
+    // Which devices, in what order, what a BlueZ error means — from a
+    // snapshot, with no bluetoothd. See Sources/LavaBluetoothCore.
+    .target(name: "LavaBluetoothCore"),
+    // The live session over CLavaBluetooth: snapshots, commands, the agent.
+    .target(name: "LavaBluetooth", dependencies: ["CLavaBluetooth", "LavaBluetoothCore", "LavaUI"],
+            swiftSettings: interopCxx),
     // Connections, transfers and the keyring, blocking, for worker threads.
     // What a remote folder *is* — its address, its listing — stays in
     // LavaExplorerCore, where it is a test.
@@ -299,7 +322,8 @@ var targets: [Target] = [
     // out of the same client API an app uses. See Sources/LavaPanel.
     .executableTarget(
         name: "LavaPanel",
-        dependencies: ["LavaUI", "CPulse", "LavaMpris", "LavaShell", "LavaNetwork", "LavaNetworkCore"]
+        dependencies: ["LavaUI", "CPulse", "LavaMpris", "LavaShell", "LavaNetwork", "LavaNetworkCore",
+                       "LavaBluetooth", "LavaBluetoothCore"]
             + (haveNprpc ? [Target.Dependency("LavaClient"),
                             Target.Dependency("LavaIDL")] : []),
         resources: [
@@ -374,7 +398,8 @@ var targets: [Target] = [
     // rather than asking it questions. See Sources/LavaSettings/main.swift.
     .executableTarget(
         name: "LavaSettings",
-        dependencies: ["LavaUI", "LavaFindCore", "LavaNetwork", "LavaNetworkCore"]
+        dependencies: ["LavaUI", "LavaFindCore", "LavaNetwork", "LavaNetworkCore",
+                       "LavaBluetooth", "LavaBluetoothCore"]
             + (haveNprpc ? [Target.Dependency("LavaClient"),
                             Target.Dependency("LavaIDL")] : []),
         swiftSettings: interopCxx
@@ -514,6 +539,11 @@ var targets: [Target] = [
     // Against a mock NetworkManager on a private system bus; skipped unless
     // LAVA_NET_TEST_BUS names one. See tools/mock_networkmanager.py.
     .testTarget(name: "LavaNetworkTests", dependencies: ["LavaNetwork", "LavaNetworkCore"],
+                swiftSettings: interopCxx),
+    .testTarget(name: "LavaBluetoothCoreTests", dependencies: ["LavaBluetoothCore"]),
+    // Against python-dbusmock's BlueZ on a private system bus; skipped unless
+    // LAVA_BT_TEST_BUS names one. See tools/mock_bluez.py.
+    .testTarget(name: "LavaBluetoothTests", dependencies: ["LavaBluetooth", "LavaBluetoothCore"],
                 swiftSettings: interopCxx),
     .testTarget(name: "TraceLoomCoreTests", dependencies: ["TraceLoomCore"]),
     .testTarget(

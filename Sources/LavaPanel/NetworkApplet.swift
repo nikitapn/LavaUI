@@ -16,15 +16,18 @@ struct NetworkApplet: View {
         // changes (the paint closure alone is not tracked).
         let status = network.status
         let theme = Theme.current
-        HStack(height: .pt(36), padding: 0, alignment: .center) {
+        HStack(
+            height: .pt(36),
+            padding: 0,
+            alignment: .center,
+            onPointer: { _, button in
+                guard button == PointerButton.left else { return }
+                session.toggleNetwork()
+            }) {
             Canvas(
                 label: "network",
                 width: .pt(24),
                 height: .pt(22),
-                onGesture: { gesture in
-                    guard gesture.phase == .began, gesture.button == PointerButton.left else { return }
-                    session.toggleNetwork()
-                },
                 paint: { list, frame in
                     NetworkGlyph.paintStatus(
                         status, list: list, frame: frame,

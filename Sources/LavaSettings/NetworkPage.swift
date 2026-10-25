@@ -421,14 +421,24 @@ private struct LinkCards: View {
     }
 }
 
-private struct DetailLine: View {
-    let detail: LinkDetail
+/// A label and its value, in columns. The Bluetooth page's device card
+/// uses it too.
+struct DetailLine: View {
+    let label: String
+    let value: String
+
+    init(_ label: String, _ value: String) {
+        self.label = label
+        self.value = value
+    }
+
+    init(detail: LinkDetail) { self.init(detail.label, detail.value) }
 
     var body: some View {
         HStack(spacing: 12) {
-            Text(detail.label, color: Theme.current.textDim)
+            Text(label, color: Theme.current.textDim)
                 .frame(width: .pt(140))
-            Text(detail.value, color: Theme.current.textPrimary)
+            Text(value, color: Theme.current.textPrimary)
                 .flexShrink(1)
         }
     }
@@ -671,7 +681,7 @@ private struct EditorBody: View {
 /// "›" and "‹" drawn rather than typed. The font's are a third of the
 /// line's height, and sit on the baseline rather than in the middle of the
 /// row; this is `DisclosureChevron`'s stroke, turned whichever way is asked.
-private struct Chevron: View {
+struct Chevron: View {
     enum Direction { case left, right }
 
     let pointing: Direction
@@ -696,7 +706,7 @@ private struct Chevron: View {
 
 /// `ActionButton` with a drawn chevron in front. The whole pill is the
 /// target: the click is the stack's, padded first so it is one node.
-private struct BackButton: View {
+struct BackButton: View {
     let title: String
     let action: () -> Void
 
@@ -713,7 +723,7 @@ private struct BackButton: View {
 }
 
 /// A text box on a card, in the inset colour the other pages use.
-private struct Field: View {
+struct Field: View {
     let text: Binding<String>
     let placeholder: String
 
@@ -725,7 +735,7 @@ private struct Field: View {
     }
 }
 
-private struct Problem: View {
+struct Problem: View {
     let text: String?
 
     init(_ text: String?) { self.text = text }
@@ -739,7 +749,7 @@ private struct Problem: View {
 
 /// The Lock page's filled, clickable text, with a dimmed state for a Save
 /// with nothing to save.
-private struct ActionButton: View {
+struct ActionButton: View {
     let title: String
     let isEnabled: Bool
     let action: () -> Void

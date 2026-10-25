@@ -1,4 +1,5 @@
 import Foundation
+import LavaBluetooth
 import LavaNetwork
 import LavaClient
 import LavaIDL
@@ -180,6 +181,16 @@ final class MenuSession {
     /// A window per secret prompt the agent is waiting on, with what has been
     /// typed into it.
     @ObservationIgnored var authWindows: [UInt64: (window: WindowID, draft: AuthDraft)] = [:]
+    /// The Bluetooth window, if it is up. Clicking the rune again closes it.
+    @ObservationIgnored var bluetoothWindow: WindowID?
+    /// The search pane beside it. Observed: the row that opens it shows
+    /// whether it is open.
+    var bluetoothSearchWindow: WindowID?
+    /// A window per pairing request the agent is waiting on.
+    @ObservationIgnored var pairWindows: [UInt64: (window: WindowID, draft: PairDraft)] = [:]
+    /// The face a pairing code is shown in, big enough to read off at a
+    /// glance while typing it on a keyboard.
+    @ObservationIgnored var codeFont: UIFont?
     /// The calendar window, if it is up. Clicking the clock again closes it.
     @ObservationIgnored var calendarWindow: WindowID?
     /// The player window, if it is up.
@@ -833,6 +844,126 @@ final class MenuSession {
         LavaApp.closeWindow(entry.window)
     }
 
+    /// Bluetooth rune click. Opens the Bluetooth window, or closes it.
+    func toggleBluetooth() {
+        if let id = bluetoothWindow, LavaApp.isWindowOpen(id) {
+            LavaApp.closeWindow(id)
+            return
+        }
+        closeMenu()
+        let panelW = editor?.framebufferSize().w ?? 1280
+        let anchor: LavaApp.SurfaceAnchor
+        if let icon = LavaApp.mainLayoutHost?.agentFrame(sid: "applet.bluetooth") {
+            anchor = LavaApp.SurfaceAnchor(icon)
+        } else {
+            anchor = LavaApp.SurfaceAnchor(
+                x: panelW - 120, y: 0, w: 28, h: Self.stripHeight
+            )
+        }
+        var opened: WindowID?
+        opened = LavaApp.openPopup(
+            title: "Bluetooth",
+            width: BluetoothBlock.width,
+            height: BluetoothBlock.height(of: BluetoothBlock.blocks(bluetooth)),
+            anchor: anchor,
+            backdropBlur: PanelChrome.popupBlurRadius,
+            refraction: PanelChrome.popupRefraction,
+            onClose: {
+                if let id = opened, session.bluetoothWindow == id {
+                    session.bluetoothWindow = nil
+                    session.closeBluetoothSearch()
+                }
+            }
+        ) {
+            BluetoothWindow(bluetooth: bluetooth).glassEffect(frost: 1)
+        }
+        bluetoothWindow = opened
+    }
+
+    /// "Add a device…": a popup of the Bluetooth window, to its left, that
+    /// searches for as long as it is open.
+    func toggleBluetoothSearch() {
+        if let id = bluetoothSearchWindow, LavaApp.isWindowOpen(id) {
+            closeBluetoothSearch()
+            return
+        }
+        guard let parent = bluetoothWindow, LavaApp.isWindowOpen(parent) else { return }
+        bluetooth.setSearching(true)
+        let width = BluetoothBlock.searchWidth
+        var opened: WindowID?
+        opened = LavaApp.openPopup(
+            title: "Add a Device",
+            width: width,
+            height: BluetoothBlock.searchHeight,
+            anchor: .leftOf(parent, width: width),
+            backdropBlur: PanelChrome.popupBlurRadius,
+            refraction: PanelChrome.popupRefraction,
+            onClose: {
+                if let id = opened, session.bluetoothSearchWindow == id {
+                    session.bluetoothSearchWindow = nil
+                    bluetooth.setSearching(false)
+                }
+            }
+        ) {
+            BluetoothWindow(bluetooth: bluetooth, isSearch: true).glassEffect(frost: 1)
+        }
+        bluetoothSearchWindow = opened
+        if opened == nil { bluetooth.setSearching(false) }
+    }
+
+    func closeBluetoothSearch() {
+        guard let id = bluetoothSearchWindow else { return }
+        bluetoothSearchWindow = nil
+        bluetooth.setSearching(false)
+        if LavaApp.isWindowOpen(id) { LavaApp.closeWindow(id) }
+    }
+
+    /// The pairing agent wants the user: a code to compare or type, or a
+    /// device asking to be let in. A window of its own, as a secret prompt
+    /// is — it may need the keyboard, and a phone pairing from its side
+    /// asks with no window of ours open.
+    func openPairing(_ prompt: BluetoothSession.PairingPrompt) {
+        guard pairWindows[prompt.id] == nil else { return }
+        let draft = PairDraft()
+        let font = codeFont
+        var opened: WindowID?
+        opened = LavaApp.openWindow(
+            title: prompt.text.title,
+            width: BluetoothPairWindow.width,
+            height: BluetoothPairWindow.height(prompt),
+            onClose: {
+                // Closed from its title bar: that is a no.
+                if session.pairWindows[prompt.id] != nil {
+                    session.answerPairing(prompt.id, accept: false)
+                }
+            }
+        ) {
+            BluetoothPairWindow(bluetooth: bluetooth, id: prompt.id, draft: draft, codeFont: font)
+        }
+        if let opened { pairWindows[prompt.id] = (opened, draft) }
+        else { bluetooth.decline(prompt.id) }
+    }
+
+    func answerPairing(_ id: UInt64, accept: Bool) {
+        guard let entry = pairWindows.removeValue(forKey: id) else { return }
+        let wantsInput = bluetooth.prompt(id)?.wantsInput == true
+        if accept {
+            let text = entry.draft.text.trimmingCharacters(in: .whitespaces)
+            bluetooth.accept(id, text: wantsInput ? text : nil)
+        } else {
+            bluetooth.decline(id)
+        }
+        entry.draft.clear()
+        LavaApp.closeWindow(entry.window)
+    }
+
+    /// BlueZ stopped waiting, or the pairing a shown code was for ended.
+    func dropPairing(_ id: UInt64) {
+        guard let entry = pairWindows.removeValue(forKey: id) else { return }
+        entry.draft.clear()
+        LavaApp.closeWindow(entry.window)
+    }
+
     /// Clock click. Opens the calendar under the clock, or closes it when
     /// it is already up. A press that misses the popup is the compositor's
     /// to swallow — the panel does not grow to catch it.
@@ -1050,6 +1181,7 @@ nonisolated(unsafe) var notifications: Notifications?
 let pulse = PulseSession()
 let mpris = MprisSession()
 let network = NetworkSession()
+let bluetooth = BluetoothSession()
 
 /// Every popover on the panel — menubar dropdown, tray menu, volume,
 /// calendar — wears this, so a theme change retints all of them and a
@@ -1121,14 +1253,18 @@ struct PanelView: View {
 
                 trayStrip
 
-                // Network, then sound, before the clock. Network only while
-                // NetworkManager is there to ask; without it there is
+                // Bluetooth, network, then sound, before the clock. Each of
+                // the first two only while its daemon is there to ask —
+                // and Bluetooth only with an adapter: without one there is
                 // nothing to show and nothing to click through to.
                 //
                 // One cluster, with none of the strip's 10pt between them:
                 // two status glyphs read as a pair, and each box already
                 // carries the inset its hover needs.
                 HStack(padding: 0, alignment: .center, spacing: 4) {
+                    if bluetooth.status != .absent {
+                        BluetoothApplet(bluetooth: bluetooth)
+                    }
                     if network.state.running {
                         NetworkApplet(network: network)
                     }
@@ -1410,6 +1546,8 @@ session.attach(editor: editor, brandIcon: brandIcon)
 mpris.onAbsent = { session.closePlayer() }
 network.onPrompt = { session.openAuth($0) }
 network.onPromptGone = { session.dropAuth($0) }
+bluetooth.onPrompt = { session.openPairing($0) }
+bluetooth.onPromptGone = { session.dropPairing($0) }
 
 // One face, loaded once. Building it inside `body` would reopen FreeType
 // every clock tick, and a face that is never `registerWithEngine`'d
@@ -1431,6 +1569,10 @@ guard let bodyFont = loadReadingFace(pixelSize: 14) else {
     exit(1)
 }
 bodyFont.registerWithEngine(editor)
+if let codeFont = loadReadingFace(pixelSize: 30) {
+    codeFont.registerWithEngine(editor)
+    session.codeFont = codeFont
+}
 session.aboutImage = brandImage
 session.aboutFont = bodyFont
 

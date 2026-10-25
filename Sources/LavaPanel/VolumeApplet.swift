@@ -22,19 +22,21 @@ struct VolumeApplet: View {
         // Presenter height must reach the strip bottom. A short 22pt canvas is
         // centred in the 32pt bar, so a hit box that stopped at the glyph
         // missed the padding around it.
-        HStack(height: .pt(36), padding: 0, alignment: .center) {
+        HStack(
+            height: .pt(36),
+            padding: 0,
+            alignment: .center,
+            onPointer: { _, button in
+                if button == PointerButton.left {
+                    session.toggleVolume()
+                } else if button == PointerButton.right {
+                    pulse.toggleMute()
+                }
+            }) {
             Canvas(
                 label: "volume",
                 width: .pt(22),
                 height: .pt(22),
-                onGesture: { gesture in
-                    guard gesture.phase == .began else { return }
-                    if gesture.button == PointerButton.right {
-                        pulse.toggleMute()
-                    } else if gesture.button == PointerButton.left {
-                        session.toggleVolume()
-                    }
-                },
                 onWheel: { _, dy, _, _ in
                     // Positive dy = scroll up = louder. One notch ≈ 5%.
                     let step: Float = dy > 0 ? 0.05 : -0.05

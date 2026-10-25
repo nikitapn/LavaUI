@@ -77,10 +77,17 @@ private struct SidebarRow: View {
             padding: 0,
             spacing: 4,
             onClick: {
+                // A search runs for the page that started it, not for
+                // whichever page is looked at next.
+                if section != .bluetooth { bluetoothSettings.leave() }
                 // Shown when its data is in, not a frame before: see
                 // `NetworkSettings.start`.
                 if section == .network {
                     networkSettings.start { store.section = .network }
+                    return
+                }
+                if section == .bluetooth {
+                    bluetoothSettings.start { store.section = .bluetooth }
                     return
                 }
                 store.section = section
@@ -158,6 +165,8 @@ struct SettingsContent: View {
             // Scrolls itself: an overview and an editor, each with its own
             // place — see `NetworkPage`.
             NetworkPage()
+        } else if section == .bluetooth {
+            BluetoothPage()
         } else {
             scrolled(section)
         }
@@ -177,7 +186,7 @@ struct SettingsContent: View {
                     KeyboardPage(store: store)
                 case .display:
                     DisplayPage(store: store)
-                case .network:
+                case .network, .bluetooth:
                     EmptyView()
                 case .lock:
                     LockPage(store: store)
@@ -205,6 +214,8 @@ struct StatusBar: View {
                         ? "Changes apply immediately and are saved to index.conf."
                         : store.section == .network
                         ? "Profiles are NetworkManager's, and saved by it."
+                        : store.section == .bluetooth
+                        ? "Pairings are bluetoothd's, and kept by it."
                         : "Changes apply immediately and are saved to lava.conf.")
                     : message,
                 color: message.isEmpty
