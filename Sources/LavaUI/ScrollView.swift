@@ -24,6 +24,16 @@ public struct ScrollView<Content: View>: PrimitiveView {
     /// over the corners — pass the container's corner radius. The content is
     /// not inset: it still scrolls to the edge, under the curve.
     public var indicatorInset: Float
+    /// How much of the leading edge something floating over the view covers —
+    /// CSS's `scroll-padding-top`.
+    ///
+    /// A reveal (a keyboard selection, `.scrollIntoView`) counts a box as
+    /// shown only below this band, so it lands under a floating search field
+    /// rather than behind it, and going back to the first row scrolls to the
+    /// top instead of stopping with that row under the field. It moves
+    /// nothing else: the content still starts at the top, and the wheel still
+    /// scrolls through the band.
+    public var revealInset: Float
     /// Where the view is, kept up to date as it scrolls, and a way to put it
     /// somewhere. See `ScrollPosition`.
     public var position: ScrollPosition?
@@ -36,6 +46,7 @@ public struct ScrollView<Content: View>: PrimitiveView {
         _ axis: ScrollAxis = .vertical,
         showsIndicator: Bool = true,
         indicatorInset: Float = 0,
+        revealInset: Float = 0,
         position: ScrollPosition? = nil,
         followsEnd: Bool = false,
         @ViewBuilder content: () -> Content
@@ -44,6 +55,7 @@ public struct ScrollView<Content: View>: PrimitiveView {
         self.content = content()
         self.showsIndicator = showsIndicator
         self.indicatorInset = indicatorInset
+        self.revealInset = max(0, revealInset)
         self.position = position
         self.followsEnd = followsEnd
     }
@@ -61,6 +73,7 @@ public struct ScrollView<Content: View>: PrimitiveView {
         let node = ScrollNode(axis: axis, content: ViewGraph.mount(content))
         node.showsIndicator = showsIndicator
         node.indicatorInset = indicatorInset
+        node.revealInset = revealInset
         node.setFollowsEnd(followsEnd)
         node.registerScrolling()
         node.bind(position)
@@ -74,6 +87,7 @@ public struct ScrollView<Content: View>: PrimitiveView {
         scroll.setFollowsEnd(followsEnd)
         scroll.showsIndicator = showsIndicator
         scroll.indicatorInset = indicatorInset
+        scroll.revealInset = revealInset
         scroll.updateContent(ViewGraph.reconcile(scroll.contentNode, with: content))
         scroll.bind(position)
         return scroll
@@ -155,6 +169,8 @@ final class ScrollNode: YogaBoxNode {
     var showsIndicator = true
     /// See `ScrollView.indicatorInset`.
     var indicatorInset: Float = 0
+    /// See `ScrollView.revealInset`.
+    var revealInset: Float = 0
 
     private var followsEnd = false
     private(set) var isFollowingEnd = false
@@ -436,6 +452,10 @@ final class ScrollNode: YogaBoxNode {
 
     func reveal(top: Float, bottom: Float, viewport: Float) {
         guard viewport > 0 else { return }
+        // The covered band is not part of the viewport for this question —
+        // and a box whose top is inside the band at offset 0 is the first
+        // thing in the content, which the clamp below sends to the top.
+        let top = top - revealInset
         let target: Float
         if top < scrollOffset {
             target = top

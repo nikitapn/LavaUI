@@ -570,9 +570,19 @@ final class LazyGridNode: YogaBoxNode {
         let myTop = YGNodeLayoutGetTop(yogaStorage)
         let firstRow = mounted.lowerBound / columns
         let lastRow = (mounted.upperBound - 1) / columns
+        // A window that reaches either end of the data limits nothing on that
+        // side: what lies beyond is not this grid's — a header above it, a
+        // footer below — and is drawn like any other content. Stopping at the
+        // grid's own edge clamped the renderer short of the content's top
+        // whenever anything came first. The launcher's tiles sit under a band
+        // left for its floating search field; scrolled down and back, the
+        // view stopped with the first row tucked under the field, and no wheel
+        // or key could take it the rest of the way.
         return (
-            myTop + Float(firstRow) * rowStride,
-            myTop + Float(lastRow + 1) * rowStride
+            mounted.lowerBound == 0
+                ? -.greatestFiniteMagnitude : myTop + Float(firstRow) * rowStride,
+            mounted.upperBound >= count
+                ? .greatestFiniteMagnitude : myTop + Float(lastRow + 1) * rowStride
         )
     }
 
