@@ -2096,6 +2096,49 @@ class CompositorImpl final : public ICompositor_Servant {
 
   void ToggleShowDesktop() override { host_.toggleShowDesktop(); }
 
+  void SetBackdrop(
+      uint32_t surfaceId,
+      nprpc::flat::Span_ref<flat::BackdropPlate, flat::BackdropPlate_Direct>
+          plates) override {
+    std::vector<CompositorHost::FrostRect> rects;
+    rects.reserve(plates.size());
+    for (auto plate : plates) {
+      CompositorHost::FrostRect rect{plate.x(), plate.y(), plate.w(),
+                                     plate.h(), plate.cornerRadius()};
+      // Explicit, not the older calls' "the surface's": this call is the
+      // whole truth about the plate.
+      rect.refraction = 0.f;
+      rect.rim = 0.f;
+      for (auto effect : plate.effects()) {
+        switch (static_cast<BackdropEffect::Kind>(effect.kind())) {
+        case BackdropEffect::Kind::blur:
+          rect.radius = effect.value_blur().radius();
+          break;
+        case BackdropEffect::Kind::glass: {
+          auto glass = effect.value_glass();
+          rect.refraction = glass.refraction();
+          rect.rim = glass.rim();
+          rect.magnification = glass.magnification();
+          break;
+        }
+        case BackdropEffect::Kind::frost:
+          rect.frost = effect.value_frost().grain();
+          break;
+        default:
+          // An effect from a newer client. Skipped rather than refused: the
+          // plate is still worth drawing with the effects this side knows,
+          // which is the reason effects are a list of arms at all.
+          break;
+        }
+      }
+      // A plate is a blurred capture; one without a blur is not drawn yet.
+      if (rect.radius > 0.f) rects.push_back(rect);
+    }
+    if (!host_.setBackdrop(surfaceId, std::move(rects))) {
+      throw SurfaceNotFound(surfaceId);
+    }
+  }
+
   PointerSettings GetPointer() override {
     CompositorHost::PointerState state;
     host_.pointerSettings(state);

@@ -349,11 +349,14 @@ public enum BackdropBridge {
         /// The grain of frosted glass on this plate, 0…1 — a view's
         /// `.glassEffect(frost:)`.
         public var frost: Float
+        /// How much larger the desktop under this plate is drawn — a view's
+        /// `.glassEffect(magnification:)`. 1 is none.
+        public var magnification: Float
 
         /// Creates a rectangle to frost.
         public init(
             x: Float, y: Float, w: Float, h: Float, cornerRadius: Float,
-            refraction: Float = -1, frost: Float = 0
+            refraction: Float = -1, frost: Float = 0, magnification: Float = 1
         ) {
             self.x = x
             self.y = y
@@ -362,6 +365,7 @@ public enum BackdropBridge {
             self.cornerRadius = cornerRadius
             self.refraction = refraction
             self.frost = frost
+            self.magnification = magnification
         }
     }
 
@@ -382,7 +386,7 @@ public enum BackdropBridge {
     /// plate, and the plate is the one thing the compositor cuts to the
     /// window's own corner. A popup's glass belongs on the popup's plate.
     nonisolated(unsafe) public static var surfaceGlass:
-        (@Sendable (_ glass: (refraction: Float, frost: Float)?) -> Void)?
+        (@Sendable (_ glass: GlassEffect?) -> Void)?
 }
 
 /// Styling for the floating surface an overlay draws on.

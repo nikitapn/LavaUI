@@ -21,7 +21,7 @@ public struct BorderStyle: Equatable {
 }
 
 /// What `.glassEffect(refraction:rim:frost:magnification:)` asked for.
-public struct GlassEffect: Equatable {
+public struct GlassEffect: Equatable, Sendable {
     /// How far the very edge bends what is under it, in pixels.
     public var refraction: Float
     /// Strength of the light the rim catches, 0…1.

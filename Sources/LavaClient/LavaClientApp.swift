@@ -995,8 +995,9 @@ public enum LavaClient {
     /// otherwise send it to id 0. The compositor draws a blurred copy of
     /// what is *behind* the window; the client's own pixels stay sharp.
     public static func setBackdropBlur(radius: Float) {
-        pendingBackdropBlur = max(0, radius)
-        flushBackdropBlur()
+        mainBackdropRadiusSet = true
+        mainBackdrop.radius = max(0, radius)
+        syncBackdrop(surfaceID, blocking: true)
     }
 
     /// Bend the rim of this window's frost like glass, by up to `px` pixels;
@@ -1004,56 +1005,16 @@ public enum LavaClient {
     /// rather than a window that is frosted edge to edge, where it only
     /// reads as warping. Remembered until the surface exists, like the blur.
     public static func setBackdropRefraction(px: Float) {
-        pendingBackdropRefraction = max(0, px)
-        flushBackdropRefraction()
+        mainBackdrop.glass.refraction = max(0, px)
+        syncBackdrop(surfaceID, blocking: true)
     }
 
     /// Give this window's frost the grain of frosted glass, 0…1; 0 is none,
     /// and the default. For a slab of glass — a menu, a popover — the same
     /// way `setBackdropRefraction` is. Remembered until the surface exists.
     public static func setBackdropFrost(_ frost: Float) {
-        pendingBackdropFrost = min(max(frost, 0), 1)
-        flushBackdropFrost()
-    }
-
-    private static func flushBackdropFrost() {
-        guard let compositor = Self.compositor, surfaceID != 0,
-              let frost = pendingBackdropFrost
-        else { return }
-        report("SetBackdropFrost") {
-            try blockingCall {
-                try await compositor.setBackdropFrost(
-                    surfaceId: surfaceID, frost: frost
-                )
-            }
-        }
-    }
-
-    private static func flushBackdropRefraction() {
-        guard let compositor = Self.compositor, surfaceID != 0,
-              let px = pendingBackdropRefraction
-        else { return }
-        report("SetBackdropRefraction") {
-            try blockingCall {
-                try await compositor.setBackdropRefraction(
-                    surfaceId: surfaceID, px: px
-                )
-            }
-        }
-    }
-
-    private static func flushBackdropBlur() {
-        guard let compositor = Self.compositor, surfaceID != 0 else { return }
-        let radius = pendingBackdropBlur
-            ?? WindowBackdrop.current.compositorBlurRadius
-        guard radius > 0 || pendingBackdropBlur != nil else { return }
-        report("SetBackdropBlur") {
-            try blockingCall {
-                try await compositor.setBackdropBlur(
-                    surfaceId: surfaceID, radius: radius
-                )
-            }
-        }
+        mainBackdrop.glass.frost = min(max(frost, 0), 1)
+        syncBackdrop(surfaceID, blocking: true)
     }
 
     /// Ends the compositor session. The panel's Log Out asks first.
@@ -1066,167 +1027,239 @@ public enum LavaClient {
 
     /// Frost rectangles of the desktop behind this surface.
     ///
-    /// An empty list means every popup is gone. That must not wipe a window
-    /// that asked for whole-surface frost (`WindowBackdrop.blur`) — the
-    /// two share the same plates, so a clear here restores the window
-    /// radius when there is one. Idle frames (never had a popup) send
-    /// nothing at all.
+    /// An empty list means every popup is gone, and the surface goes back to
+    /// its own whole-surface frost, if it has one — the two are parts of the
+    /// same backdrop (`SurfaceBackdrop`). Idle frames send nothing.
     public static func setBackdropBlurRegions(
         radius: Float, rects: [LavaIDL.FrostRect]
     ) {
-        setBackdropGlassRegions(
+        setBackdropRegions(
             radius: radius,
             rects: rects.map {
-                LavaIDL.GlassFrostRect(
+                BackdropBridge.FrostRect(
                     x: $0.x, y: $0.y, w: $0.w, h: $0.h,
-                    cornerRadius: $0.cornerRadius, refraction: -1, frost: 0
+                    cornerRadius: $0.cornerRadius
                 )
             }
         )
     }
 
-    /// `setBackdropBlurRegions` with each rectangle's own bend — a frosted
+    /// `setBackdropBlurRegions` with each rectangle's own glass — a frosted
     /// view beside a glass one in the same popup. A negative `refraction`
-    /// takes the surface's `setBackdropRefraction`.
-    public static func setBackdropGlassRegions(
-        radius: Float, rects: [LavaIDL.GlassFrostRect]
+    /// takes the surface's.
+    public static func setBackdropRegions(
+        radius: Float, rects: [BackdropBridge.FrostRect]
     ) {
         // The window whose frame is being emitted. A second window frosting
         // its own popup must not rewrite the first window's plates.
-        pendingOverlayFrost = OverlayFrost(
-            surface: callingSurface(),
-            radius: rects.isEmpty ? 0 : max(0, radius), rects: rects
-        )
-        flushOverlayFrost()
-    }
-
-    private struct SurfaceGlass: Equatable {
-        var refraction: Float
-        var frost: Float
+        let id = callingSurface()
+        updateBackdrop(id) {
+            $0.regionRadius = rects.isEmpty ? 0 : max(0, radius)
+            $0.regions = rects
+        }
+        syncBackdrop(id, blocking: false)
     }
 
     /// The calling window's plate takes the glass of a view covering the
     /// whole window, or goes back to what it was opened with when there is
     /// none. Sent only when it changes: this is asked every frame.
-    static func setSurfaceGlass(_ glass: (refraction: Float, frost: Float)?) {
-        guard let compositor = Self.compositor else { return }
+    static func setSurfaceGlass(_ glass: GlassEffect?) {
         let id = callingSurface()
-        guard id != 0 else { return }
-        let opened = openedGlass[id].map { SurfaceGlass(refraction: $0.refraction, frost: $0.frost) }
-            ?? SurfaceGlass(
-                refraction: pendingBackdropRefraction ?? 0, frost: pendingBackdropFrost ?? 0
-            )
-        let target = glass.map {
-            SurfaceGlass(refraction: max(0, $0.refraction), frost: min(max($0.frost, 0), 1))
-        } ?? opened
-        guard (lastSurfaceGlass[id] ?? opened) != target else { return }
-        lastSurfaceGlass[id] = target
-        Task.detached {
-            do {
-                try await compositor.setBackdropRefraction(surfaceId: id, px: target.refraction)
-                try await compositor.setBackdropFrost(surfaceId: id, frost: target.frost)
-            } catch {
-                FileHandle.standardError.write(
-                    Data("SetBackdropFrost failed: \(error)\n".utf8)
+        updateBackdrop(id) {
+            $0.viewGlass = glass.map {
+                PlateGlass(
+                    refraction: $0.refraction, frost: $0.frost,
+                    magnification: $0.magnification
                 )
             }
         }
+        syncBackdrop(id, blocking: false)
     }
 
-    /// The whole-surface frost a surface returns to when its last frost
-    /// rectangle goes: a popup's own `backdropBlur`, or the main window's.
-    /// The process's `WindowBackdrop` alone would wipe the frost a popup was
-    /// opened with the first time a view inside it stopped asking for one.
-    private static func openedBlur(_ id: UInt32) -> Float {
-        if let opened = openedBackdrop[id] { return opened }
-        return pendingBackdropBlur ?? WindowBackdrop.current.compositorBlurRadius
+    // MARK: Backdrop state
+
+    /// A plate's glass: how far its rim bends, its grain, and how much it
+    /// magnifies. The rim is lit wherever the plate bends — a view with
+    /// `.glassEffect` lights its own fill's rim as well, and lighting the
+    /// plate's from the view's `rim` would draw the edge twice.
+    struct PlateGlass: Equatable, Sendable {
+        var refraction: Float = 0
+        var frost: Float = 0
+        var magnification: Float = 1
     }
 
-    private static func flushOverlayFrost() {
-        guard let compositor = Self.compositor,
-              let pending = pendingOverlayFrost
-        else { return }
-        let id = pending.surface != 0 ? pending.surface : surfaceID
-        guard id != 0 else { return }
-        // Per surface. One slot for the whole process made an idle frame of
-        // the other window look like "the popup just closed" and cleared it,
-        // then the next frame of the window that actually has one put it back.
-        guard lastOverlayFrost[id] != pending else { return }
+    /// Everything one surface's backdrop is made of. Each entry point above
+    /// changes its own part; `syncBackdrop` turns the whole into plates and
+    /// sends them in one `SetBackdrop`.
+    ///
+    /// One call for all of it, where there used to be one per part: a bend
+    /// and a grain sent separately could be composited a frame apart, and the
+    /// rules for combining them (a region's negative refraction meaning the
+    /// surface's, the stronger of two grains) were split between this file
+    /// and the compositor. They are all in `plates(of:)` now.
+    struct SurfaceBackdrop {
+        /// Whole-surface frost: what a popup was opened with, or for the main
+        /// window `setBackdropBlur` / `WindowBackdrop`.
+        var radius: Float = 0
+        /// The plate's glass as opened, or `setBackdropRefraction` /
+        /// `setBackdropFrost` for the main window.
+        var glass = PlateGlass()
+        /// A view covering the whole window asked for glass this frame. Takes
+        /// precedence over `glass` while it does.
+        var viewGlass: PlateGlass?
+        /// Rectangles a frame asked to frost — popup dropdowns. While there
+        /// are any they replace the whole-surface plate.
+        var regionRadius: Float = 0
+        var regions: [BackdropBridge.FrostRect] = []
+    }
 
-        let hadOverlay = lastOverlayFrost[id].map { $0.radius > 0 } ?? false
-        lastOverlayFrost[id] = pending
+    /// One plate, as it will be sent. Equatable, so an unchanged backdrop
+    /// costs no call: every frame asks.
+    struct Plate: Equatable, Sendable {
+        var x: Float = 0
+        var y: Float = 0
+        var w: Float = 0
+        var h: Float = 0
+        var cornerRadius: Float = 0
+        var radius: Float
+        var glass: PlateGlass
+    }
 
-        // Nothing to tell the compositor: no popup is up, and none was.
-        if pending.radius == 0 && !hadOverlay { return }
+    static func plates(of backdrop: SurfaceBackdrop) -> [Plate] {
+        let glass = backdrop.viewGlass ?? backdrop.glass
+        if backdrop.regionRadius > 0, !backdrop.regions.isEmpty {
+            return backdrop.regions.map { rect in
+                // A rect with glass of its own (refraction set) is that
+                // glass; one without takes the surface's. The grain is the
+                // stronger of the two, as the compositor used to decide.
+                var own = glass
+                if rect.refraction >= 0 {
+                    own.refraction = rect.refraction
+                    own.magnification = rect.magnification
+                }
+                own.frost = max(rect.frost, glass.frost)
+                return Plate(
+                    x: rect.x, y: rect.y, w: rect.w, h: rect.h,
+                    cornerRadius: rect.cornerRadius,
+                    radius: backdrop.regionRadius, glass: own
+                )
+            }
+        }
+        guard backdrop.radius > 0 else { return [] }
+        return [Plate(radius: backdrop.radius, glass: glass)]
+    }
 
-        // Read here, on the loop that writes them, not in the task.
-        let windowRadius = openedBlur(id)
-        let perPlate = !glassRegionsUnsupported
-        Task.detached {
+    private static func updateBackdrop(
+        _ id: UInt32, _ change: (inout SurfaceBackdrop) -> Void
+    ) {
+        if id == 0 || id == surfaceID {
+            change(&mainBackdrop)
+        } else {
+            change(&backdrops[id, default: SurfaceBackdrop()])
+        }
+    }
+
+    private static func backdrop(of id: UInt32) -> SurfaceBackdrop {
+        id == 0 || id == surfaceID ? mainBackdrop : (backdrops[id] ?? SurfaceBackdrop())
+    }
+
+    /// Sends `id`'s backdrop if it is not what was last sent.
+    ///
+    /// `blocking` for the moments the plate has to be in place before what
+    /// follows — a window opening, a popup about to be shown. Otherwise on
+    /// `backdropQueue`, one call after another: these are asked from the frame
+    /// loop, and detached tasks for each could arrive out of order and leave
+    /// an older backdrop standing.
+    static func syncBackdrop(_ id: UInt32, blocking: Bool) {
+        guard let compositor = Self.compositor, id != 0 else { return }
+        let plates = plates(of: backdrop(of: id))
+        // A surface nothing was ever sent for has no backdrop to clear.
+        guard plates != (lastBackdrop[id] ?? []) else { return }
+        lastBackdrop[id] = plates
+        let state = backdrop(of: id)
+        let send: @Sendable () -> Void = {
             do {
-                if pending.radius == 0 || pending.rects.isEmpty {
-                    if windowRadius > 0 {
-                        try await compositor.setBackdropBlur(
-                            surfaceId: id, radius: windowRadius
-                        )
-                    } else {
-                        try await compositor.setBackdropBlurRegion(
-                            surfaceId: id, radius: 0,
-                            x: 0, y: 0, w: 0, h: 0, cornerRadius: 0
-                        )
-                    }
-                } else if perPlate {
-                    do {
-                        try await compositor.setBackdropGlassRegions(
-                            surfaceId: id, radius: pending.radius,
-                            rects: pending.rects
-                        )
-                    } catch let gone as LavaIDL.SurfaceNotFound {
-                        throw gone
-                    } catch {
-                        // A compositor older than the call: one bend for
-                        // the surface, as before, and stop asking.
-                        MainQueue.async { glassRegionsUnsupported = true }
-                        try await compositor.setBackdropBlurRegions(
-                            surfaceId: id, radius: pending.radius,
-                            rects: pending.rects.map(\.plain)
-                        )
-                    }
-                } else {
-                    try await compositor.setBackdropBlurRegions(
-                        surfaceId: id, radius: pending.radius,
-                        rects: pending.rects.map(\.plain)
+                try sendBackdrop(compositor, id, plates, state)
+            } catch is LavaIDL.SurfaceNotFound {
+                // Closed under us; there is nothing left to frost.
+            } catch {
+                FileHandle.standardError.write(
+                    Data("SetBackdrop failed: \(error)\n".utf8)
+                )
+            }
+        }
+        if blocking { send() } else { backdropQueue.async(execute: send) }
+    }
+
+    private static func sendBackdrop(
+        _ compositor: Compositor, _ id: UInt32, _ plates: [Plate],
+        _ state: SurfaceBackdrop
+    ) throws {
+        if !backdropCallMissing {
+            do {
+                try blockingCall {
+                    try await compositor.setBackdrop(
+                        surfaceId: id, plates: plates.map(wire)
                     )
                 }
+                return
+            } catch let gone as LavaIDL.SurfaceNotFound {
+                throw gone
             } catch {
-                FileHandle.standardError.write(
-                    Data("SetBackdropBlurRegions failed: \(error)\n".utf8)
-                )
-                MainQueue.async {
-                    BackdropBridge.frostOverlays = nil
-                    ViewInvalidation.markDirty()
-                }
+                // Anything but a missing surface: a compositor older than the
+                // call. The older ones, from now on.
+                backdropCallMissing = true
             }
         }
+        try sendLegacyBackdrop(compositor, id, state)
     }
 
-    private struct OverlayFrost: Equatable, Sendable {
-        var surface: UInt32
-        var radius: Float
-        var rects: [LavaIDL.GlassFrostRect]
+    private static func wire(_ plate: Plate) -> LavaIDL.BackdropPlate {
+        var effects: [BackdropEffect] = [.blur(BackdropBlur(radius: plate.radius))]
+        effects.append(.glass(BackdropGlass(
+            refraction: plate.glass.refraction,
+            rim: plate.glass.refraction > 0 ? 1 : 0,
+            magnification: plate.glass.magnification
+        )))
+        if plate.glass.frost > 0 {
+            effects.append(.frost(BackdropFrost(grain: plate.glass.frost)))
+        }
+        return LavaIDL.BackdropPlate(
+            x: plate.x, y: plate.y, w: plate.w, h: plate.h,
+            cornerRadius: plate.cornerRadius, effects: effects
+        )
+    }
 
-        /// By hand: the generated `GlassFrostRect` is a wire type and carries
-        /// no `Equatable`, and this comparison is what stops a call per frame
-        /// for a menu that has not moved. The surface is part of it so one
-        /// window's plates do not count as another's.
-        static func == (a: Self, b: Self) -> Bool {
-            a.surface == b.surface && a.radius == b.radius
-                && a.rects.count == b.rects.count
-                && zip(a.rects, b.rects).allSatisfy {
-                    $0.x == $1.x && $0.y == $1.y && $0.w == $1.w
-                        && $0.h == $1.h && $0.cornerRadius == $1.cornerRadius
-                        && $0.refraction == $1.refraction && $0.frost == $1.frost
-                }
+    /// The same backdrop through the calls `SetBackdrop` replaced, for a
+    /// compositor that predates it. No magnification: they cannot say it.
+    private static func sendLegacyBackdrop(
+        _ compositor: Compositor, _ id: UInt32, _ state: SurfaceBackdrop
+    ) throws {
+        let glass = state.viewGlass ?? state.glass
+        try blockingCall {
+            try await compositor.setBackdropRefraction(surfaceId: id, px: glass.refraction)
+            try await compositor.setBackdropFrost(surfaceId: id, frost: glass.frost)
+            if state.regionRadius > 0, !state.regions.isEmpty {
+                try await compositor.setBackdropGlassRegions(
+                    surfaceId: id, radius: state.regionRadius,
+                    rects: state.regions.map {
+                        LavaIDL.GlassFrostRect(
+                            x: $0.x, y: $0.y, w: $0.w, h: $0.h,
+                            cornerRadius: $0.cornerRadius,
+                            refraction: $0.refraction, frost: $0.frost
+                        )
+                    }
+                )
+            } else if state.radius > 0 {
+                try await compositor.setBackdropBlur(
+                    surfaceId: id, radius: state.radius
+                )
+            } else {
+                try await compositor.setBackdropBlurRegion(
+                    surfaceId: id, radius: 0, x: 0, y: 0, w: 0, h: 0,
+                    cornerRadius: 0
+                )
+            }
         }
     }
 
@@ -1443,9 +1476,11 @@ public enum LavaClient {
             )
             // Anything the application asked for before it had a surface.
             flushMinimumSize()
-            flushBackdropRefraction()
-            flushBackdropFrost()
-            flushBackdropBlur()
+            // The process's `WindowBackdrop`, unless `setBackdropBlur` said.
+            if !mainBackdropRadiusSet {
+                mainBackdrop.radius = WindowBackdrop.current.compositorBlurRadius
+            }
+            syncBackdrop(surfaceID, blocking: true)
             if let pending = pendingPanelArea {
                 pendingPanelArea = nil
                 startPanelArea(pending)
@@ -1591,23 +1626,15 @@ public enum LavaClient {
 
         // Always arm the hook. A probe that sent radius 0 at startup
         // cleared the window frost a terminal had just asked for, and
-        // every frame without a popup then kept it cleared. Idle emits
-        // no-op inside `flushOverlayFrost` until a popup actually asks.
+        // every frame without a popup then kept it cleared. An idle frame
+        // asks for the backdrop the surface already has, which
+        // `syncBackdrop` sends nothing for.
         BackdropBridge.surfaceGlass = { glass in
             LavaClient.setSurfaceGlass(glass)
         }
 
         BackdropBridge.frostOverlays = { radius, rects in
-            LavaClient.setBackdropGlassRegions(
-                radius: radius,
-                rects: rects.map {
-                    LavaIDL.GlassFrostRect(
-                        x: $0.x, y: $0.y, w: $0.w, h: $0.h,
-                        cornerRadius: $0.cornerRadius, refraction: $0.refraction,
-                        frost: $0.frost
-                    )
-                }
-            )
+            LavaClient.setBackdropRegions(radius: radius, rects: rects)
         }
 
         // The window's own chrome, for an app drawing its own frame — and for
@@ -2009,43 +2036,21 @@ public enum LavaClient {
             return nil
         }
         extra.surface = surface
-        openedBackdrop[surface] = max(0, backdropBlur)
-        openedGlass[surface] = (max(0, refraction), min(max(frost, 0), 1))
         // Whenever the caller asked — a popup or a menu fly-out. The wash on
         // top has to be translucent or the plate is painted and then covered.
         // The corner is not a parameter: the compositor cuts the plate to
         // the same radius as the window mask, or the two disagree. A hidden
         // fly-out is not captured until `ShowSubmenu` places it.
-        if backdropBlur > 0 {
-            do {
-                try blockingCall {
-                    // Before the blur, so the first plate is already bent.
-                    if refraction > 0 {
-                        try await compositor.setBackdropRefraction(
-                            surfaceId: surface, px: refraction
-                        )
-                    }
-                    try await compositor.setBackdropBlur(
-                        surfaceId: surface, radius: backdropBlur
-                    )
-                }
-            } catch {
-                FileHandle.standardError.write(
-                    Data("openWindow: backdrop blur failed: \(error)\n".utf8)
-                )
-            }
-            // On its own, after the blur: a compositor older than the call
-            // still frosts, only without the grain.
-            if frost > 0 {
-                report("SetBackdropFrost") {
-                    try blockingCall {
-                        try await compositor.setBackdropFrost(
-                            surfaceId: surface, frost: frost
-                        )
-                    }
-                }
-            }
-        }
+        //
+        // Blocking, so the first plate is in place — bent and grained — before
+        // the input stream opens and the window can be shown.
+        backdrops[surface] = SurfaceBackdrop(
+            radius: max(0, backdropBlur),
+            glass: PlateGlass(
+                refraction: max(0, refraction), frost: min(max(frost, 0), 1)
+            )
+        )
+        syncBackdrop(surface, blocking: true)
 
         let input: InputChannel
         do {
@@ -2090,10 +2095,8 @@ public enum LavaClient {
         guard let extra = extraSurfaces.removeValue(forKey: window.rawValue)
         else { return }
         editor.stopPublishingFrames(window: window)
-        openedBackdrop[extra.surface] = nil
-        openedGlass[extra.surface] = nil
-        lastSurfaceGlass[extra.surface] = nil
-        lastOverlayFrost[extra.surface] = nil
+        backdrops[extra.surface] = nil
+        lastBackdrop[extra.surface] = nil
         destroyCompositorSurface(extra.surface)
         extra.input?.close()
         extra.surface = 0
@@ -2129,28 +2132,22 @@ public enum LavaClient {
     nonisolated(unsafe) private static var surfaceID: UInt32 = 0
     /// A minimum size stated before the surface existed. See `setMinimumSize`.
     nonisolated(unsafe) private static var pendingMinSize: (width: Float, height: Float)?
-    /// Backdrop frost asked for before the surface existed. See `setBackdropBlur`.
-    nonisolated(unsafe) private static var pendingBackdropBlur: Float?
-    /// The same, for `setBackdropRefraction`.
-    nonisolated(unsafe) private static var pendingBackdropRefraction: Float?
-    /// The same, for `setBackdropFrost`.
-    nonisolated(unsafe) private static var pendingBackdropFrost: Float?
-    /// Popup frost last sent / last asked, so emit can call every frame.
-    nonisolated(unsafe) private static var pendingOverlayFrost: OverlayFrost?
-    nonisolated(unsafe) private static var lastOverlayFrost: [UInt32: OverlayFrost] = [:]
-    /// What a popup or fly-out surface was opened with — `openWindow`'s
-    /// `backdropBlur` and `refraction`. Where a frame's own frost and glass
-    /// fall back to once no view asks for them any more. The main surface is
-    /// not in here: its answer is `WindowBackdrop` and the `pending` pair.
-    nonisolated(unsafe) private static var openedBackdrop: [UInt32: Float] = [:]
-    /// The same for the plate's bend and grain, `openWindow`'s `refraction`
-    /// and `frost`.
-    nonisolated(unsafe) private static var openedGlass: [UInt32: (refraction: Float, frost: Float)] = [:]
-    /// What `setSurfaceGlass` last told the compositor, per surface.
-    nonisolated(unsafe) private static var lastSurfaceGlass: [UInt32: SurfaceGlass] = [:]
-    /// Set once a compositor answers `SetBackdropGlassRegions` with anything
-    /// but a missing surface: it predates the call. See `flushOverlayFrost`.
-    nonisolated(unsafe) private static var glassRegionsUnsupported = false
+    /// The main window's backdrop, held from before its surface exists. See
+    /// `SurfaceBackdrop`.
+    nonisolated(unsafe) private static var mainBackdrop = SurfaceBackdrop()
+    /// Whether `setBackdropBlur` named the main window's radius; otherwise it
+    /// is `WindowBackdrop`'s, read when the surface is created.
+    nonisolated(unsafe) private static var mainBackdropRadiusSet = false
+    /// Every other window's — popups and fly-outs, from `openWindow`.
+    nonisolated(unsafe) private static var backdrops: [UInt32: SurfaceBackdrop] = [:]
+    /// The plates last sent per surface, so a frame that asks for the same
+    /// backdrop costs nothing.
+    nonisolated(unsafe) private static var lastBackdrop: [UInt32: [Plate]] = [:]
+    /// Set once a compositor answers `SetBackdrop` with anything but a
+    /// missing surface: it predates the call. See `sendBackdrop`.
+    nonisolated(unsafe) private static var backdropCallMissing = false
+    /// Where backdrop changes asked from the frame loop are sent, in order.
+    private static let backdropQueue = DispatchQueue(label: "lava.client.backdrop")
     /// Input lease for `quit()` / compositor-side close. Set in `run`.
     nonisolated(unsafe) private static var inputChannel: InputChannel?
     /// Handed from `open` to `run`. Statics rather than a returned handle so

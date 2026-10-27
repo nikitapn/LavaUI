@@ -493,7 +493,8 @@ void CanvasSurface::setCornerRadius(float radius, bool top, bool bottom) {
 }
 
 bool CanvasSurface::frostWithTexture(int id, float radius, float cornerRadius,
-                                     float refractPx, float frost) {
+                                     float refractPx, float frost, float rim,
+                                     float magnification) {
   if (id <= 0) return false;
 
   canvas::DrawCommand begin{};
@@ -516,6 +517,9 @@ bool CanvasSurface::frostWithTexture(int id, float radius, float cornerRadius,
   end.kind = static_cast<uint32_t>(canvas::DrawCommandKind::EndContentBlur);
   end.aux = std::max(0.f, refractPx);
   end.w = std::clamp(frost, 0.f, 1.f);
+  // The rest of the plate's glass, in fields an End has no other use for.
+  end.y = std::clamp(rim, 0.f, 1.f);
+  end.x = magnification > 1.f ? magnification : 0.f;
   // Full adaptive strength: a plate is an opaque capture of the desktop, and
   // a dock or a popup frosted over a white window is exactly the case it is
   // for — without it the glass blurs to white and disappears.
@@ -537,18 +541,21 @@ bool CanvasSurface::frostWithTexture(int id, float radius, float cornerRadius,
 bool CanvasSurface::frostFromRgba(const uint8_t *rgba, uint32_t srcW,
                                   uint32_t srcH, float radius,
                                   const std::string &key, float cornerRadius,
-                                  float refractPx, float frost) {
+                                  float refractPx, float frost, float rim,
+                                  float magnification) {
   if (rgba == nullptr || srcW < 1 || srcH < 1 || key.empty()) return false;
   const int id =
       renderer_.engine().uploadTexture(key, rgba, srcW, srcH);
-  return frostWithTexture(id, radius, cornerRadius, refractPx, frost);
+  return frostWithTexture(id, radius, cornerRadius, refractPx, frost, rim,
+                          magnification);
 }
 
 bool CanvasSurface::frostFromDmabuf(const wlr_dmabuf_attributes &src, int srcX,
                                     int srcY, int srcW, int srcH, float radius,
                                     const std::string &key,
                                     float cornerRadius, float refractPx,
-                                    float frost) {
+                                    float frost, float rim,
+                                    float magnification) {
   if (srcW < 1 || srcH < 1 || key.empty() || src.n_planes < 1) return false;
   Application *app = renderer_.engine().application();
   if (app == nullptr) return false;
@@ -575,7 +582,8 @@ bool CanvasSurface::frostFromDmabuf(const wlr_dmabuf_attributes &src, int srcX,
   const int id = app->refreshDmabufTexture(
       key, desc, srcX, srcY, static_cast<uint32_t>(srcW),
       static_cast<uint32_t>(srcH), windowId_);
-  return frostWithTexture(id, radius, cornerRadius, refractPx, frost);
+  return frostWithTexture(id, radius, cornerRadius, refractPx, frost, rim,
+                          magnification);
 }
 
 bool CanvasSurface::renderList(

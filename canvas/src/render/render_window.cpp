@@ -2185,13 +2185,16 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       // of the desktop — sets it. A `.blur()` composites a subtree's own
       // silhouette, and compressing that would just grey the view.
       // A plate has no fill of its own to draw a rim on, so it bends and
-      // lights in one. Its frost rides in the End's `w`, unused otherwise.
+      // lights in one. Its frost rides in the End's `w`, its rim in `y` and
+      // its magnification in `x`, all unused otherwise — and all zero from a
+      // `.blur()`, which composites flat and unlit, as it always has.
       const float refractPx = std::max(0.f, cmd.aux);
       pushBlurComposite(x0, y0, x1 - x0, y1 - y0, viewW, viewH, radius,
                         static_cast<float>(open.param),
                         {.refractPx = refractPx,
-                         .rim = refractPx > 0.f ? 1.f : 0.f,
-                         .frost = std::clamp(cmd.w, 0.f, 1.f)},
+                         .rim = std::clamp(cmd.y, 0.f, 1.f),
+                         .frost = std::clamp(cmd.w, 0.f, 1.f),
+                         .magnify = std::clamp(cmd.x, 1.f, 4.f)},
                         static_cast<float>(std::min(cmd.param, 255u)) / 255.f);
       break;
     }

@@ -1215,7 +1215,8 @@ public final class DrawList {
                 BackdropBridge.FrostRect(
                     x: x, y: y, w: w, h: h, cornerRadius: cornerRadius,
                     refraction: glass?.refraction ?? plateRefraction,
-                    frost: glass?.frost ?? 0
+                    frost: glass?.frost ?? 0,
+                    magnification: glass?.magnification ?? 1
                 )
             )
             desktopFrostRadius = max(desktopFrostRadius, radius)
@@ -1398,7 +1399,7 @@ public final class DrawList {
         // it flew out of. One radius covers the surface, so the strongest
         // wins.
         BackdropBridge.frostOverlays?(desktopFrostRadius, desktopFrost)
-        BackdropBridge.surfaceGlass?(windowGlass.map { ($0.refraction, $0.frost) })
+        BackdropBridge.surfaceGlass?(windowGlass)
         pendingOverlays.removeAll(keepingCapacity: true)
         // Last of all, over the overlays too: a tooltip on a menu row is
         // about the row.

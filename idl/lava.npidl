@@ -644,6 +644,51 @@ message GlassFrostRect {
   frost: f32;
 }
 
+/// The desktop under a plate, blurred. `radius` in layout pixels. A plate
+/// without one is not drawn: a sharp plate is not supported yet.
+message BackdropBlur {
+  radius: f32;
+}
+
+/// The plate as glass. `refraction` is how far its rim bends what is under
+/// it, in pixels (0: flat); `rim`, 0…1, the light the rim catches;
+/// `magnification`, 1…4, how much larger what is under the plate is drawn,
+/// about its centre (1: none).
+message BackdropGlass {
+  refraction: f32;
+  rim: f32;
+  magnification: f32;
+}
+
+/// The grain of frosted glass on a plate, 0…1.
+message BackdropFrost {
+  grain: f32;
+}
+
+/// One thing a plate does to the desktop under it. They stack: a plate is
+/// blurred, then bent and lit, then grained, whatever order they are listed
+/// in. Named one of a list rather than fields of the plate because a message
+/// cannot grow — `GlassFrostRect` exists only because `FrostRect` could not —
+/// and a new kind of effect can be added here as a new arm, which a
+/// compositor that does not know it skips.
+alias BackdropEffect = one of {
+  blur: BackdropBlur;
+  glass: BackdropGlass;
+  frost: BackdropFrost;
+};
+
+/// A frosted rectangle of the desktop behind a surface, and what it does.
+/// `x,y,w,h` in the surface's own coordinates; `w` or `h` of 0 is the whole
+/// surface. `cornerRadius` rounds the plate to match what sits on it.
+message BackdropPlate {
+  x: f32;
+  y: f32;
+  w: f32;
+  h: f32;
+  cornerRadius: f32;
+  effects: vector<BackdropEffect>;
+}
+
 /// Whether anything is in the way of a panel.
 ///
 /// What it answers is "is the strip I occupy clear of windows right now",
@@ -2591,6 +2636,22 @@ interface Compositor {
 
   /// Hides every window, or brings them back, as Mod+D does.
   void ToggleShowDesktop();
+
+  /// Everything about the desktop behind this surface, in one call: every
+  /// plate, and on each everything it does. An empty list is no backdrop.
+  ///
+  /// Replaces `SetBackdropBlur`, `SetBackdropBlurRegion(s)`,
+  /// `SetBackdropGlassRegions`, `SetBackdropRefraction` and
+  /// `SetBackdropFrost`, which each set a piece of this — and whose pieces a
+  /// client could only send one at a time, so a frame could be composited
+  /// with the new bend and the old grain. Those stay for clients built
+  /// before this; a surface follows whichever kind of call reached it last,
+  /// and this one leaves no surface-wide bend or grain behind to mix into
+  /// its plates.
+  ///
+  /// Last in the interface, for the reason `SetBackdropRefraction` gives.
+  void SetBackdrop(surfaceId: in u32, plates: in vector<BackdropPlate>)
+      raises(SurfaceNotFound);
 }
 
 /// Image registration that does not stop the desktop.

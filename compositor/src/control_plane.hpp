@@ -244,6 +244,15 @@ struct CompositorHost {
     float refraction = -1.f;
     /// The grain of frosted glass on this plate, 0…1.
     float frost = 0.f;
+    /// This plate's own blur radius; 0 takes the call's. Only `SetBackdrop`
+    /// gives plates radii of their own.
+    float radius = 0.f;
+    /// The light its rim catches, 0…1. Negative is the older calls' rule: a
+    /// rim exactly where the plate bends.
+    float rim = -1.f;
+    /// How much larger the desktop under it is drawn, about its centre; 1 is
+    /// none.
+    float magnification = 1.f;
   };
 
   /// Frost the desktop behind this surface, one plate per rect. `radius` 0 or
@@ -261,6 +270,12 @@ struct CompositorHost {
   /// The grain of frosted glass on this surface's frost plates, 0…1; 0 is
   /// none, which is also where every surface starts.
   virtual bool setBackdropFrost(uint32_t surfaceId, float frost) = 0;
+
+  /// The whole backdrop at once (`SetBackdrop`): these plates, each carrying
+  /// its own radius, bend, rim, grain and magnification, and no surface-wide
+  /// bend or grain left over from `setBackdropRefraction`/`setBackdropFrost`
+  /// to mix into them. Empty turns the backdrop off.
+  virtual bool setBackdrop(uint32_t surfaceId, std::vector<FrostRect> plates) = 0;
 
   /// Remembers the pointer image a surface wants, and applies it now if the
   /// pointer is over that surface. `shape` is a `CursorShape` ordinal — an
