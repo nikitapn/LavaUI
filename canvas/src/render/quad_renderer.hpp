@@ -304,7 +304,15 @@ class QuadRenderer {
   /// == true` reads `points` as alternating inner/outer pairs and
   /// triangulates a strip between them — an annulus sector (donut wedge),
   /// which has no single point the whole boundary can fan from.
-  void pushMesh(const vec2 *points, uint32_t count, uint32_t rgba, bool isRing);
+  ///
+  /// Antialiased by a fringe: the fill is inset half a device pixel and a
+  /// one-pixel band round the outline fades to transparent, so an edge has
+  /// the coverage of a glyph's rather than the four samples of MSAA.
+  /// `sharedEnds` leaves the two edges that close the shape — a wedge's
+  /// straight sides — hard: a neighbour covers the other half of them, and
+  /// two fades laid over each other let the background through as a seam.
+  void pushMesh(const vec2 *points, uint32_t count, uint32_t rgba, bool isRing,
+                bool sharedEnds = false);
 
   /// Cuts everything outside a rounded rect out of what has already been
   /// drawn: `dst *= coverage`, so the corners become transparent and the edge
@@ -569,6 +577,9 @@ class QuadRenderer {
   // CPU-side build arena (copied into frames_[slot] on end()).
   std::vector<Vertex>   vertices_;
   std::vector<uint32_t> indices_;
+  // pushMesh's outline walk and per-vertex offsets, kept between calls.
+  std::vector<uint32_t> meshOutline_;
+  std::vector<vec2>     meshOffset_;
   std::vector<Instance> instances_;
   std::vector<Batch>    batches_;
   /// Exclusive batch-end indices for each closeSegment() (+ final in end()).

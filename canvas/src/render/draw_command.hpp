@@ -66,7 +66,9 @@ enum class DrawCommandKind : uint32_t {
   /// as alternating inner/outer pairs and triangulates a ring strip between
   /// them (an annulus sector — the shape a donut chart needs, since a hole
   /// in the middle means there is no single point the whole boundary fans
-  /// from).
+  /// from). aux is a bit set: 1 is that ring layout, 2 says the two edges
+  /// that end the shape — a wedge's straight sides — are shared with a
+  /// neighbour, so the renderer must not fade them (`pushMesh`).
   Mesh = 12,
   /// Connected 1px line strip. param = first vertex index, w = vertex count,
   /// into the same MeshVertex side buffer used by Mesh.

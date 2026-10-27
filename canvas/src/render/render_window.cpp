@@ -2037,8 +2037,9 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
         const auto &mv = list.meshVertices[first + i];
         meshPointScratch_.push_back({mv.x + ox, mv.y + oy});
       }
+      const auto meshFlags = static_cast<uint32_t>(cmd.aux);
       quads_.pushMesh(meshPointScratch_.data(), count, faded(cmd.color),
-                      cmd.aux > 0.f);
+                      (meshFlags & 1u) != 0, (meshFlags & 2u) != 0);
       break;
     }
     case canvas::DrawCommandKind::Polyline: {

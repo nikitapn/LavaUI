@@ -784,7 +784,8 @@ public final class DrawList {
                 let a = startAngle + (endAngle - startAngle) * (Float(i) / Float(n))
                 points.append((cx + cos(a) * outerRadius, cy + sin(a) * outerRadius))
             }
-            polygon(points, color: color)
+            // Wedges tile a pie; their straight sides must not fade.
+            emitMesh(points, color: color, isRing: false, sharedEnds: true)
         } else {
             var inner: [(x: Float, y: Float)] = []
             var outer: [(x: Float, y: Float)] = []
@@ -797,11 +798,22 @@ public final class DrawList {
                 inner.append((cx + c * innerRadius, cy + s * innerRadius))
                 outer.append((cx + c * outerRadius, cy + s * outerRadius))
             }
-            ring(inner: inner, outer: outer, color: color)
+            var points: [(x: Float, y: Float)] = []
+            points.reserveCapacity(inner.count * 2)
+            for i in 0..<inner.count {
+                points.append(inner[i])
+                points.append(outer[i])
+            }
+            emitMesh(points, color: color, isRing: true, sharedEnds: true)
         }
     }
 
-    private func emitMesh(_ points: [(x: Float, y: Float)], color: Color, isRing: Bool) {
+    /// `sharedEnds`: the shape's two closing edges (a wedge's straight sides)
+    /// meet a neighbour, so the renderer leaves them unfaded — see `Mesh` in
+    /// draw_command.hpp.
+    private func emitMesh(
+        _ points: [(x: Float, y: Float)], color: Color, isRing: Bool, sharedEnds: Bool = false
+    ) {
         let first = UInt32(meshVertexCount)
         if meshVertexCount + points.count > meshVertexCapacity {
             grow(meshVertices: meshVertexCount + points.count)
@@ -814,7 +826,7 @@ public final class DrawList {
         }
         append(
             kind: .mesh, x: 0, y: 0, w: Float(points.count), h: 0,
-            color: color, param: first, aux: isRing ? 1 : 0
+            color: color, param: first, aux: Float((isRing ? 1 : 0) | (sharedEnds ? 2 : 0))
         )
     }
 

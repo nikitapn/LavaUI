@@ -1162,7 +1162,7 @@ void QuadRenderer::pushImage(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1,
 }
 
 void QuadRenderer::pushMesh(const vec2 *points, uint32_t count, uint32_t rgba,
-                            bool isRing) {
+                            bool isRing, bool sharedEnds) {
   if (points == nullptr) {
     return;
   }
@@ -1173,17 +1173,85 @@ void QuadRenderer::pushMesh(const vec2 *points, uint32_t count, uint32_t rgba,
   }
   ensureBatchTexture(glyphAtlasView_);
   flushInstanceBatch();
-  const uint32_t base = static_cast<uint32_t>(vertices_.size());
-  for (uint32_t i = 0; i < count; ++i) {
+
+  // The outline, as indices into `points`. A fan's points are its outline in
+  // order; a ring's is the outer arc out and the inner arc back.
+  meshOutline_.clear();
+  if (isRing) {
+    for (uint32_t i = 1; i < count; i += 2) meshOutline_.push_back(i);
+    for (uint32_t i = count; i >= 2; i -= 2) meshOutline_.push_back(i - 2);
+  } else {
+    for (uint32_t i = 0; i < count; ++i) meshOutline_.push_back(i);
+  }
+  const uint32_t n = static_cast<uint32_t>(meshOutline_.size());
+
+  // Winding decides which side of an edge is outside; producers use both.
+  float area2 = 0.f;
+  for (uint32_t k = 0; k < n; ++k) {
+    const vec2 a = points[meshOutline_[k]];
+    const vec2 b = points[meshOutline_[(k + 1) % n]];
+    area2 += a.x * b.y - b.x * a.y;
+  }
+  const float outward = area2 >= 0.f ? 1.f : -1.f;
+
+  // The edges that close the shape: a fan's last-to-first pair around its
+  // pivot, a ring's two ends between the arcs.
+  const uint32_t endA = isRing ? n / 2 - 1 : 0;
+  const uint32_t endB = n - 1;
+  auto hard = [&](uint32_t k) { return sharedEnds && (k == endA || k == endB); };
+
+  // Half a device pixel each way of the true edge: the fill stops half a
+  // pixel inside it, the fringe fades out half a pixel beyond, and the
+  // coverage midpoint stays on the edge the producer asked for.
+  const float half = 0.5f / viewZoom_;
+  auto edgeNormal = [&](uint32_t k) -> vec2 {
+    // A hard edge contributes no offset, so a corner on it slides along it
+    // under the other edge's normal and the edge stays where it was drawn.
+    if (hard(k)) return {0.f, 0.f};
+    const vec2 a = points[meshOutline_[k]];
+    const vec2 b = points[meshOutline_[(k + 1) % n]];
+    const float dx = b.x - a.x, dy = b.y - a.y;
+    const float len = std::sqrt(dx * dx + dy * dy);
+    if (len < 1e-6f) return {0.f, 0.f};
+    return {outward * dy / len, -outward * dx / len};
+  };
+  meshOffset_.assign(count, vec2{0.f, 0.f});
+  for (uint32_t k = 0; k < n; ++k) {
+    // Miter of the two edges meeting here. A repeated point has no edge of
+    // its own, so it borrows the neighbour's rather than collapsing; so does
+    // a corner on a hard edge.
+    vec2 prev = edgeNormal((k + n - 1) % n);
+    vec2 next = edgeNormal(k);
+    if (prev.x == 0.f && prev.y == 0.f) prev = next;
+    if (next.x == 0.f && next.y == 0.f) next = prev;
+    vec2 m{prev.x + next.x, prev.y + next.y};
+    const float d = m.x * m.x + m.y * m.y;
+    if (d < 1e-6f) continue;  // a hairpin: no sensible direction
+    // m / |m|² scales a unit bisector to the miter length; a sharp tip is
+    // capped at 4× so it does not spike out of the shape.
+    float scale = 2.f / d;
+    scale = std::min(scale, 4.f / std::sqrt(d));
+    meshOffset_[meshOutline_[k]] = {m.x * scale * half, m.y * scale * half};
+  }
+
+  const uint32_t clear = rgba & 0x00FFFFFFu;
+  auto vertex = [&](vec2 pos, uint32_t color) {
     vertices_.push_back(Vertex{
-      .pos      = points[i],
+      .pos      = pos,
       .local    = {0.0f, 0.0f},
       .halfSize = {0.0f, 0.0f},
       .radius   = 0.0f,
-      .color    = rgba,
+      .color    = color,
       .kind     = static_cast<uint32_t>(Kind::Mesh),
       .textureIndex = currentTextureIndex_,
     });
+  };
+
+  // The fill, inset.
+  const uint32_t base = static_cast<uint32_t>(vertices_.size());
+  for (uint32_t i = 0; i < count; ++i) {
+    const vec2 o = meshOffset_[i];
+    vertex({points[i].x - o.x, points[i].y - o.y}, rgba);
   }
   if (isRing) {
     // Alternating inner[i], outer[i]: two triangles per step, the usual
@@ -1204,6 +1272,28 @@ void QuadRenderer::pushMesh(const vec2 *points, uint32_t count, uint32_t rgba,
       indices_.push_back(base + i);
       indices_.push_back(base + i + 1);
     }
+  }
+
+  // The fringe: a quad per outline edge, from the inset fill out to a
+  // transparent copy of the outline. Straight colour interpolates across it,
+  // so the fade is linear in distance — what a box filter's coverage is.
+  const uint32_t fringe = static_cast<uint32_t>(vertices_.size());
+  for (uint32_t k = 0; k < n; ++k) {
+    const uint32_t i = meshOutline_[k];
+    const vec2 o = meshOffset_[i];
+    vertex({points[i].x + o.x, points[i].y + o.y}, clear);
+  }
+  for (uint32_t k = 0; k < n; ++k) {
+    if (hard(k)) continue;
+    const uint32_t k1 = (k + 1) % n;
+    const uint32_t in0 = base + meshOutline_[k], in1 = base + meshOutline_[k1];
+    const uint32_t out0 = fringe + k, out1 = fringe + k1;
+    indices_.push_back(in0);
+    indices_.push_back(in1);
+    indices_.push_back(out1);
+    indices_.push_back(in0);
+    indices_.push_back(out1);
+    indices_.push_back(out0);
   }
 }
 
