@@ -501,6 +501,11 @@ background still counts as on it.
 
 ### Scrolling and lazy content
 
+For streaming output, use `ScrollView(followsEnd: true)`. It starts at the end
+and follows content growth and viewport resizing. Scrolling away pauses following;
+returning within two points of the end resumes it. Ordinary scroll views keep
+their position as content grows.
+
 ```swift
 ScrollView(.vertical, showsIndicator: true) {
     LazyVStack(items, rowHeight: 36, spacing: 2) { item in

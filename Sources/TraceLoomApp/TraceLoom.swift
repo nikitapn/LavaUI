@@ -582,7 +582,7 @@ public struct TraceLoom: View {
                 Text(assistant.model, color: .dim)
             }
             Divider()
-            ScrollView {
+            ScrollView(followsEnd: true) {
                 VStack(spacing: 10) {
                     if state.thinkingTail.isEmpty && state.activity.isEmpty
                         && state.suggestion == nil && state.problem == nil {

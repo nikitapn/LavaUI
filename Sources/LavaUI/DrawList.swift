@@ -1540,8 +1540,10 @@ public final class DrawList {
             if let scroll = node as? ScrollNode {
                 // Record what Yoga granted; clamping against the requested size
                 // would let content scroll out of reach.
-                scroll.viewportLength = scroll.axis == .vertical ? h : w
-                scroll.contentLength = scroll.measureContentLength()
+                scroll.updateScrollMetrics(
+                    viewport: scroll.axis == .vertical ? h : w,
+                    content: scroll.measureContentLength()
+                )
                 // The renderer owns the transform and clip. Swift keeps only
                 // its last reported offset so virtualization/culling can emit
                 // the right content; applying it to commands here as well

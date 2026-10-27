@@ -27,6 +27,9 @@ public struct ScrollView<Content: View>: PrimitiveView {
     /// Where the view is, kept up to date as it scrolls, and a way to put it
     /// somewhere. See `ScrollPosition`.
     public var position: ScrollPosition?
+    /// Keeps growing content at the end until the reader scrolls away.
+    /// Returning to the end resumes following. Off by default.
+    public var followsEnd: Bool
 
     /// Creates a scroll view. Every parameter matches the property of the same name.
     public init(
@@ -34,6 +37,7 @@ public struct ScrollView<Content: View>: PrimitiveView {
         showsIndicator: Bool = true,
         indicatorInset: Float = 0,
         position: ScrollPosition? = nil,
+        followsEnd: Bool = false,
         @ViewBuilder content: () -> Content
     ) {
         self.axis = axis
@@ -41,6 +45,7 @@ public struct ScrollView<Content: View>: PrimitiveView {
         self.showsIndicator = showsIndicator
         self.indicatorInset = indicatorInset
         self.position = position
+        self.followsEnd = followsEnd
     }
 
     public var dumpDetail: String { "\(axis)" }
@@ -56,6 +61,7 @@ public struct ScrollView<Content: View>: PrimitiveView {
         let node = ScrollNode(axis: axis, content: ViewGraph.mount(content))
         node.showsIndicator = showsIndicator
         node.indicatorInset = indicatorInset
+        node.setFollowsEnd(followsEnd)
         node.registerScrolling()
         node.bind(position)
         return node
@@ -65,6 +71,7 @@ public struct ScrollView<Content: View>: PrimitiveView {
         guard let scroll = node as? ScrollNode, scroll.axis == axis else {
             return mountPrimitive()
         }
+        scroll.setFollowsEnd(followsEnd)
         scroll.showsIndicator = showsIndicator
         scroll.indicatorInset = indicatorInset
         scroll.updateContent(ViewGraph.reconcile(scroll.contentNode, with: content))
@@ -149,6 +156,30 @@ final class ScrollNode: YogaBoxNode {
     /// See `ScrollView.indicatorInset`.
     var indicatorInset: Float = 0
 
+    private var followsEnd = false
+    private(set) var isFollowingEnd = false
+
+    func setFollowsEnd(_ enabled: Bool) {
+        if enabled != followsEnd { isFollowingEnd = enabled }
+        followsEnd = enabled
+        // Resolve before lazy mounting, as with an explicit position jump.
+        if enabled && isFollowingEnd { ScrollPositions.anyPending = true }
+    }
+
+    /// Runs after layout, including for detached overlays. A bottom request
+    /// travels to the renderer with the same frame as the new content.
+    func updateScrollMetrics(viewport: Float, content: Float) {
+        let changed = viewportLength != viewport || contentLength != content
+        viewportLength = viewport
+        contentLength = content
+        guard followsEnd, isFollowingEnd, changed,
+              !ScrollbarDrag.isDragging(id) else { return }
+        let target = maxOffset
+        requestOffset(target, immediate: true)
+        scrollOffset = target
+        position?.offset = target
+    }
+
     /// Captured from `Environment.current.theme` at mount/reconcile — the
     /// scroll-indicator paint runs later, as a separate pass with no
     /// environment scope active, so it reads this instead of `Theme.current`.
@@ -209,15 +240,19 @@ final class ScrollNode: YogaBoxNode {
         guard next !== position else { return }
         position = next
         guard let next else { return }
-        if next.pending == nil { next.scroll(to: next.offset) }
+        if next.pending == nil {
+            next.scroll(to: isFollowingEnd ? .greatestFiniteMagnitude : next.offset)
+        }
         ScrollPositions.anyPending = true
     }
 
     /// Jumps to the position's pending offset, measured against the layout
     /// just computed. True when lazy content has to settle again for it.
     func applyPendingPosition() -> Bool {
-        guard let position, let wanted = position.pending else { return false }
-        position.pending = nil
+        guard let wanted = position?.pending
+            ?? (followsEnd && isFollowingEnd ? Float.greatestFiniteMagnitude : nil)
+        else { return false }
+        position?.pending = nil
         let vertical = axis == .vertical
         viewportLength = vertical
             ? YGNodeLayoutGetHeight(yogaStorage) : YGNodeLayoutGetWidth(yogaStorage)
@@ -230,12 +265,13 @@ final class ScrollNode: YogaBoxNode {
         }
         contentLength = extent
         let target = clamped(wanted)
+        if followsEnd { isFollowingEnd = maxOffset - target <= 2 }
         // Assigned here as well as requested — unlike `requestOffset` — so
         // that lazy rows are mounted for where the view is going on the very
         // frame that takes it there. The request is immediate, so the
         // renderer is there on that frame too, and the two cannot disagree.
         scrollOffset = target
-        position.offset = target
+        position?.offset = target
         let serial = nextRevealSerial
         nextRevealSerial &+= 1
         if nextRevealSerial == 0 { nextRevealSerial = 1 }
@@ -261,6 +297,7 @@ final class ScrollNode: YogaBoxNode {
     /// use the same coordinate space as the pixels already on screen.
     func adoptRendererOffset(x: Float, y: Float) {
         let next = clamped(axis == .horizontal ? x : y)
+        if followsEnd { isFollowingEnd = maxOffset - next <= 2 }
         guard next != scrollOffset else { return }
         scrollOffset = next
         position?.offset = next
@@ -318,6 +355,7 @@ final class ScrollNode: YogaBoxNode {
     /// of easing toward it. See `kSceneScrollImmediate`.
     func requestOffset(_ offset: Float, immediate: Bool = false) {
         let target = clamped(offset)
+        if followsEnd { isFollowingEnd = maxOffset - target <= 2 }
         // Against where the next frame puts us, not where the last one
         // reported: mid-drag those differ by the whole remaining journey, and
         // comparing against the position would drop a pointer move that
