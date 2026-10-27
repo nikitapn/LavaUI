@@ -15,7 +15,6 @@
 
 namespace {
 
-
 // Keyed by glyph index (canvas::PositionedGlyph::glyphId), not Unicode
 // codepoint — a glyph index is what Font::rasterize() wants, and what lets
 // a ligature (several codepoints, one substituted glyph) cache and draw
@@ -53,12 +52,6 @@ struct TextRenderer::Impl {
   VmaAllocation atlasTextureAlloc_;
   VkImageView   atlasTextureView_;
   VkSampler     atlasSampler_;
-
-  // Rendering pipeline
-
-  // Instance data
-  
-  // Quad vertex buffer for instanced rendering
 
   // Atlas management
   int atlasWidth_;
@@ -175,8 +168,6 @@ struct TextRenderer::Impl {
     return fontId < fontKeys_.size() ? &fontKeys_[fontId] : nullptr;
   }
 
-
-
   void createAtlasTexture() {
     // Create atlas texture
     device_.createImage(
@@ -193,10 +184,14 @@ struct TextRenderer::Impl {
       canvas::GpuTag{canvas::GpuCategory::GlyphAtlas, 0,
                      "coverage atlas, shared by every window"});
 
-    // Transition to optimal layout
     device_.transitionImageLayout(atlasTexture_,
                                   VK_FORMAT_R8_UNORM,
                                   VK_IMAGE_LAYOUT_UNDEFINED,
+                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    clearAtlasImage(atlasTexture_);
+    device_.transitionImageLayout(atlasTexture_,
+                                  VK_FORMAT_R8_UNORM,
+                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     // Create image view
@@ -207,11 +202,20 @@ struct TextRenderer::Impl {
     atlasSampler_ = device_.createTextureSampler();
   }
 
-
-
-
-
-
+  /// Zeroes an atlas image in TRANSFER_DST layout. A glyph upload writes
+  /// only its own rectangle, but a glyph drawn at a fractional position is
+  /// sampled bilinearly, so its edge texels blend in the padding beside and
+  /// below it — and a new image's contents are undefined. Fresh VRAM is often
+  /// zero, which hides it; recycled VRAM in a long session drew a faint box
+  /// round every glyph.
+  void clearAtlasImage(VkImage image) {
+    VkCommandBuffer cmd = device_.beginSingleTimeCommands();
+    const VkClearColorValue zero{};
+    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdClearColorImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                         &zero, 1, &range);
+    device_.endSingleTimeCommands(cmd);
+  }
 
   /// Lookup only — no rasterizing, no packing, no upload. This is what the
   /// shared (reader) path calls; a null means "take the exclusive lock and
@@ -300,6 +304,7 @@ struct TextRenderer::Impl {
     device_.transitionImageLayout(newImage, VK_FORMAT_R8_UNORM,
                                   VK_IMAGE_LAYOUT_UNDEFINED,
                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    clearAtlasImage(newImage);
     device_.transitionImageLayout(atlasTexture_, VK_FORMAT_R8_UNORM,
                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
