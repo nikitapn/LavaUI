@@ -1988,20 +1988,16 @@ public final class DrawList {
             if !leaf.text.isEmpty, let f = leaf.font ?? FontStore.default {
                 let lineH = f.lineHeight
                 let labelW = f.shapedRun(leaf.text).width
-                let ink = f.inkBounds(leaf.text)
-                // `text()` adds its historical 4px pen inset. Prefer the
-                // visible bitmap bounds for compact symbols; ordinary/fallback
-                // text retains typographic line-box centering.
-                let labelX = ink.map {
-                    x + (w - $0.width) / 2 - $0.minX - 4
-                } ?? (x + (w - labelW) / 2 - 4)
-                let labelY = ink.map {
-                    y + (h - $0.height) / 2 - f.ascent - $0.minY
-                } ?? (y + max(0, (h - lineH) / 2))
+                // Centred on the line box, as a `Text` is — never on the ink.
+                // Ink centring lifted any label with a descender above its
+                // neighbours ("Use Keyring" beside "Unlock"), so buttons of one
+                // height share a baseline only this way. An icon that needs
+                // optical centring should be drawn, not taken from a font.
+                // `text()` adds its historical 4px pen inset.
                 text(
                     leaf.text,
-                    x: labelX,
-                    y: labelY,
+                    x: x + (w - labelW) / 2 - 4,
+                    y: y + max(0, (h - lineH) / 2),
                     w: w, h: lineH, color: leaf.color, font: f
                 )
             }
