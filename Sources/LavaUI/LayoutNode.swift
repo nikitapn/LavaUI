@@ -453,6 +453,7 @@ final class LeafNode: YogaBoxNode {
     /// PrimitiveView has no body, so it never goes through CompositeNode's
     /// @State transplant — the node's own lifetime is the persistence.
     var editing = TextEditingState("")
+    var isReadOnly = false
     /// What a secure field really holds, while `editing` holds a dot per
     /// character. Nil for every other field. See `TextField(secure:)`.
     var secureText: [Character]?

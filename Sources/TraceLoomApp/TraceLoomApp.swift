@@ -10,6 +10,10 @@ struct TraceLoomApp {
             exit(1)
         }
 
+        // Keep room for the document picker and toolbar, with a readable
+        // timeline and log pane above the status bar.
+        LavaHost.setMinimumSize(editor: editor, width: 960, height: 560)
+
         // One session instance shared by the menubar and the root view.
         // Menu closures capture this reference; the view reads the same
         // `@Observable` object — see `TraceLoomSession`.

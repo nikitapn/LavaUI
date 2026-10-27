@@ -213,6 +213,7 @@ public struct TraceLoom: View {
     @State private var tappedDiagnostic: String?
     /// Rule assistant: the log line the user wants parsed, and the run itself.
     @State private var assistantExample = ""
+    @State private var rulesSplit: Float = 0.30
     @State private var showAssistant = false
     @State private var assistant = AssistantSession()
     @State private var showParseRules = false
@@ -306,8 +307,8 @@ public struct TraceLoom: View {
     public var body: some View {
         let parsed = result
         let traces = displayed
-        VStack(flexGrow: 1) {
-            header(parsed)
+        VStack(flexGrow: 1, spacing: 0) {
+            header(parsed).windowDrag()
 
             // The log is the pane people want more of, and how much more
             // depends on the log — so it is dragged, not fixed. The header
@@ -315,9 +316,12 @@ public struct TraceLoom: View {
             VSplitView(
                 fraction: $session.timelineSplit, minTop: 200, minBottom: 90
             ) {
-                HStack(alignment: .center) {
+                HStack(padding: 12, alignment: .center, spacing: 12) {
                     sectionTitle("UNIFIED TIMELINE", detail: timelineDetail(traces))
                     Spacer()
+                    if session.zoomStart != nil {
+                        toolbarButton("reset", "Reset zoom", id: "reset-zoom") { resetZoom() }
+                    }
                     layoutPicker
                 }
 
@@ -328,6 +332,7 @@ public struct TraceLoom: View {
             } bottom: {
                 EditorView(
                    text: $session.log,
+                   isReadOnly: true,
                    visibleLines: 8,
                    decorations: decorations(
                        prefix: "Log ", severity: .warning, in: session.log
@@ -340,6 +345,8 @@ public struct TraceLoom: View {
                 .flexGrow(1)
                 .agentId("log-editor")
             }
+
+            statusBar(parsed)
         }
         .onDrop { urls in session.loadLog(from: urls) }
         .overlay(
@@ -366,75 +373,99 @@ public struct TraceLoom: View {
         cursorLocalX = nil
     }
 
+    /// PNG renditions keep the SVG glyphs visible in windowed builds without librsvg.
+    /// The stack owns the whole hit target, including the space around the icon.
+    private func toolbarButton(
+        _ icon: String, _ title: String, id: String, selected: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        HStack(padding: 9, alignment: .center, onClick: action) {
+            Image(
+                path: Bundle.module.url(forResource: icon, withExtension: "png")!.path,
+                width: .pt(18), height: .pt(18),
+                tint: selected ? .accent : .secondary, contentMode: .fit
+            )
+        }
+        .background(selected ? Theme.current.hover : .clear)
+        .hoverBackground(Theme.current.hover)
+        .cornerRadius(6)
+        .cursor(.pointer)
+        .tooltip(title)
+        .agentId(id)
+    }
+
     private func header(_ parsed: TraceParseResult) -> some View {
-        VStack {
-            HStack(padding: 10, spacing: 12) {
+        VStack(spacing: 0) {
+            HStack(padding: 10, alignment: .center, spacing: 12) {
                 if WindowBridge.drawsOwnChrome {
                     WindowControls()
                         .padding(.trailing, 6)
                         .windowChrome()
                 }
-                documentSwitcher
-
-                HStack(spacing: 16) {
-                    Text("\(parsed.series.count) rules", color: .secondary)
-                    Text("\(parsed.matchedLineCount) matched lines", color: .secondary)
-                    Text("\(parsed.series.reduce(0) { $0 + $1.points.count }) points", color: .selected)
+                if let workspace = session.workspaceName {
+                    Text(workspace, color: .dim, lineLimit: 1)
+                        .flexShrink(1)
+                        .tooltip("Workspace · \(workspace)")
+                        .agentId("workspace-name")
                 }
-
+                Spacer()
+                documentSwitcher
                 Spacer()
 
-                Button("Open parsing rules") { showParseRules.toggle() }
-                    .padding(0)
+                HStack(alignment: .center, spacing: 4) {
+                    toolbarButton("open", "Open log file…", id: "load-log-file") {
+                        session.openLogFile()
+                    }
+                    toolbarButton("rules", "Parsing rules", id: "open-parsing-rules", selected: showParseRules) {
+                        showParseRules.toggle()
+                    }
                     .overlay(
                         isPresented: $showParseRules,
                         placement: .viewport(inset: 48),
-                        style: OverlayStyle(
-                            background: Theme.current.background.opacity(0.93),
-                        )
                     ) {
-                        VStack() {
+                        VStack(flexGrow: 1, spacing: 8) {
                             sectionTitle("PARSING RULES", detail: "type | name | regex | time | value | group")
-                            EditorView(
-                                text: $session.rules,
-                                rules: ruleHighlighting,
-                                style: ruleStyle,
-                                visibleLines: 14,
-                                decorations: decorations(
-                                    prefix: "Rule ", severity: .error, in: session.rules
-                                ),
-                                onDecorationTap: { tappedDiagnostic = $0.message }
-                            )
-                            .agentId("rules-editor")
-                            .background(Theme.current.background.opacity(0.70))
-
-                            assistantPanel()
-                            Spacer()
+                                .flexShrink(0)
+                            VSplitView(fraction: $rulesSplit, minTop: 80, minBottom: 240) {
+                                EditorView(
+                                    text: $session.rules,
+                                    rules: ruleHighlighting,
+                                    style: ruleStyle,
+                                    visibleLines: 6,
+                                    decorations: decorations(
+                                        prefix: "Rule ", severity: .error, in: session.rules
+                                    ),
+                                    onDecorationTap: { tappedDiagnostic = $0.message }
+                                )
+                                .flexGrow(1)
+                                .agentId("rules-editor")
+                            } bottom: {
+                                assistantPanel()
+                            }
                             diagnostics(parsed)
+                                .flexShrink(0)
                         }
-                        .flexGrow(1)
                     }
-                Spacer()
-                if session.zoomStart != nil {
-                    Text("Reset zoom", color: .accent, onClick: { resetZoom() })
-                        .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
-                        .hoverBackground(Environment.current.theme.hover)
-                        .cornerRadius(4)
-                        .agentId("reset-zoom")
-                }
-                Text("live parse", color: .muted)
-
-                HStack(spacing: 6) {
-                    Text("Paste, edit, drop a file here, or", color: .dim)
-                    Text("Load file…", color: .accent, onClick: { session.openLogFile() })
-                        .agentId("load-log-file")
-                    Text("Settings", color: .muted, onClick: { session.openSettings() })
-                        .agentId("open-settings")
+                    toolbarButton("settings", "Settings", id: "open-settings") {
+                        session.openSettings()
+                    }
                 }
             }
             loadStatus()
         }
         .background(Environment.current.theme.panel)
+    }
+
+    private func statusBar(_ parsed: TraceParseResult) -> some View {
+        HStack(padding: 8, alignment: .center, spacing: 16) {
+            Text("\(parsed.series.count) rules", color: .secondary)
+            Text("\(parsed.matchedLineCount) matched lines", color: .secondary)
+            Text("\(parsed.series.reduce(0) { $0 + $1.points.count }) points", color: .accent)
+            Spacer()
+            Text("Live parse · paste or drop a log", color: .dim)
+        }
+        .background(Environment.current.theme.panel)
+        .agentId("parse-status-bar")
     }
 
     /// Which log is in front, and the workspace it came from.
@@ -454,25 +485,12 @@ public struct TraceLoom: View {
                 items: session.documents.enumerated().map { index, document in
                     ComboBoxItem(document.name, tag: index, detail: document.detail)
                 },
-                width: .pt(230),
+                width: .pt(430),
                 maxVisibleRows: 12
             )
             .agentId("document-switcher")
 
-            HStack(padding: 0, alignment: .center, onClick: { closeDocument() }) {
-                Mark(.cross, size: 8, color: .muted)
-            }
-                .padding(7)
-                .hoverBackground(Environment.current.theme.hover)
-                .cornerRadius(4)
-                .cursor(.pointer)
-                .agentId("close-document")
-
-            Text(
-                session.workspaceName.map { "workspace · \($0)" } ?? "no workspace",
-                color: .dim
-            )
-            .agentId("workspace-name")
+            toolbarButton("close", "Close log", id: "close-document") { closeDocument() }
         }
     }
 
@@ -558,24 +576,73 @@ public struct TraceLoom: View {
 
     private func assistantPanel() -> some View {
         let state = assistant.snapshot
-        return VStack(padding: 6) {
+        return VStack(flexGrow: 1, padding: 6, spacing: 8) {
             HStack(alignment: .center, spacing: 16) {
                 Text("RULE ASSISTANT", color: .accent)
                 Text(assistant.model, color: .dim)
             }
             Divider()
-            Text(
-                "Paste a log line you want charted. The assistant writes a rule, "
-                + "tests it against your log, and fixes it until it works.",
-                color: .secondary
-            )
-            TextField(
+            ScrollView {
+                VStack(spacing: 10) {
+                    if state.thinkingTail.isEmpty && state.activity.isEmpty
+                        && state.suggestion == nil && state.problem == nil {
+                        Text("Paste examples below, then suggest a rule to test against your log.", color: .dim)
+                    }
+                    // Reasoning models are silent in `content` for a long time, so
+                    // the reasoning stream is the only sign anything is happening.
+                    if !state.thinkingTail.isEmpty {
+                        MarkdownView(state.thinkingTail)
+                            .agentId("assistant-thinking")
+                    }
+
+                    ForEach(
+                        Array(state.activity.enumerated())
+                            .map { Diagnostic(id: $0.offset, text: $0.element) }
+                    ) { entry in
+                        Text(entry.text, color: .secondary)
+                    }
+
+                    if let suggestion = state.suggestion {
+                        Text(suggestion, color: .accent)
+                            .agentId("assistant-suggestion")
+                        HStack(padding: 4) {
+                            Text("Add to rules", color: .accent, onClick: { acceptSuggestion() })
+                                .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
+                                .hoverBackground(Environment.current.theme.hover)
+                                .cornerRadius(4)
+                                .agentId("assistant-accept")
+                            Text("Discard", color: .muted, onClick: { assistant.clearSuggestion() })
+                                .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
+                                .hoverBackground(Environment.current.theme.hover)
+                                .cornerRadius(4)
+                                .agentId("assistant-discard")
+                        }
+                    }
+                    if let problem = state.problem {
+                        MarkdownView(problem, style: MarkdownStyle(text: .selected))
+                            .agentId("assistant-problem")
+                    }
+                }
+                .padding(8)
+            }
+            .flexGrow(1)
+            .background(Theme.current.inset)
+            .cornerRadius(6)
+            .agentId("assistant-output")
+
+            Text("Log examples · one per line", color: .dim)
+                .flexShrink(0)
+            EditorView(
                 text: $assistantExample,
-                placeholder: "e.g. 19:16:15.280 NetworkMetrics inboundKbps:8400"
+                showLineNumbers: false,
+                wraps: true,
+                visibleLines: 3
             )
+            .frame(height: .pt(72))
+            .flexShrink(0)
             .agentId("assistant-example")
 
-            HStack(padding: 4) {
+            HStack(padding: 4, alignment: .center) {
                 Text(
                     state.isRunning ? "Working…" : "Suggest rule",
                     color: state.isRunning ? .dim : .accent,
@@ -586,6 +653,7 @@ public struct TraceLoom: View {
                 .cornerRadius(4)
                 .agentId("assistant-run")
 
+                Spacer()
                 if !state.status.isEmpty {
                     Text(
                         state.isRunning
@@ -596,50 +664,19 @@ public struct TraceLoom: View {
                     .agentId("assistant-status")
                 }
             }
-
-            // Reasoning models are silent in `content` for a long time, so
-            // the tail of the think is the only sign anything is happening.
-            if state.isRunning, !state.thinkingTail.isEmpty {
-                MarkdownView("> \(state.thinkingTail)")
-                    .agentId("assistant-thinking")
-            }
-
-            ForEach(
-                Array(state.activity.suffix(6).enumerated())
-                    .map { Diagnostic(id: $0.offset, text: $0.element) }
-            ) { entry in
-                Text(entry.text, color: .secondary)
-            }
-
-            if let suggestion = state.suggestion {
-                Text(suggestion, color: .accent)
-                    .agentId("assistant-suggestion")
-                HStack(padding: 4) {
-                    Text("Add to rules", color: .accent, onClick: { acceptSuggestion() })
-                        .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
-                        .hoverBackground(Environment.current.theme.hover)
-                        .cornerRadius(4)
-                        .agentId("assistant-accept")
-                    Text("Discard", color: .muted, onClick: { assistant.clearSuggestion() })
-                        .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
-                        .hoverBackground(Environment.current.theme.hover)
-                        .cornerRadius(4)
-                        .agentId("assistant-discard")
-                }
-            }
-            if let problem = state.problem {
-                MarkdownView(problem, style: MarkdownStyle(text: .selected))
-                    .agentId("assistant-problem")
-            }
+            .flexShrink(0)
         }
         .agentId("assistant-pane")
     }
 
     private func startAssistant() {
         guard !assistant.isRunning else { return }
+        let examples = assistantExample.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
         assistant.start(
-            example: assistantExample.isEmpty ? firstLogLine() : assistantExample,
-            sampleLines: sampleLogLines(),
+            example: examples.first ?? firstLogLine(),
+            sampleLines: Array(examples.dropFirst()) + sampleLogLines(),
             existingRules: session.rules
         )
     }
@@ -667,7 +704,7 @@ public struct TraceLoom: View {
     private func firstLogLine() -> String { sampleLogLines(limit: 1).first ?? "" }
 
     private func sectionTitle(_ title: String, detail: String) -> some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 4) {
             Text(title, color: .accent)
             Text(detail, color: .dim)
         }
@@ -688,7 +725,7 @@ public struct TraceLoom: View {
     }
 
     private var layoutPicker: some View {
-        HStack(padding: 2) {
+        HStack(padding: 2, spacing: 2) {
             layoutChoice("Lanes", .lanes)
             layoutChoice("Overlay", .overlay)
         }
@@ -697,16 +734,11 @@ public struct TraceLoom: View {
 
     private func layoutChoice(_ title: String, _ layout: TimelineLayout) -> some View {
         let selected = session.timelineLayout == layout
-        return Text(
-            title,
-            color: selected ? .accent : .muted,
-            onClick: { session.timelineLayout = layout }
-        )
-        .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
-        .background(selected ? Environment.current.theme.hover : .clear)
-        .hoverBackground(Environment.current.theme.hover)
-        .cornerRadius(4)
-        .agentId("timeline-layout-\(layout.rawValue)")
+        return toolbarButton(
+            layout == .lanes ? "lanes" : "overlay", title,
+            id: "timeline-layout-\(layout.rawValue)", selected: selected
+        ) { session.timelineLayout = layout }
+
     }
 
     private func timeline(_ traces: [DisplaySeries]) -> some View {
@@ -854,7 +886,7 @@ public struct TraceLoom: View {
                     )
                     draw.text(
                         item.series.rule.name,
-                        x: frame.x + 8, y: band.yTop + 8,
+                        x: frame.x + left + 6, y: band.yTop + 8,
                         w: 160, h: 18, color: item.color
                     )
                 }
@@ -1092,32 +1124,19 @@ public struct TraceLoom: View {
     }
 
     private func diagnostics(_ parsed: TraceParseResult) -> some View {
-        VStack {
-            if parsed.diagnostics.isEmpty {
-                Text("Rules valid · edit either pane to reparse", color: .muted)
-                    .agentId("parse-status")
+        HStack(padding: 8, alignment: .center, spacing: 12) {
+            if let first = parsed.diagnostics.first {
+                Text("\(parsed.diagnostics.count) issues", color: .selected)
+                Text(first, color: .secondary, lineLimit: 1)
+                    .flexShrink(1)
+                    .tooltip(parsed.diagnostics.prefix(3).joined(separator: "\n"))
             } else {
-                ForEach(Array(parsed.diagnostics.prefix(3).enumerated()).map { Diagnostic(id: $0.offset, text: $0.element) }) { diagnostic in
-                    Text(diagnostic.text, color: Color(r: 0.95, g: 0.48, b: 0.42))
-                }
-                // Three of 126,000 looked exactly like three of three. The
-                // count is also the tell that a rule is wrong for every line
-                // rather than a few.
-                if parsed.diagnostics.count > 3 {
-                    Text(
-                        "+\(parsed.diagnostics.count - 3) more"
-                            + (parsed.diagnostics.count > Self.maxDecorations
-                                ? " · first \(Self.maxDecorations) marked in the gutter"
-                                : ""),
-                        color: .muted
-                    )
-                    .agentId("diagnostic-overflow")
-                }
+                Text("Rules valid · edit rules to reparse", color: .muted)
             }
+            Spacer()
         }
-        .padding(EdgeInsets(top: 7, leading: 9, bottom: 7, trailing: 9))
         .background(Environment.current.theme.inset)
-        .cornerRadius(5)
+        .agentId("parse-status")
     }
 
     private struct Diagnostic: Identifiable {

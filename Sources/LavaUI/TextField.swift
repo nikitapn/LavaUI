@@ -859,6 +859,7 @@ extension LeafNode {
             },
             onChar: { [weak self] character in
                 guard let self else { return false }
+                guard !self.isReadOnly else { return true }
                 let before = self.secureSnapshot()
                 self.editing.insert(String(character))
                 binding.wrappedValue = self.committedText(after: before)
@@ -947,6 +948,16 @@ extension LeafNode {
     private func handleKey(
         _ event: KeyEvent, binding: Binding<String>, onSubmit: (() -> Void)?
     ) -> Bool {
+        if isReadOnly {
+            switch event.key {
+            case KeyCode.backspace, KeyCode.delete, KeyCode.enter, KeyCode.tab:
+                return true
+            case let key where event.control && [KeyCode.x, KeyCode.v, KeyCode.z, KeyCode.y].contains(key):
+                return true
+            default:
+                break
+            }
+        }
         let shift = event.shift
         // The revision, not the text: it is process-unique and bumped by every
         // mutation, so "did this key edit anything" is an integer compare

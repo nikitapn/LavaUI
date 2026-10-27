@@ -314,6 +314,8 @@ public final class EditorController {
 public struct EditorView: PrimitiveView {
     /// The text being edited.
     @Binding public var text: String
+    /// Allows selection, copying and navigation while preventing text changes.
+    public var isReadOnly: Bool
     /// Syntax colouring rules, applied per line. Each rule's `styleIndex` picks a colour from `style.palette`.
     public var rules: [HighlightRule]
     /// Colours for text, gutter, current line and search matches.
@@ -346,6 +348,7 @@ public struct EditorView: PrimitiveView {
     /// Creates an editor bound to `text`. Every parameter matches the property of the same name.
     public init(
         text: Binding<String>,
+        isReadOnly: Bool = false,
         rules: [HighlightRule] = [],
         style: CodeStyle = CodeStyle(),
         font: UIFont? = nil,
@@ -358,6 +361,7 @@ public struct EditorView: PrimitiveView {
         controller: EditorController? = nil
     ) {
         self._text = text
+        self.isReadOnly = isReadOnly
         self.rules = rules
         self.style = style
         self.font = font
@@ -409,6 +413,7 @@ public struct EditorView: PrimitiveView {
         leaf.font = resolvedFont
         leaf.color = style.text
         leaf.fillColor = theme.inset
+        leaf.isReadOnly = isReadOnly
         leaf.isMultiline = true
         if leaf.wraps != wraps {
             // Before anything is cleared: `rowLogicalLine` still describes the
@@ -472,7 +477,7 @@ public struct EditorView: PrimitiveView {
                 return true
             },
             replace: { [weak leaf] ranges, replacement in
-                guard let leaf else { return 0 }
+                guard let leaf, !leaf.isReadOnly else { return 0 }
                 let applied = leaf.editing.replaceAll(ranges, with: replacement)
                 guard applied > 0 else { return 0 }
                 // The edit cleared the row table (see `TextEditingState`), and

@@ -21,7 +21,7 @@ final class AssistantSession: @unchecked Sendable {
         var status = ""
         /// Tool calls and verdicts, newest last.
         var activity: [String] = []
-        /// Tail of the model's reasoning, for liveness.
+        /// Recent reasoning and response text retained for scrollback.
         var thinkingTail = ""
         var thinkingCharacters = 0
         var elapsed: TimeInterval = 0
@@ -101,7 +101,7 @@ final class AssistantSession: @unchecked Sendable {
                 // per-glyph fallback, so an arrow draws as a tofu box.
                 state.activity.append("› \(summary)")
                 state.status = "checking the rule against your log…"
-                state.thinkingTail = ""
+                state.thinkingTail += "\n\n"
             case .toolResult(let text):
                 state.activity.append(Self.firstLine(of: text))
                 if let detail = Self.failureDetail(of: text) {
@@ -153,11 +153,13 @@ final class AssistantSession: @unchecked Sendable {
             state.suggestion = nil
             state.status = ""
             state.activity = []
+            state.thinkingTail = ""
         }
         ViewInvalidation.markNeedsBody()
     }
 
-    private static func tail(of text: String, limit: Int = 160) -> String {
+    private static func tail(of text: String, limit: Int = 65_536) -> String {
+        // Bound scrollback without discarding all but a few visible lines.
         // Preserve the model's paragraph/list structure. Flattening newlines
         // made even well-formatted reasoning appear as one unreadable sentence
         // in the assistant panel.

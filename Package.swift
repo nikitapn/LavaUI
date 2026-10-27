@@ -469,6 +469,7 @@ var targets: [Target] = [
     .executableTarget(
         name: "TraceLoomApp",
         dependencies: ["LavaUI", "LavaHost", "TraceLoomCore"],
+        resources: [.process("Resources")],
         swiftSettings: interopCxx
     ),
     .executableTarget(

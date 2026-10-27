@@ -33,8 +33,8 @@ final class EditorPositionTests: XCTestCase {
         super.tearDown()
     }
 
-    private func settle(text: Binding<String>, controller: EditorController) {
-        host.setRoot(EditorView(text: text, visibleLines: 10, controller: controller))
+    private func settle(text: Binding<String>, controller: EditorController, isReadOnly: Bool = false) {
+        host.setRoot(EditorView(text: text, isReadOnly: isReadOnly, visibleLines: 10, controller: controller))
         _ = host.calculateLayout(width: Self.viewport.w, height: Self.viewport.h)
         guard let root = host.rootNode else { return }
         let list = DrawList(editor: editor)
@@ -122,4 +122,45 @@ final class EditorPositionTests: XCTestCase {
         XCTAssertEqual(position.scrollY, 120, accuracy: 0.5)
         XCTAssertEqual(position.focus, 30)
     }
+    func testReadOnlyBlocksEditsButAllowsSelectionAndCopy() throws {
+        var text = Self.shortText
+        let binding = Binding(get: { text }, set: { text = $0 })
+        let controller = EditorController()
+        settle(text: binding, controller: controller, isReadOnly: true)
+        let node = try leaf()
+        node.focusSelf(binding: binding, onSubmit: nil)
+        defer { FocusManager.clear() }
+
+        var copied = ""
+        let oldReader = ClipboardBridge.reader
+        let oldWriter = ClipboardBridge.writer
+        ClipboardBridge.reader = { "replacement" }
+        ClipboardBridge.writer = { copied = $0 }
+        defer {
+            ClipboardBridge.reader = oldReader
+            ClipboardBridge.writer = oldWriter
+        }
+
+        FocusManager.handle(KeyEvent(key: KeyCode.a, mods: KeyMods.control))
+        FocusManager.handle(KeyEvent(key: KeyCode.c, mods: KeyMods.control))
+        XCTAssertEqual(copied, text)
+        FocusManager.handle(character: "x")
+        for key in [KeyCode.backspace, KeyCode.delete, KeyCode.enter, KeyCode.tab] {
+            FocusManager.handle(KeyEvent(key: key, mods: 0))
+        }
+        for key in [KeyCode.x, KeyCode.v, KeyCode.z, KeyCode.y] {
+            FocusManager.handle(KeyEvent(key: key, mods: KeyMods.control))
+        }
+        XCTAssertEqual(controller.replace([0..<3], with: "changed"), 0)
+        XCTAssertEqual(node.editing.text, Self.shortText)
+        XCTAssertEqual(text, Self.shortText)
+
+        FocusManager.handle(KeyEvent(key: KeyCode.home, mods: KeyMods.control))
+        XCTAssertEqual(controller.position()?.focus, 0)
+        // The same mounted editor can become editable again.
+        settle(text: binding, controller: controller)
+        FocusManager.handle(character: "x")
+        XCTAssertEqual(text, "x" + Self.shortText)
+    }
+
 }
