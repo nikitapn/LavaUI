@@ -570,38 +570,18 @@ struct Spotify: View {
             VStack(flexGrow: 1, padding: 0, spacing: 6) {
                 HStack(padding: 0, alignment: .center) {
                     Spacer()
-                    Button(
-                        "⏮",
-                        style: secondaryTransportStyle,
-                        font: session.playerControlFont,
-                        action: { session.playPrevious() }
-                    )
-                    .frame(width: .pt(36), height: .pt(36))
-                    .agentId("prev")
-                    Button(
-                        session.isPlaying ? "⏸" : "▶",
-                        style: ButtonStyle(
-                            background: Theme.current.accent.opacity(0.15),
-                            hover: Theme.current.accent.opacity(0.25),
-                            pressed: Theme.current.accent.opacity(0.35),
-                            foreground: .primary,
-                            cornerRadius: 20,
-                            padding: 0
-                        ),
-                        font: session.playerControlFont,
-                        action: { session.togglePlay() }
-                    )
-                    .frame(width: .pt(40), height: .pt(40))
+                    transportButton(.previous, id: "prev") { session.playPrevious() }
+                    transportButton(
+                        session.isPlaying ? .pause : .play,
+                        diameter: 40,
+                        markSize: 18,
+                        color: .primary,
+                        background: Theme.current.accent.opacity(0.15),
+                        hover: Theme.current.accent.opacity(0.25),
+                        id: "play-pause"
+                    ) { session.togglePlay() }
                     .padding(4)
-                    .agentId("play-pause")
-                    Button(
-                        "⏭",
-                        style: secondaryTransportStyle,
-                        font: session.playerControlFont,
-                        action: { session.playNext() }
-                    )
-                        .frame(width: .pt(36), height: .pt(36))
-                        .agentId("next")
+                    transportButton(.next, id: "next") { session.playNext() }
                     Spacer()
                 }
                 HStack(padding: 0, alignment: .center) {
@@ -703,6 +683,39 @@ struct Spotify: View {
             cornerRadius: 18,
             padding: 0
         )
+    }
+
+    /// Drawn marks rather than "⏮ ▶ ⏭": glyphs from the symbols font sat on
+    /// its baseline, so they were never centred in the circle, and each came
+    /// out a different size and weight. Click and hover are the whole circle,
+    /// as `likeButton`'s are its square.
+    private func transportButton(
+        _ kind: TransportMark.Kind,
+        diameter: Float = 36,
+        markSize: Float = 14,
+        color: Color = .secondary,
+        background: Color = .clear,
+        hover: Color = Theme.current.accent.opacity(0.14),
+        id: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        HStack(
+            width: .pt(diameter),
+            height: .pt(diameter),
+            padding: 0,
+            alignment: .center,
+            spacing: 0,
+            onClick: action
+        ) {
+            Spacer()
+            TransportMark(kind, size: markSize, color: color)
+            Spacer()
+        }
+        .background(background)
+        .hoverBackground(hover)
+        .cornerRadius(diameter / 2)
+        .cursor(.pointer)
+        .agentId(id)
     }
 
     /// Click and hover live on the square, not the glyph. A `Text` with
