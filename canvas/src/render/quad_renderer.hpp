@@ -65,7 +65,20 @@ struct QuadGlass {
   float cornerRadius = 0.f;
   /// The grain of frosted glass on a composite, 0…1. See `quad_instance.frag`.
   float frost = 0.f;
-  bool active() const { return refractPx > 0.f || rim > 0.f || frost > 0.f; }
+  /// How much larger what is sampled is drawn, about the quad's centre.
+  /// 1 is none.
+  float magnify = 1.f;
+  bool active() const {
+    return refractPx > 0.f || rim > 0.f || frost > 0.f || magnify > 1.f;
+  }
+  /// What the shader takes for `magnify`: `1/m`, the scale a sample's offset
+  /// from the centre is read at. Zero for none, so an instance without glass
+  /// stays all zeros — and 1 is none as well, because a binary built before
+  /// this field had a three-float attribute, and Vulkan fills a missing `w`
+  /// with 1. The shaders are shared by every build (they are read from the
+  /// source tree), so an older compositor restarted against these must still
+  /// see no lens and no glass on every plain quad.
+  float lensScale() const { return magnify > 1.f ? 1.f / magnify : 0.f; }
 };
 
 class QuadRenderer {
@@ -181,11 +194,11 @@ class QuadRenderer {
 
     /// Glass on this quad: `x` bends what it samples at the rim by that many
     /// pixels, `y` is the strength of the specular rim, `z` the frost on a
-    /// composite. Zero is no glass, and every quad that predates it is zero.
-    /// See `QuadGlass`.
-    float glass[3] = {0.f, 0.f, 0.f};
+    /// composite, `w` the lens (`QuadGlass::lensScale`). Zero is no glass,
+    /// and every quad that predates it is zero. See `QuadGlass`.
+    float glass[4] = {0.f, 0.f, 0.f, 0.f};
   };
-  static_assert(sizeof(Instance) == 88, "QuadInstance ABI changed");
+  static_assert(sizeof(Instance) == 92, "QuadInstance ABI changed");
 
   using Glass = QuadGlass;
   /// Set around the one push it belongs to and cleared after, the way the

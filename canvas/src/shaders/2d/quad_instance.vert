@@ -17,8 +17,9 @@ layout(location = 10) in vec4 inColor1;
 layout(location = 11) in vec2 inGradAxis;
 layout(location = 12) in float inGradBias;
 // Glass: x = refraction at the rim in px, y = specular rim strength, z = frost
-// on a composite. Zero on every quad without it. See QuadGlass.
-layout(location = 13) in vec3 inGlass;
+// on a composite, w = the lens's scale (1/m; 0 or 1 is none). Zero on every
+// quad without it. See QuadGlass::lensScale.
+layout(location = 13) in vec4 inGlass;
 
 layout(push_constant) uniform Push {
   vec2 viewport;
@@ -42,7 +43,7 @@ layout(location = 8) flat out float vDither;
 /// `inColor1.a`, which a composite never reads as a ramp end — its
 /// `inGradAxis` is zero. See `QuadRenderer::pushBlurResultImage`.
 layout(location = 9) flat out float vAdapt;
-layout(location = 10) flat out vec3 vGlass;
+layout(location = 10) flat out vec4 vGlass;
 /// Texture units per local pixel, for bending a sample by a distance in
 /// pixels. Constant across the quad — the UV rect is spread over its size —
 /// so it is worked out once here rather than per fragment from derivatives,

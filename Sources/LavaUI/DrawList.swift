@@ -71,7 +71,7 @@ public enum DrawKind: UInt32 {
     case strokedRect = 24
     /// Glass on the next fill, image or backdrop: `aux` = refraction in px,
     /// `param` = rim strength in 1/255ths, `w` = an image's corner radius,
-    /// `h` = frost, 0…1.
+    /// `h` = frost, 0…1, `x` = magnification (0 or 1: none).
     /// See `Glass` in `draw_command.hpp`.
     case glass = 25
 
@@ -222,7 +222,10 @@ public final class DrawList {
     /// land on some unrelated view further down the list. `append` writes it
     /// only immediately before a command that consumes it, and `withGlass`
     /// drops it whatever happened. See `Glass` in `draw_command.hpp`.
-    private var heldGlass: (refraction: Float, rim: Float, corner: Float, frost: Float)?
+    private var heldGlass: (
+        refraction: Float, rim: Float, corner: Float, frost: Float,
+        magnification: Float
+    )?
 
     /// Axis-aligned cull region in window pixels. Starts as the framebuffer;
     /// each `ScrollView` intersects it with its scissor so off-screen scroll
@@ -566,6 +569,7 @@ public final class DrawList {
             prefix.color = Color(r: 1, g: 1, b: 1).rgba8
             prefix.param = UInt32((min(max(glass.rim, 0), 1) * 255).rounded())
             prefix.aux = glass.refraction
+            prefix.x = glass.magnification > 1 ? glass.magnification : 0
             appendCommand(prefix)
         }
         var cmd = canvas.DrawCommand()
@@ -1084,12 +1088,13 @@ public final class DrawList {
         body: () -> Void
     ) {
         guard let glass,
-              glass.refraction > 0 || (rim ?? glass.rim) > 0 || glass.frost > 0
+              glass.bends || (rim ?? glass.rim) > 0 || glass.frost > 0
         else {
             return body()
         }
         heldGlass = (
-            glass.refraction, rim ?? glass.rim, max(0, cornerRadius), glass.frost
+            glass.refraction, rim ?? glass.rim, max(0, cornerRadius), glass.frost,
+            glass.magnification
         )
         body()
         heldGlass = nil
@@ -1152,7 +1157,7 @@ public final class DrawList {
     /// about this view, and a frosted backdrop under a view that is itself
     /// being softened is not something you can see.
     ///
-    /// Glass that bends opens a backdrop scope of its own when the node asked
+    /// Glass that bends — or magnifies — opens a backdrop scope of its own when the node asked
     /// for no blur — radius zero, a sharp capture — since bending needs
     /// something captured to bend. Its rim goes on the node's fill when it has
     /// one (`fillsOver`), which is drawn over the backdrop; on the backdrop it
@@ -1222,7 +1227,7 @@ public final class DrawList {
             body()
             endContentBlur()
             insideBlurScope = false
-        } else if (backdropRadius ?? 0) > 0 || (glass?.refraction ?? 0) > 0 {
+        } else if (backdropRadius ?? 0) > 0 || glass?.bends == true {
             insideBlurScope = true
             withGlass(glass, rim: fillsOver ? 0 : nil) {
                 appendBackdropBlur(

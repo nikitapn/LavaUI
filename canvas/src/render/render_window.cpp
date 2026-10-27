@@ -1928,7 +1928,8 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
         .refractPx = std::max(0.f, cmd.aux),
         .rim = static_cast<float>(std::min(cmd.param, 255u)) / 255.f,
         .cornerRadius = std::max(0.f, cmd.w),
-        .frost = std::clamp(cmd.h, 0.f, 1.f)};
+        .frost = std::clamp(cmd.h, 0.f, 1.f),
+        .magnify = std::clamp(cmd.x, 1.f, 4.f)};
       break;
     case canvas::DrawCommandKind::Rect:
       withGlass([&] {

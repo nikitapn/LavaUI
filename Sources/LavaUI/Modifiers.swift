@@ -20,7 +20,7 @@ public struct BorderStyle: Equatable {
     }
 }
 
-/// What `.glassEffect(refraction:rim:)` asked for.
+/// What `.glassEffect(refraction:rim:frost:magnification:)` asked for.
 public struct GlassEffect: Equatable {
     /// How far the very edge bends what is under it, in pixels.
     public var refraction: Float
@@ -28,13 +28,25 @@ public struct GlassEffect: Equatable {
     public var rim: Float
     /// The grain of frosted glass on what is behind the view, 0…1.
     public var frost: Float
+    /// How much bigger what is behind the view looks through it, about the
+    /// view's centre. 1 is a flat pane.
+    public var magnification: Float
 
     /// Creates a glass description. Values outside their ranges are clamped.
-    public init(refraction: Float = 20, rim: Float = 1, frost: Float = 0) {
+    public init(
+        refraction: Float = 20, rim: Float = 1, frost: Float = 0,
+        magnification: Float = 1
+    ) {
         self.refraction = max(0, refraction)
         self.rim = min(max(rim, 0), 1)
         self.frost = min(max(frost, 0), 1)
+        // Up to 4×: past that a lens this size shows a few pixels of
+        // whatever is under its centre, and nothing anyone would read.
+        self.magnification = min(max(magnification, 1), 4)
     }
+
+    /// Whether this moves what is behind it, and so needs it captured.
+    var bends: Bool { refraction > 0 || magnification > 1 }
 }
 
 /// Style a modifier pushes onto a node.
@@ -682,6 +694,11 @@ extension View {
     /// corner radius. Children are not glass — a glass panel's buttons are
     /// drawn sharp on top of it.
     ///
+    /// `magnification` makes the glass a lens: what is behind it is drawn that
+    /// many times larger about the view's centre, under the rim's bend — a
+    /// search field over a wall of icons enlarges the ones passing under it.
+    /// A lens is read through, so pair it with little or no blur.
+    ///
     /// `refraction` is how far, in pixels, the very edge bends what is under
     /// it (the bend fades to nothing 20 px in); `rim` is the strength of the
     /// light, 0…1. `frost`, 0…1, gives what is behind the surface of frosted
@@ -698,10 +715,14 @@ extension View {
     /// that plate's, in place of the ones the window was opened with, and
     /// no blur needs stating: the plate is one.
     public func glassEffect(
-        refraction: Float = 20, rim: Float = 1, frost: Float = 0
+        refraction: Float = 20, rim: Float = 1, frost: Float = 0,
+        magnification: Float = 1
     ) -> ModifiedView<Self> {
         styled {
-            $0.glass = GlassEffect(refraction: refraction, rim: rim, frost: frost)
+            $0.glass = GlassEffect(
+                refraction: refraction, rim: rim, frost: frost,
+                magnification: magnification
+            )
         }
     }
 
@@ -874,12 +895,16 @@ extension ModifiedView {
         }
     }
 
-    /// See `View.glassEffect(refraction:rim:frost:)`.
+    /// See `View.glassEffect(refraction:rim:frost:magnification:)`.
     public func glassEffect(
-        refraction: Float = 20, rim: Float = 1, frost: Float = 0
+        refraction: Float = 20, rim: Float = 1, frost: Float = 0,
+        magnification: Float = 1
     ) -> ModifiedView<Content> {
         adding {
-            $0.glass = GlassEffect(refraction: refraction, rim: rim, frost: frost)
+            $0.glass = GlassEffect(
+                refraction: refraction, rim: rim, frost: frost,
+                magnification: magnification
+            )
         }
     }
 }

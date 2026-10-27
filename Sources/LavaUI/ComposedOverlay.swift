@@ -234,7 +234,7 @@ final class ComposedOverlayNode: YogaBoxNode {
         plateBox.glass = contentGlass.map {
             GlassEffect(
                 refraction: $0.refraction, rim: fillTakesRim ? 0 : $0.rim,
-                frost: $0.frost
+                frost: $0.frost, magnification: $0.magnification
             )
         }
         overlayBox.glass = fillTakesRim ? contentGlass : nil

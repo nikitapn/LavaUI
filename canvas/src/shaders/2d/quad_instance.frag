@@ -28,7 +28,7 @@ layout(location = 6) in vec2 vUv;
 layout(location = 7) flat in uint vTextureIndex;
 layout(location = 8) flat in float vDither;
 layout(location = 9) flat in float vAdapt;
-layout(location = 10) flat in vec3 vGlass;
+layout(location = 10) flat in vec4 vGlass;
 layout(location = 11) flat in vec2 vUvPerPx;
 layout(binding = 0) uniform sampler2D textures[];
 layout(location = 0) out vec4 outColor;
@@ -49,6 +49,17 @@ float sdRoundBox(vec2 p, vec2 b, float r) {
 }
 
 // ─── Glass ───────────────────────────────────────────────────────────────────
+
+/// The lens's scale, 1/m, or 1 for none. Only strictly between 0 and 1 is a
+/// lens: 0 is what a quad without glass carries, and 1 is what a binary
+/// older than the field leaves — see `QuadGlass::lensScale`.
+float lensScale() {
+  return (vGlass.w > 0.0 && vGlass.w < 1.0) ? vGlass.w : 1.0;
+}
+
+bool glassOn() {
+  return vGlass.xyz != vec3(0.0) || lensScale() < 1.0;
+}
 //
 // A rim of `kBezel` pixels inside the outline, curved like a quarter circle:
 // flat across the face, steepest at the edge. What sits under it is bent
@@ -96,13 +107,19 @@ float glassRim(float d, vec2 n, float bend) {
 /// pixels — inward, so the read never leaves the rect the UVs describe —
 /// and moved by `jitterPx` more everywhere (the frost's surface, below).
 ///
+/// A lens first (`lensScale`): the pixel at `p` from the centre reads what is
+/// at `p / m`, which is what drawing it `m` times larger means. Toward the
+/// centre too, so it keeps to the same rect; the rim then bends the enlarged
+/// picture, as a real lens's edge would.
+///
 /// Red bends a little less than green and blue a little more, so edges in
 /// what is under the glass fringe where the rim bends them hardest. On the
 /// flat face the rim's offset is zero and the two extra taps are skipped;
 /// the frost's jitter does not ask for them, since it fringes nothing.
 vec4 glassSample(vec2 n, float bend, vec2 jitterPx) {
   vec2 offset = n * (vGlass.x * bend) * vUvPerPx;
-  vec2 uv = vUv - offset + jitterPx * vUvPerPx;
+  vec2 lens = vLocal * (1.0 - lensScale());
+  vec2 uv = vUv - offset + (jitterPx - lens) * vUvPerPx;
   vec4 s = texture(textures[nonuniformEXT(vTextureIndex)], uv);
   if (offset != vec2(0.0)) {
     vec2 disperse = offset * kDispersion;
@@ -253,7 +270,7 @@ void main() {
     vec4 sampled;
     vec3 rimAdd = vec3(0.0);
     float frost = 0.0;
-    if (vGlass != vec3(0.0)) {
+    if (glassOn()) {
       vec2 n;
       float bend = glassBend(d, n);
       // The noise only where it is asked for: two octaves per pixel of a
@@ -307,7 +324,7 @@ void main() {
   }
 
   if (vKind == 2u) { // Image
-    if (vGlass != vec3(0.0)) {
+    if (glassOn()) {
       // Glass on a picture bends the picture itself, and cuts it to the
       // outline the rim is measured from. Hard-edged when square, as the
       // plain path is.

@@ -261,6 +261,9 @@ enum class DrawCommandKind : uint32_t {
   ///   w     = corner radius of the glass, read only by an `Image`, which
   ///           carries none of its own
   ///   h     = frost, 0…1: the grain of frosted glass, read by a backdrop
+  ///   x     = magnification about the glass's centre, read by a backdrop
+  ///           and an image (0 or 1: none — and 0 is what a writer that
+  ///           predates it leaves there)
   ///
   /// Consumed by the first `Rect`, `RoundedRect`, `LinearGradientRect`,
   /// `Image`, `ImageSurface` or `BeginBackdropBlur` after it, whichever that

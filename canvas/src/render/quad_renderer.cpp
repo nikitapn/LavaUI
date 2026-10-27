@@ -636,7 +636,7 @@ void QuadRenderer::createInstancePipeline(VkRenderPass renderPass,
     VkVertexInputAttributeDescription{10,0,VK_FORMAT_R8G8B8A8_UNORM,offsetof(Instance,color1)},
     VkVertexInputAttributeDescription{11,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Instance,gradAxis)},
     VkVertexInputAttributeDescription{12,0,VK_FORMAT_R32_SFLOAT,offsetof(Instance,gradBias)},
-    VkVertexInputAttributeDescription{13,0,VK_FORMAT_R32G32B32_SFLOAT,offsetof(Instance,glass)}};
+    VkVertexInputAttributeDescription{13,0,VK_FORMAT_R32G32B32A32_SFLOAT,offsetof(Instance,glass)}};
   VkPipelineVertexInputStateCreateInfo vi{
     .sType=VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
     .vertexBindingDescriptionCount=1,.pVertexBindingDescriptions=&binding,
@@ -887,7 +887,8 @@ void QuadRenderer::appendInstance(vec2 topLeft, vec2 size, vec2 halfSize,
     .topLeft=topLeft,.size=size,.halfSize=halfSize,.radius=radius,.aux=aux,
     .uv0=uv0,.uv1=uv1,.color=rgba,.kind=static_cast<uint32_t>(kind),
     .textureIndex=currentTextureIndex_,
-    .glass={glass_.refractPx, glass_.rim, glass_.frost}});
+    .glass={glass_.refractPx, glass_.rim, glass_.frost,
+            glass_.lensScale()}});
 }
 
 void QuadRenderer::ensureBatchTexture(VkImageView view)
@@ -989,7 +990,8 @@ void QuadRenderer::pushBoxGradient(vec2 topLeft, vec2 size, uint32_t rgba0,
     .radius=r, .aux=0.f, .uv0={0.f,0.f}, .uv1={0.f,0.f}, .color=rgba0,
     .kind=static_cast<uint32_t>(Kind::Sdf), .textureIndex=currentTextureIndex_,
     .color1=rgba1, .gradAxis=axis, .gradBias=bias,
-    .glass={glass_.refractPx, glass_.rim, glass_.frost}});
+    .glass={glass_.refractPx, glass_.rim, glass_.frost,
+            glass_.lensScale()}});
 }
 
 void QuadRenderer::pushCornerMask(vec2 topLeft, vec2 size, float radius) {
