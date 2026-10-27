@@ -5,8 +5,8 @@ import LavaShell
 import LavaUI
 import Observation
 
-// The application launcher: everything installed, as a wall of icons, with a
-// search box.
+// The application launcher: everything installed, on shelves by category,
+// with a search box.
 //
 //   Alt+P, or: swift run LavaLauncher
 //
@@ -36,13 +36,22 @@ final class LauncherModel {
     var query = "" {
         didSet {
             guard query != oldValue else { return }
-            matches = DesktopEntry.search(query, in: all, history: history)
-            // A new search is a new list, and the old cursor pointed into a
-            // list that no longer exists. Anywhere but the top would be a
-            // selection the user did not make.
-            selected = 0
+            // Typing searches everything. Someone who has started to spell a
+            // name knows what they want, and a match hidden on another shelf
+            // would read as "not installed".
+            if !query.isEmpty { shelf = nil }
+            refresh()
         }
     }
+    /// The sidebar's choice; nil is All.
+    var shelf: AppCategory? = nil {
+        didSet {
+            guard shelf != oldValue else { return }
+            refresh()
+        }
+    }
+    /// The shelves that have anything on them, in sidebar order, with counts.
+    var shelves: [(category: AppCategory, count: Int)] = []
     var matches: [DesktopEntry] = []
     /// Index into `matches`. Enter launches this one.
     var selected = 0
@@ -50,11 +59,25 @@ final class LauncherModel {
     func load() {
         history = LaunchHistory.load()
         all = DesktopEntry.installed()
+        var counts: [AppCategory: Int] = [:]
+        for entry in all { counts[entry.category, default: 0] += 1 }
+        shelves = AppCategory.allCases.compactMap { category in
+            counts[category].map { (category, $0) }
+        }
         // Empty query: most-used first, never-used alphabetical underneath.
-        matches = DesktopEntry.search("", in: all, history: history)
+        refresh()
         // The icon lookup would otherwise read every entry on the machine
         // again the first time something asks for an icon by app id.
         IconLookup.useEntries(all)
+    }
+
+    private func refresh() {
+        let pool = shelf.map { shelf in all.filter { $0.category == shelf } } ?? all
+        matches = DesktopEntry.search(query, in: pool, history: history)
+        // A new list, and the old cursor pointed into one that no longer
+        // exists. Anywhere but the top would be a selection the user did not
+        // make.
+        selected = 0
     }
 
     /// Runs the selection and ends the process. Nothing after this returns.
@@ -91,22 +114,31 @@ nonisolated(unsafe) let model = LauncherModel()
 /// The grid's geometry, in one place so the card and the arrow keys agree
 /// about what "one row down" means.
 enum Grid {
-    /// The *smallest* a card may be, and the proportions every card keeps.
+    /// The launcher is a panel in the middle of the screen, not the screen.
     ///
-    /// Not the size it is drawn at: `maxColumns` makes the grid divide the row
-    /// into exactly this many cards, so the width follows the display and the
-    /// height follows the width. A fixed card on a 4K screen leaves a gutter
-    /// the size of another column; seven bigger cards use the space it was
-    /// given.
-    static let cardWidth: Float = 152
-    static let cardHeight: Float = 148
-    /// Never more than this many across, however wide the screen is. A wall of
-    /// applications is read by scanning rows, and a row of fourteen is not
-    /// scanned, it is searched.
-    static let maxColumns: Int = 7
-    static let spacing: Float = 10
-    static let iconSize: Float = 64
-    /// Icon edge as a fraction of the card, so it scales with the cell the
+    /// It used to fill the work area, which on a 1080p display made every card
+    /// 250 points wide to hold a 64-point icon — a wall of empty tiles, read
+    /// from across the room. A fixed panel keeps the icons at a size an eye
+    /// scans and puts all of them within one short glance of the search box.
+    /// It shrinks on a screen smaller than this; it never grows.
+    static let panelWidth: Float = 940
+    static let panelHeight: Float = 640
+    /// The least desktop left around the panel on a small screen.
+    static let screenMargin: Float = 24
+    static let panelRadius: Float = 16
+    static let sidebarWidth: Float = 196
+    /// The sidebar card's distance from the panel's edges; its radius is the
+    /// panel's less this, so the two curves stay concentric.
+    static let sidebarInset: Float = 6
+
+    /// The *smallest* a tile may be, and the proportions every tile keeps.
+    /// The grid stretches the columns that fit to the row's width.
+    static let cardWidth: Float = 112
+    static let cardHeight: Float = 108
+    static let maxColumns: Int = 6
+    static let spacing: Float = 6
+    static let iconSize: Float = 48
+    /// Icon edge as a fraction of the tile, so it scales with the cell the
     /// grid hands out. Matches `iconSize / cardWidth` at the minimum size.
     static let iconFraction: Float = iconSize / cardWidth
 
@@ -121,10 +153,11 @@ enum Grid {
     /// icon decoded far above its drawn size is minified with bilinear alone.
     static let iconPixelRungs: [UInt32] = [64, 128, 192, 256]
 
-    /// The card grid's own box, for a surface `surface` points wide: the
-    /// screen inset and the panel padding come off both sides.
+    /// The tile grid's own box, for a surface `surface` points wide: the
+    /// panel, less the sidebar and the padding either side of the grid.
     static func gridWidth(surface: Float) -> Float {
-        max(cardWidth, surface - (screenInset + padding) * 2)
+        let panel = min(panelWidth, surface - screenMargin * 2)
+        return max(cardWidth, panel - sidebarWidth - padding * 2)
     }
 
     /// Card edge for a grid box `width` points wide.
@@ -134,58 +167,43 @@ enum Grid {
     /// so before the grid knows its own cell. Must agree with it, for the same
     /// reason `columns(width:)` must.
     static func cardEdge(in width: Float) -> Float {
-        let fit = max(1, Int((width + spacing) / (cardWidth + spacing)))
-        let cols = Float(min(maxColumns, fit))
+        let cols = Float(columns(width: width))
         return max(1, (width - spacing * (cols - 1)) / cols)
     }
 
     /// Decode size for an icon in a grid box `width` points wide: what it will
-    /// actually be drawn at, rounded up to the next rung. 1080p lands on 128,
-    /// 1440p on 192, 4K on 256.
+    /// actually be drawn at, rounded up to the next rung.
     static func iconPixels(in width: Float) -> UInt32 {
         let edge = cardEdge(in: width) * iconFraction * FontStore.scale.multiplier
         return iconPixelRungs.first { Float($0) >= edge } ?? iconPixelRungs[iconPixelRungs.count - 1]
     }
-    /// Inset from the screen edge — the gap that leaves the desktop visible
-    /// around the launcher instead of a hard full-bleed dim.
-    static let screenInset: Float = 36
-    /// Side padding inside the content area (around the card grid).
-    static let padding: Float = 16
-    /// Height reserved under the floating search so the first row of cards
-    /// starts clear of it; scrolling still draws cards through the transparent
-    /// header.
-    static let searchClearance: Float = 72
-    /// A deliberate reading width rather than the full screen. The app grid
-    /// is centred below it, so the two controls share one visual axis even on
-    /// an ultrawide display.
-    static let searchWidth: Float = 480
-    /// Pill height. Its corner radius is half of this, which is what rounds
-    /// the ends into a capsule instead of merely softening them.
-    static let searchHeight: Float = 50
-    /// Gap between the top of the card panel and the pill floating over it.
-    static let searchGap: Float = 14
-    /// Corner radius of the card panel.
-    static let panelRadius: Float = 18
+    /// Padding around the tile grid, inside the panel.
+    static let padding: Float = 14
+    /// The floating search pill, and the room the tiles leave above their
+    /// first row for it.
+    static let searchWidth: Float = 440
+    static let searchHeight: Float = 42
+    static let searchGap: Float = 12
+    static let searchClearance: Float = searchHeight + searchGap * 2 - padding
 
-    /// How many cards fit across a surface `width` wide. At least one, so a
+    /// How many cards fit across a grid box `width` wide. At least one, so a
     /// silly window size cannot divide by zero.
     ///
     /// Must agree with `LazyGridNode.settleWindow`, including the cap — this is
     /// what Up and Down move by, and a key handler that disagrees with the
     /// layout about the row length moves the selection somewhere the user did
-    /// not point at.
+    /// not point at. `width` is the grid's own box (the ruler's), so nothing
+    /// comes off it here.
     static func columns(width: Float) -> Int {
-        let usable = max(cardWidth, width - padding * 2)
-        let fit = max(1, Int((usable + spacing) / (cardWidth + spacing)))
+        let fit = max(1, Int((width + spacing) / (cardWidth + spacing)))
         return min(maxColumns, fit)
     }
 }
 
 // ─── Bring-up ───────────────────────────────────────────────────────────────
 
-// Window itself is clear so the *edge gaps* show the desktop undimmed. The
-// floating content card paints its own translucent scrim (see LauncherView) —
-// a full-surface backdrop would fill the margins too and kill the gap.
+// The surface covers the work area so a click beside the panel can dismiss
+// it; it paints only a light dim, and the panel paints itself.
 WindowBackdrop.current = .none
 
 // `LAVA_BOOT_TRACE=1` says where the time before the first frame went. This is
@@ -206,6 +224,10 @@ guard let editor = LavaClient.open(
     title: "Launcher", frame: .client, fillScreen: .maximized
 ) else { exit(1) }
 BootTrace.mark("compositor connected")
+
+// After `open`: a face is registered with the compositor, which only now
+// exists to register it with.
+LauncherLayout.smallFont = UIFont.loadUI(assetsRoot: LavaResources.root, pixelSize: 13)
 
 // Seeded here rather than left to the ruler, which only runs at paint and so
 // would be a frame late. A frame late is not a cosmetic problem: the decode
