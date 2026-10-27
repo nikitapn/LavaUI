@@ -35,8 +35,8 @@ struct VolumeApplet: View {
             }) {
             Canvas(
                 label: "volume",
-                width: .pt(22),
-                height: .pt(22),
+                width: .pt(PanelChrome.statusGlyph),
+                height: .pt(PanelChrome.statusGlyph),
                 onWheel: { _, dy, _, _ in
                     // Positive dy = scroll up = louder. One notch ≈ 5%.
                     let step: Float = dy > 0 ? 0.05 : -0.05
@@ -53,8 +53,7 @@ struct VolumeApplet: View {
                 }
             )
         }
-        // Nothing on the side that faces the network glyph; see the strip.
-        .padding(EdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 2))
+        .padding(2)
         .hoverBackground(PanelChrome.style.titleHover)
         .cornerRadius(6)
         .agentId("applet.volume")
@@ -274,7 +273,7 @@ enum SoundBlock: Identifiable {
     }
 }
 
-/// Vector speaker + level arcs drawn into a `DrawList`.
+/// The speaker is `SpeakerMark`; the microphone is drawn here.
 enum SoundGlyph {
     enum Kind { case speaker, microphone }
 
@@ -287,68 +286,10 @@ enum SoundGlyph {
             microphone(list: list, frame: frame, muted: muted, color: color, accent: accent)
             return
         }
-        let s = min(frame.w, frame.h)
-        // From the left edge, not a share of the width: the box is the
-        // glyph's own, and the strip sets it beside the network glyph.
-        let cx = frame.x + s * 0.22 * 0.9 + 2
-        let cy = frame.y + frame.h * 0.5
-
-        // Body: small rounded rect (magnet).
-        let bodyW = s * 0.22
-        let bodyH = s * 0.38
-        list.roundedRect(
-            x: cx - bodyW * 0.9, y: cy - bodyH * 0.5,
-            w: bodyW, h: bodyH,
-            color: color, radius: 2
+        SpeakerMark.paint(
+            list: list, frame: frame, level: volume, muted: muted,
+            color: color, mutedColor: accent
         )
-
-        // Horn: triangle via a thick polyline-ish stack of short rects
-        // (no triangle primitive). Approximate with a widening ramp.
-        let hornBase = cx + bodyW * 0.15
-        let steps = 5
-        for i in 0..<steps {
-            let t = Float(i) / Float(steps)
-            let x = hornBase + t * s * 0.22
-            let h = bodyH * (0.45 + t * 0.7)
-            let w = s * 0.06
-            list.rect(
-                x: x, y: cy - h * 0.5, w: w, h: h, color: color
-            )
-        }
-
-        if muted {
-            // Slash.
-            let x0 = frame.x + frame.w * 0.15
-            let y0 = frame.y + frame.h * 0.78
-            let x1 = frame.x + frame.w * 0.85
-            let y1 = frame.y + frame.h * 0.22
-            // Two short rects as a diagonal bar.
-            for i in 0..<8 {
-                let t = Float(i) / 7
-                let x = x0 + (x1 - x0) * t
-                let y = y0 + (y1 - y0) * t
-                list.rect(x: x - 1.2, y: y - 1.2, w: 2.4, h: 2.4, color: accent)
-            }
-            return
-        }
-
-        // Level arcs — rings that light with volume.
-        let level = min(1, max(0, volume))
-        let rings = 3
-        for i in 0..<rings {
-            let threshold = Float(i + 1) / Float(rings + 1)
-            let on = level + 0.001 >= threshold
-            let ringColor = on ? color : color.opacity(0.2)
-            let r = s * (0.28 + Float(i) * 0.14)
-            // Approximate arc as a few dots on the right side.
-            let dots = 5
-            for d in 0..<dots {
-                let a = Float.pi * (-0.45 + 0.9 * Float(d) / Float(dots - 1))
-                let px = cx + cos(a) * r + s * 0.08
-                let py = cy + sin(a) * r
-                list.circle(cx: px, cy: py, radius: on ? 1.4 : 1.0, color: ringColor)
-            }
-        }
     }
 
     /// Capsule, cradle and stand.

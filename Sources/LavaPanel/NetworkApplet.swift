@@ -26,8 +26,8 @@ struct NetworkApplet: View {
             }) {
             Canvas(
                 label: "network",
-                width: .pt(24),
-                height: .pt(22),
+                width: .pt(PanelChrome.statusGlyph),
+                height: .pt(PanelChrome.statusGlyph),
                 paint: { list, frame in
                     NetworkGlyph.paintStatus(
                         status, list: list, frame: frame,
@@ -36,9 +36,7 @@ struct NetworkApplet: View {
                 }
             )
         }
-        // Nothing on the side that faces the speaker: the two sit together
-        // as a pair (see the strip), and the box is the glyph's own width.
-        .padding(EdgeInsets(top: 2, leading: 2, bottom: 2, trailing: 0))
+        .padding(2)
         .hoverBackground(PanelChrome.style.titleHover)
         .cornerRadius(6)
         .agentId("applet.network")
@@ -486,13 +484,19 @@ enum NetworkGlyph {
     ) {
         let unlit = dim ?? color.opacity(0.3)
         let s = min(frame.w, frame.h * 1.25)
+        let dot = max(1.2, s * 0.07)
+        let width = max(1.2, s * 0.08)
+        let outer = s * (0.24 + 2 * 0.19)
+        // Centred on what is drawn — the top of the outer arc to the bottom
+        // of the dot — not on the dot's position, which left the fan low.
+        let inkHeight = outer + width * 0.5 + dot
         let cx = frame.x + frame.w * 0.5
-        let cy = frame.y + frame.h * 0.5 + s * 0.36
-        list.circle(cx: cx, cy: cy, radius: max(1.2, s * 0.07), color: bars > 0 ? color : unlit)
+        let cy = frame.y + (frame.h + inkHeight) * 0.5 - dot
+        list.circle(cx: cx, cy: cy, radius: dot, color: bars > 0 ? color : unlit)
         for i in 0..<3 {
             let r = s * (0.24 + Float(i) * 0.19)
             arc(list: list, cx: cx, cy: cy, r: r, color: i + 2 <= bars ? color : unlit,
-                width: max(1.2, s * 0.08))
+                width: width)
         }
     }
 

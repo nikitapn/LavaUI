@@ -58,8 +58,6 @@ final class SpotifySession: @unchecked Sendable {
 
     let client = SpotifyClient()
     let editor: Editor
-    /// A larger instance of the media-symbol face for compact player chrome.
-    let playerControlFont: UIFont?
     /// Pinned to spotifyd. Present once the daemon is the active Connect device;
     /// `controlsPresent` is enough to TransferPlayback + OpenUri.
     let mpris: MprisSession
@@ -89,14 +87,6 @@ final class SpotifySession: @unchecked Sendable {
 
     init(editor: Editor) {
         self.editor = editor
-        if let path = FontStore.symbols?.path,
-           let font = UIFont(path: path, pixelSize: 20),
-           font.registerWithEngine(editor)
-        {
-            self.playerControlFont = font
-        } else {
-            self.playerControlFont = FontStore.symbols
-        }
         self.mpris = MprisSession(spotifydOnly: true)
         self.isLoggedIn = client.isUserLoggedIn
         self.mpris.onUpdate = { [weak self] in

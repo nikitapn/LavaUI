@@ -601,17 +601,18 @@ struct Spotify: View {
             }
 
             HStack(width: .pt(176), padding: 6, alignment: .center) {
-                Button(
-                    session.volumePercent == 0 ? "🔇" : "🔊",
-                    style: secondaryTransportStyle,
-                    font: session.playerControlFont,
-                    isEnabled: session.canControlVolume,
-                    action: {
-                        session.setVolume(to: session.volumePercent == 0 ? 50 : 0)
-                    }
-                )
-                .frame(width: .pt(36), height: .pt(36))
-                .agentId("volume-mute")
+                roundButton(
+                    enabled: session.canControlVolume,
+                    id: "volume-mute",
+                    action: { session.setVolume(to: session.volumePercent == 0 ? 50 : 0) }
+                ) {
+                    SpeakerMark(
+                        level: Float(session.volumePercent) / 100,
+                        muted: session.volumePercent == 0,
+                        size: 18,
+                        color: session.canControlVolume ? .secondary : .dim
+                    )
+                }
                 Slider(
                     value: Binding(
                         get: { Float(session.volumePercent) },
@@ -699,22 +700,40 @@ struct Spotify: View {
         id: String,
         action: @escaping () -> Void
     ) -> some View {
+        roundButton(
+            diameter: diameter, background: background, hover: hover, id: id, action: action
+        ) {
+            TransportMark(kind, size: markSize, color: color)
+        }
+    }
+
+    /// The circle `transportButton` and the volume button share. Disabled,
+    /// it takes no click and shows no hover.
+    private func roundButton<Mark: View>(
+        diameter: Float = 36,
+        background: Color = .clear,
+        hover: Color = Theme.current.accent.opacity(0.14),
+        enabled: Bool = true,
+        id: String,
+        action: @escaping () -> Void,
+        @ViewBuilder mark: () -> Mark
+    ) -> some View {
         HStack(
             width: .pt(diameter),
             height: .pt(diameter),
             padding: 0,
             alignment: .center,
             spacing: 0,
-            onClick: action
+            onClick: enabled ? action : nil
         ) {
             Spacer()
-            TransportMark(kind, size: markSize, color: color)
+            mark()
             Spacer()
         }
         .background(background)
-        .hoverBackground(hover)
+        .hoverBackground(enabled ? hover : .clear)
         .cornerRadius(diameter / 2)
-        .cursor(.pointer)
+        .cursor(enabled ? .pointer : .arrow)
         .agentId(id)
     }
 

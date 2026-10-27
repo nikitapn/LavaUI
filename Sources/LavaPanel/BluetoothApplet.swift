@@ -26,8 +26,8 @@ struct BluetoothApplet: View {
             }) {
             Canvas(
                 label: "bluetooth",
-                width: .pt(20),
-                height: .pt(22),
+                width: .pt(PanelChrome.statusGlyph),
+                height: .pt(PanelChrome.statusGlyph),
                 paint: { list, frame in
                     BluetoothGlyph.paintStatus(
                         status, list: list, frame: frame,

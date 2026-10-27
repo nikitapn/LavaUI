@@ -1364,6 +1364,12 @@ let bluetooth = BluetoothSession()
 enum PanelChrome {
     static var style: MenuBarStyle { .panel() }
 
+    /// Side of the square every status glyph (Bluetooth, network, sound) is
+    /// drawn in, with the same padding all round, so each sits centred in its
+    /// hover plate and the three line up. Each glyph centres its own ink in
+    /// the square.
+    static let statusGlyph: Float = 22
+
     /// About, the volume card and the calendar, over the compositor's frost.
     ///
     /// A menu row stays near opaque (`MenuBarStyle.panel`) because a
