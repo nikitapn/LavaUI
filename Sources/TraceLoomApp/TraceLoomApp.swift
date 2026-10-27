@@ -6,6 +6,7 @@ import LavaUI
 @main
 struct TraceLoomApp {
     static func main() {
+        AppSettings.configure(appName: "TraceLoom")
         guard let editor = LavaHost.open(title: "TraceLoom · Log Timeline Studio") else {
             exit(1)
         }
@@ -90,6 +91,26 @@ struct TraceLoomApp {
                             shortcut: KeyShortcut(KeyCode.o, .primary, .shift)
                         ) {
                             session.openWorkspace()
+                        }
+                        Menu("Recent Workspaces", id: "file.workspace-recent") {
+                            if session.recentWorkspaces.isEmpty {
+                                MenuItem(
+                                    "No Recent Workspaces", id: "file.workspace-recent.empty",
+                                    isEnabled: false
+                                ) {}
+                            }
+                            for (index, path) in session.recentWorkspaces.enumerated() {
+                                MenuItem(path, id: "file.workspace-recent.\(index)") {
+                                    session.openWorkspace(at: URL(fileURLWithPath: path))
+                                }
+                            }
+                            MenuSeparator()
+                            MenuItem(
+                                "Clear Recent Workspaces", id: "file.workspace-recent.clear",
+                                isEnabled: !session.recentWorkspaces.isEmpty
+                            ) {
+                                session.clearRecentWorkspaces()
+                            }
                         }
                         MenuItem(
                             "Save Workspace",

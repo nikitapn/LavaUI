@@ -352,16 +352,33 @@ public struct TraceLoom: View {
         .overlay(
             isPresented: $session.showSettings,
             placement: .viewport(inset: 48),
-            style: OverlayStyle(
-                background: Environment.current.theme.panel.opacity(0.94),
-                cornerRadius: 12,
-                padding: 16,
-                minWidth: 320,
-                backdropBlurRadius: 10
-            )
+            style: modalStyle
         ) {
             settingsPanel
         }
+    }
+
+    private var overlayAccent: Color {
+        Theme.current.background.r < 0.5
+            ? Color(r: 0.48, g: 0.76, b: 1)
+            : Color(r: 0.15, g: 0.36, b: 0.68)
+    }
+
+    private var overlaySecondary: Color {
+        Theme.current.background.r < 0.5
+            ? Color(r: 0.69, g: 0.75, b: 0.84)
+            : Theme.current.textSecondary
+    }
+
+    private var modalStyle: OverlayStyle {
+        let dark = Theme.current.background.r < 0.5
+        return OverlayStyle(
+            background: dark ? Color(r: 0.14, g: 0.18, b: 0.24) : .white,
+            border: dark ? Color(r: 0.36, g: 0.46, b: 0.60) : Theme.current.border,
+            cornerRadius: 12,
+            padding: 16,
+            scrim: Color.black.opacity(dark ? 0.58 : 0.28)
+        )
     }
 
     private var logLineCount: Int { parseOutput.logLineCount }
@@ -422,10 +439,21 @@ public struct TraceLoom: View {
                     .overlay(
                         isPresented: $showParseRules,
                         placement: .viewport(inset: 48),
+                        style: modalStyle
                     ) {
                         VStack(flexGrow: 1, spacing: 8) {
-                            sectionTitle("PARSING RULES", detail: "type | name | regex | time | value | group")
-                                .flexShrink(0)
+                            HStack(alignment: .center) {
+                                VStack(spacing: 4) {
+                                    Text("Parsing rules", color: overlayAccent)
+                                    Text("Define what to extract from your logs", color: overlaySecondary)
+                                }
+                                Spacer()
+                                toolbarButton("close", "Close parsing rules", id: "close-parsing-rules") {
+                                    showParseRules = false
+                                }
+                            }
+                            .padding(.bottom, 8)
+                            .flexShrink(0)
                             VSplitView(fraction: $rulesSplit, minTop: 80, minBottom: 240) {
                                 EditorView(
                                     text: $session.rules,
@@ -549,24 +577,39 @@ public struct TraceLoom: View {
 
     private var settingsPanel: some View {
         VStack(padding: 4) {
-            Text("Settings", color: .accent)
+            HStack(alignment: .center) {
+                Text("Settings", color: overlayAccent)
+                Spacer()
+                toolbarButton("close", "Close settings", id: "close-settings") {
+                    session.showSettings = false
+                }
+            }
             Divider()
-            Toggle(
-                "Light theme",
-                isOn: Binding(
-                    get: { Theme.current == .light },
-                    set: { Theme.current = $0 ? .light : .dark }
-                )
+            Text("Ollama URL", color: overlaySecondary)
+            TextField(
+                text: $session.ollamaURLDraft,
+                placeholder: "http://localhost:11434"
             )
-            .agentId("settings-theme")
+            .agentId("settings-ollama-url")
+            Text("Base URL of your Ollama server. Changes apply to the next assistant run.", color: overlaySecondary)
+            if let error = session.settingsError {
+                Text(error, color: .selected)
+                    .agentId("settings-error")
+            }
             Divider()
             HStack {
                 Spacer()
-                Text("Close", color: .accent, onClick: { session.showSettings = false })
-                    .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
+                Text("Cancel", color: .secondary, onClick: { session.showSettings = false })
+                    .padding(8)
                     .hoverBackground(Environment.current.theme.hover)
                     .cornerRadius(4)
                     .agentId("settings-close")
+                Text("Save", color: .white, onClick: { session.saveSettings() })
+                    .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
+                    .hoverBackground(Environment.current.theme.hover)
+                    .cornerRadius(4)
+                    .background(Color(r: 0.18, g: 0.37, b: 0.62))
+                    .agentId("settings-save")
             }
         }
         .agentId("settings-panel")
@@ -578,15 +621,14 @@ public struct TraceLoom: View {
         let state = assistant.snapshot
         return VStack(flexGrow: 1, padding: 6, spacing: 8) {
             HStack(alignment: .center, spacing: 16) {
-                Text("RULE ASSISTANT", color: .accent)
-                Text(assistant.model, color: .dim)
+                Text("RULE ASSISTANT", color: overlayAccent)
+                Text(assistant.model, color: overlaySecondary)
             }
-            Divider()
             ScrollView(followsEnd: true) {
                 VStack(spacing: 10) {
                     if state.thinkingTail.isEmpty && state.activity.isEmpty
                         && state.suggestion == nil && state.problem == nil {
-                        Text("Paste examples below, then suggest a rule to test against your log.", color: .dim)
+                        Text("Paste examples below, then suggest a rule to test against your log.", color: overlaySecondary)
                     }
                     // Reasoning models are silent in `content` for a long time, so
                     // the reasoning stream is the only sign anything is happening.
@@ -630,7 +672,7 @@ public struct TraceLoom: View {
             .cornerRadius(6)
             .agentId("assistant-output")
 
-            Text("Log examples · one per line", color: .dim)
+            Text("Log examples · one per line", color: overlaySecondary)
                 .flexShrink(0)
             EditorView(
                 text: $assistantExample,
@@ -645,12 +687,13 @@ public struct TraceLoom: View {
             HStack(padding: 4, alignment: .center) {
                 Text(
                     state.isRunning ? "Working…" : "Suggest rule",
-                    color: state.isRunning ? .dim : .accent,
+                    color: .white,
                     onClick: { startAssistant() }
                 )
                 .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
                 .hoverBackground(Environment.current.theme.hover)
                 .cornerRadius(4)
+                .background(state.isRunning ? Theme.current.hover : Color(r: 0.18, g: 0.37, b: 0.62))
                 .agentId("assistant-run")
 
                 Spacer()
@@ -677,7 +720,8 @@ public struct TraceLoom: View {
         assistant.start(
             example: examples.first ?? firstLogLine(),
             sampleLines: Array(examples.dropFirst()) + sampleLogLines(),
-            existingRules: session.rules
+            existingRules: session.rules,
+            host: session.ollamaURL
         )
     }
 
@@ -1131,7 +1175,7 @@ public struct TraceLoom: View {
                     .flexShrink(1)
                     .tooltip(parsed.diagnostics.prefix(3).joined(separator: "\n"))
             } else {
-                Text("Rules valid · edit rules to reparse", color: .muted)
+                Text("Rules valid · edit rules to reparse", color: overlayAccent)
             }
             Spacer()
         }

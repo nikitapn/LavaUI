@@ -100,6 +100,7 @@ final class OverlayAttachment {
     /// `panel` over `background` is a two-percent luminance step, which reads
     /// as a rendering artefact rather than as a thing on top of something.
     var border: Color?
+    var scrim: Color?
     var cornerRadius: Float = 0
 
     /// Resolved during emit, in the same space as the anchor.
@@ -300,6 +301,7 @@ public struct OverlayView<Content: View, OverlayContent: View>: PrimitiveView {
             binding.wrappedValue = false
         }
 
+        att.scrim = style.scrim
         att.border = style.plateBorder
         att.cornerRadius = style.cornerRadius
         root.fillColor = style.background
@@ -385,6 +387,8 @@ public enum BackdropBridge {
 
 /// Styling for the floating surface an overlay draws on.
 public struct OverlayStyle {
+    /// Optional full-viewport tint behind the panel, for modal separation.
+    public var scrim: Color?
     /// Fill of the panel.
     public var background: Color
     /// nil draws no outline.
@@ -405,8 +409,10 @@ public struct OverlayStyle {
         cornerRadius: Float? = nil,
         padding: Float = 4,
         minWidth: Float = 0,
-        backdropBlurRadius: Float? = nil
+        backdropBlurRadius: Float? = nil,
+        scrim: Color? = nil
     ) {
+        self.scrim = scrim
         let theme = Environment.current.theme
         self.background = background ?? theme.panel
         self.border = border ?? theme.border

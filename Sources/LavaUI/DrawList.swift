@@ -1315,6 +1315,9 @@ public final class DrawList {
                 viewportW: viewportW, viewportH: viewportH
             )
             guard let overlayRoot = att.root else { continue }
+            if let scrim = att.scrim {
+                rect(x: 0, y: 0, w: viewportW, h: viewportH, color: scrim)
+            }
 
             // A glass overlay must frost what is *behind* the panel, not the
             // panel's own chrome, so the capture has to happen before any of it.

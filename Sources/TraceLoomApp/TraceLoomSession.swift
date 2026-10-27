@@ -34,6 +34,9 @@ final class TraceLoomSession {
     /// Where `saveWorkspace()` writes without asking. Nil until a workspace is
     /// opened or saved once.
     var workspaceURL: URL?
+    private(set) var recentWorkspaces: [String] = Array(
+        (AppSettings.value(forKey: "recentWorkspaces", as: [String].self) ?? []).prefix(10)
+    )
 
     /// Non-nil while a file load is in flight (status line under the header).
     var loadingPath: String?
@@ -41,6 +44,11 @@ final class TraceLoomSession {
     var notice: TraceLoomNotice?
 
     var showSettings = false
+    private(set) var ollamaURL = AppSettings.string(forKey: "assistant.ollamaURL")
+        ?? ProcessInfo.processInfo.environment["TRACELOOM_OLLAMA_HOST"]
+        ?? "http://localhost:11434"
+    var ollamaURLDraft = ""
+    var settingsError: String?
 
     /// `lanes` gives each series its own strip; `overlay` stacks them in one
     /// plot so a long rule list does not squash every chart to a few pixels.
@@ -218,7 +226,24 @@ final class TraceLoomSession {
     }
 
     func openSettings() {
+        ollamaURLDraft = ollamaURL
+        settingsError = nil
         showSettings = true
+    }
+
+    func saveSettings() {
+        let value = ollamaURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: value),
+              let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              let host = url.host, !host.isEmpty,
+              url.query == nil, url.fragment == nil else {
+            settingsError = "Enter an HTTP or HTTPS base URL, such as http://localhost:11434."
+            return
+        }
+        ollamaURL = value
+        AppSettings.set(value, forKey: "assistant.ollamaURL")
+        settingsError = nil
+        showSettings = false
     }
 
     func resetZoom() {
@@ -247,6 +272,19 @@ final class TraceLoomSession {
     }
 
     // MARK: - Workspaces
+
+    func clearRecentWorkspaces() {
+        recentWorkspaces = []
+        AppSettings.set(recentWorkspaces, forKey: "recentWorkspaces")
+    }
+
+    private func rememberWorkspace(_ url: URL) {
+        let path = url.standardizedFileURL.resolvingSymlinksInPath().path
+        recentWorkspaces.removeAll { $0 == path }
+        recentWorkspaces.insert(path, at: 0)
+        recentWorkspaces = Array(recentWorkspaces.prefix(10))
+        AppSettings.set(recentWorkspaces, forKey: "recentWorkspaces")
+    }
 
     /// Title-bar-ish name for the open workspace, for the header.
     var workspaceName: String? {
@@ -332,6 +370,7 @@ final class TraceLoomSession {
         do {
             try workspace.write(to: url)
             workspaceURL = url
+            rememberWorkspace(url)
             notice = TraceLoomNotice(
                 text: "Saved \(workspace.documents.count) log"
                     + (workspace.documents.count == 1 ? "" : "s")
@@ -353,6 +392,7 @@ final class TraceLoomSession {
         }
         activeIndex = min(max(0, workspace.activeIndex), documents.count - 1)
         workspaceURL = url
+        rememberWorkspace(url)
         logEditor.restore(documents[activeIndex].position ?? .start)
         // Only the document in front is read now; the rest are read the first
         // time they are selected.

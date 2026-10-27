@@ -54,7 +54,8 @@ final class AssistantSession: @unchecked Sendable {
 
     /// Kicks off a run. Returns false if one is already going.
     @discardableResult
-    func start(example: String, sampleLines: [String], existingRules: String) -> Bool {
+    func start(example: String, sampleLines: [String], existingRules: String, host: String? = nil) -> Bool {
+        let host = host ?? self.host
         let trimmed = example.trimmingCharacters(in: .whitespacesAndNewlines)
         let began = lock.withLock { () -> Bool in
             guard !state.isRunning else { return false }
@@ -69,7 +70,7 @@ final class AssistantSession: @unchecked Sendable {
             return true
         }
         guard let url = URL(string: host) else {
-            finish(problem: "TRACELOOM_OLLAMA_HOST is not a valid URL: \(host)")
+            finish(problem: "Ollama URL is not valid: \(host)")
             return true
         }
 
