@@ -129,8 +129,13 @@ final class ColorTests: XCTestCase {
 
     /// A saturated hover fill over a light panel would otherwise be a 0.7
     /// overlay and steal the row's text. The cap keeps glyphs themselves.
+    ///
+    /// Its own colour rather than `Theme.light.hover`, which was this sky blue
+    /// until the light palette was made one hue: the cap is for any theme
+    /// that asks for a strong fill, not a fact about that one.
     func testHoverOverlayCapsAStrongFill() {
-        let wash = Theme.light.hover.hoverOverlay(over: Theme.light.panel)
+        let strong = Color(r: 0.24, g: 0.68, b: 0.91)
+        let wash = strong.hoverOverlay(over: Theme.light.panel)
         XCTAssertLessThanOrEqual(wash.a, 0.40 + 1e-5)
         XCTAssertGreaterThan(wash.a, 0.10)
     }

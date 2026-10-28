@@ -127,20 +127,26 @@ public struct Theme: Equatable, Sendable {
     )
 
     /// A light palette: dark text on pale surfaces.
+    ///
+    /// One cool slate hue for every grey and every quiet text, so nothing
+    /// reads as a second palette. The muted and dim text used to be the dark
+    /// theme's green-grey, olive on these surfaces; the background was tinted
+    /// cyan beside a neutral panel; and the hover was a saturated sky blue,
+    /// a loud block under the pointer where `dark`'s is a quiet step up.
     public static let light = Theme(
         textPrimary: Color(r: 0.12, g: 0.13, b: 0.16),
-        textSecondary: Color(r: 0.40, g: 0.42, b: 0.46),
-        textMuted: Color(r: 0.45, g: 0.50, b: 0.45),
-        textDim: Color(r: 0.55, g: 0.58, b: 0.55),
+        textSecondary: Color(r: 0.38, g: 0.41, b: 0.47),
+        textMuted: Color(r: 0.44, g: 0.48, b: 0.54),
+        textDim: Color(r: 0.54, g: 0.58, b: 0.64),
         accent: Color(r: 0.20, g: 0.35, b: 0.70),
         selected: Color(r: 0.75, g: 0.50, b: 0.05),
-        background: Color(r: 0.93, g: 0.96, b: 0.97),
-        panel: Color(r: 0.92, g: 0.93, b: 0.94),
+        background: Color(r: 0.95, g: 0.96, b: 0.97),
+        panel: Color(r: 0.91, g: 0.92, b: 0.94),
         inset: Color(r: 1.00, g: 1.00, b: 1.00),
-        canvas: Color(r: 0.88, g: 0.89, b: 0.91),
-        hover: Color(r: 0.24, g: 0.68, b: 0.91),
-        selectionFill: Color(r: 0.65, g: 0.78, b: 0.95),
-        border: Color(r: 0.75, g: 0.76, b: 0.80)
+        canvas: Color(r: 0.88, g: 0.89, b: 0.92),
+        hover: Color(r: 0.84, g: 0.86, b: 0.91),
+        selectionFill: Color(r: 0.72, g: 0.81, b: 0.95),
+        border: Color(r: 0.77, g: 0.79, b: 0.83)
     )
 
     /// Deep indigo with a cyan/magenta pair, for surfaces that sit over a
