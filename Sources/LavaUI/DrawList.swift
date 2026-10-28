@@ -2372,7 +2372,10 @@ extension DrawList {
         // and the caret were skipped, and the field looked like it was not
         // taking input.
         let clipLeft = x + min(inset, w / 2)
-        let clipRight = x + min(w, max(w - inset + theme.caretWidth, w / 2))
+        // The slack is the snapped caret's (`caret(x:y:h:theme:)`): its width
+        // rounded, and the half pixel its x may round by.
+        let caretSlack = max(1, theme.caretWidth.rounded()) + 1
+        let clipRight = x + min(w, max(w - inset + caretSlack, w / 2))
         pushClip(x: clipLeft, y: y, w: max(0, clipRight - clipLeft), h: h)
         defer { popClip() }
 
@@ -2384,10 +2387,7 @@ extension DrawList {
                 )
             }
             if focused, CaretBlink.isVisible {
-                rect(
-                    x: x + inset, y: firstTop,
-                    w: theme.caretWidth, h: lineH, color: theme.textPrimary
-                )
+                caret(x: x + inset, y: firstTop, h: lineH, theme: theme)
             }
             return
         }
@@ -2456,12 +2456,24 @@ extension DrawList {
                 let local = localIndex(
                     in: lineText, matching: state.focus, lineStart: lineStart, state: state
                 )
-                rect(
-                    x: textX + run.caretX(for: local), y: lineTop,
-                    w: theme.caretWidth, h: lineH, color: theme.textPrimary
-                )
+                caret(x: textX + run.caretX(for: local), y: lineTop, h: lineH, theme: theme)
             }
         }
+    }
+
+    /// The caret, on whole pixels.
+    ///
+    /// It stands at a glyph advance, which is fractional, and the theme's
+    /// width is 1.5: drawn where it fell, an edge between pixels is
+    /// antialiased across two columns, so the caret was crisp at one offset
+    /// and a soft double-width bar at the next — thicker and thinner by turns
+    /// as the user typed. Snapped, it is the same bar wherever it stands, at
+    /// least one pixel wide.
+    fileprivate func caret(x: Float, y: Float, h: Float, theme: Theme) {
+        rect(
+            x: x.rounded(), y: y, w: max(1, theme.caretWidth.rounded()), h: h,
+            color: theme.textPrimary
+        )
     }
 
     /// Buffer index → index into a single line's own string, which is what
@@ -2757,10 +2769,7 @@ extension DrawList {
 
             if focused, !state.hasSelection, CaretBlink.isVisible, row == caretRow {
                 let column = caretOffset - range.lowerBound
-                rect(
-                    x: textX + columnX(column), y: rowTop,
-                    w: leaf.theme.caretWidth, h: lineH, color: leaf.theme.textPrimary
-                )
+                caret(x: textX + columnX(column), y: rowTop, h: lineH, theme: leaf.theme)
             }
         }
         popClip()
