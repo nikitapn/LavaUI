@@ -5483,17 +5483,20 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// under a rounded menu. A whole-surface plate uses the window's own
   /// radius, the same number `applyCorners` masks the content with.
   ///
-  /// Two extra pixels on a window tuck the frost's antialiasing under an
-  /// opaque fill, so it does not sit beside the window as a bright speck.
-  /// Anything in the menus tree — a popup, the context menu, a fly-out —
-  /// *is* the glass: those two pixels are a second curve, and through a
-  /// translucent wash they show.
+  /// Two extra pixels on a whole window tuck the frost's antialiasing under
+  /// its opaque fill, so it does not sit beside the window as a bright
+  /// speck. A region plate gets the radius it named, exactly: the client
+  /// drew a wash over that rectangle at that radius — LavaFind's bar and
+  /// panel, a menu dropdown — and two pixels more is a second, rounder
+  /// curve, with unfrosted desktop between the two in every corner,
+  /// showing through the wash. Anything in the menus tree — a popup, the
+  /// context menu, a fly-out — *is* the glass, for the same reason.
   float frostCornerRadius(const ClientSurface &surface,
                           const ClientSurface::FrostPlate &plate) const {
     const float window = frameIsRoundable(surface) ? cornerRadius_ : 0.f;
     const float corner = plate.regioned() ? plate.corner : window;
     if (corner <= 0.f) return 0.f;
-    return surface.menu ? corner : corner + 2.f;
+    return surface.menu || plate.regioned() ? corner : corner + 2.f;
   }
 
   /// Whether this window's whole outline is the compositor's to shape.
