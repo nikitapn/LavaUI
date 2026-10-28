@@ -560,6 +560,8 @@ Modifiers apply to any `View`:
 | `.font(UIFont)` | Override the font for this subtree |
 | `.transition(Transition)` | Animate insertion/removal appearance |
 | `.onDrop { urls in ... }` | Accept dropped files in this view's bounds |
+| `.focusable(enabled:onKey:onChar:)` | A press anywhere inside gives this view the keyboard; keys go to `onKey` until something else takes it |
+| `.focused($flag)` | Mirrors whether this view (or the first field or focusable view in it) has the keyboard; set it to give or take focus from code |
 | `.agentId(String)` | Give automation/agent tooling a stable identifier |
 
 Paint-only modifier chains normally collapse onto one node. LavaUI adds a
@@ -644,8 +646,37 @@ rows apart; keep it short, since the list sizes to its widest row. Picking the
 row that is already selected does not write the binding, so a setter with side
 effects is safe to use directly. The list is an anchored overlay, so it paints
 above everything, escapes any enclosing clip, and dismisses on an outside
-click or Escape. It is mouse-driven: there is no arrow-key navigation, because
-a composed view cannot hold keyboard focus.
+click or Escape. It is mouse-driven: there is no arrow-key navigation yet —
+`.focusable` would give it the keyboard, and nothing has wired that up.
+
+`List` is a scrolling column of rows with one selected: the fill, hover,
+click target and keys are the list's, the row's contents are yours.
+
+```swift
+List(SettingsSection.allCases, id: \.self, selection: $section,
+     onActivate: { open($0) }) { section, selected in
+    Text(section.title, color: selected ? .primary : .secondary)
+}
+.focused($sidebarHasKeyboard)
+```
+
+- A click selects; a double click or Enter calls `onActivate`. Once
+  pressed the list has the keyboard: the arrows, Home, End and Page Up/Down
+  move the selection, and the view follows it.
+- Without `rowHeight`, every row is mounted at its natural height — a
+  sidebar whose subtitles wrap. With one, rows are that height and only
+  those on screen are mounted — ten thousand files.
+- `behavior: .results` is a list under a search field: the pointer selects,
+  one click opens, and the field keeps the keyboard and moves the selection
+  itself (LavaFind).
+- `selection` is `Binding<ID?>`, or `Binding<ID>` for a list that always
+  has a row selected. `id:` may be left out for `Identifiable` elements.
+  The id must be unique per row — two rows with the same id both draw
+  selected.
+- `selectionFill`, `cornerRadius`, `rowInsets`, `spacing`, `padding` and
+  `indicatorInset` change the look.
+
+Single selection only.
 
 ### Images
 
@@ -1004,7 +1035,8 @@ SwiftUI. Notable current boundaries are:
 
 - Linux is the working platform today.
 - Stack main-axis justification is not yet present; use `Spacer`.
-- Lazy containers require fixed cell/row heights.
+- Lazy containers require fixed cell/row heights; a `List` without
+  `rowHeight` mounts every row.
 - `FileDialog` runs its picker as a separate process and blocks the caller
   meanwhile; the calling window does not repaint until it returns.
 - A plain `for` loop is unavailable in `@ViewBuilder`; identity requires

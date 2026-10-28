@@ -89,8 +89,8 @@ layout (SwiftUI semantics). Layout-affecting position can wait.
 
 | | |
 |---|---|
-| Status | partial — `isEnabled:` on Button/Toggle/Slider only |
-| Proposed | `.disabled(Bool)`, `.hidden()` or `.opacity(0)` + hit-test skip |
+| Status | partial — `.hidden(_:)` exists; `isEnabled:` on Button/Toggle/Slider only, no `.disabled` |
+| Proposed | `.disabled(Bool)` that blocks clicks on every descendant |
 
 Tree-wide disable should block clicks on descendants. Hidden should remove from
 hit testing and ideally from layout (`hidden` that still occupies space vs a
@@ -174,10 +174,10 @@ Needed by most non-trivial UIs once Tier 0 is done.
 
 | Gap | Status | Notes |
 |---|---|---|
-| **`ZStack`** | absent | Alignment + layered children; apps fake it with overlays |
+| **`ZStack`** | deferred | `.overlay(alignment:)`, `.underlay` and `.overlayLayer` cover layering where one view is the base. A real `ZStack` only adds sizing to the largest child (crossfade, placeholder vs content); revisit when one of those needs it |
 | **Main-axis justification** | absent | Documented; `Spacer` only. Yoga `justify-content` |
 | **`GeometryReader`** | absent | Or a narrower `onSizeChange` if full reader is heavy |
-| **`.border` / stroke** | absent | Expand fakes borders with nested fills |
+| **`.border` / stroke** | done | `.border(_:width:)` |
 | **`.background` with a view** | partial | Color only |
 | **`.clipShape` / `.mask`** | partial | `.clipped()` = axis-aligned scissor |
 | **`.shadow` (2D)** | absent | `shadow3D` only |
@@ -190,19 +190,24 @@ Needed by most non-trivial UIs once Tier 0 is done.
 |---|---|---|
 | **`Button` label builder** | partial | `Button("Title")` only |
 | **`Text` composition** | partial | Single `String`; no `Text+Text`, attributes |
-| **`Label`**, **`Link`**, **`SecureField`** | absent | |
-| **`Picker`** | partial | `ComboBox` is the menu style: closed field + anchored dropdown, mouse-driven, no arrow keys |
-| **`Stepper`**, **`ProgressView`** | absent | Build ad hoc when needed |
-| **`List` / `Form` / `Section`** | absent | Recipes with stacks may suffice medium-term |
+| **`Label`**, **`Link`** | absent | |
+| **`SecureField`** | partial | `TextField(secure: true)` |
+| **`Picker`** | partial | `ComboBox` is the menu style: closed field + anchored dropdown, mouse-driven, no arrow keys. Segmented style absent — see [Components the apps keep rebuilding](#components-the-apps-keep-rebuilding) |
+| **`Stepper`**, **`ProgressView`** | absent | See [Components the apps keep rebuilding](#components-the-apps-keep-rebuilding) |
+| **`List`** | **done** (2026-10-28) | `List(data, id:, selection:)` — single selection, natural or fixed row heights, `ListBehavior.standard` / `.results`. Follow-ups in [List follow-ups](#list-follow-ups) |
+| **`Form` / `Section`** | absent | Settings pages are stacks of cards; a `Section` header would be the first step |
 
 ### Interaction
 
 | Gap | Status | Notes |
 |---|---|---|
-| **Gesture system** | partial | Canvas `onGesture`; stacks `onClick`/`onHover`; no `DragGesture` / `.gesture` |
-| **`.onTapGesture` / `.onHover` general** | partial | Not on arbitrary views |
-| **Focus traversal + `@FocusState`** | partial | Focus for fields exists; no Tab order, no binding |
-| **`.keyboardShortcut`**, help/tooltip | absent | |
+| **Gesture system** | partial | Canvas `onGesture`; `.onDragGesture`, `.onAnyPress`; no general `.gesture` |
+| **`.onHover`** | done | Any view |
+| **`.onTapGesture`** | partial | Stacks and `Text` take `onClick`; no modifier for any view |
+| **`@FocusState`** | partial | `.focused($flag)` on a field or a `.focusable` view, both ways (2026-10-28). One `Bool` per view, no enum-valued focus |
+| **Focus traversal (Tab order)** | absent | Nothing moves focus on Tab yet |
+| **`.help` / tooltip** | done | `.tooltip(_:)` |
+| **`.keyboardShortcut`** | absent | Menu items carry shortcuts; buttons do not |
 
 ### Animation
 
@@ -225,8 +230,43 @@ Needed by most non-trivial UIs once Tier 0 is done.
 | Gap | Status | Notes |
 |---|---|---|
 | **`.sheet` / alert / confirmation** | partial | `overlay(isPresented:)` covers many cases |
-| **`.contextMenu`** | absent | |
+| **`.contextMenu`** | absent | No view modifier; apps build one from a presented overlay (the explorer's `FileContextMenu`). The desktop's own menu is a compositor surface — see AGENTS.md |
 | **`.searchable`** | absent | |
+
+---
+
+## Components the apps keep rebuilding
+
+Found by looking for widgets several apps wrote for themselves (2026-10-28).
+A widget built by hand in three places is a framework gap whatever SwiftUI
+calls it, and is the strongest evidence of what to build next. Ordered by how
+much hand-rolled code each would remove. `List` came first and is done.
+
+| # | Component | Status | Built by hand in | Notes |
+|---|---|---|---|---|
+| 1 | **`SearchField`** | absent | LavaFind `SearchBar`, LavaLauncher's field, Settings `SearchPage`, Weather | Magnifier, placeholder, clear button, Escape clears, ↑/↓/Enter handed to a results `List` (`behavior: .results`). Four copies today |
+| 2 | **Tab strip / `TabView`** | absent | `LavaEditorApp/TabStrip.swift`, the explorer's `TabStrip` + `TabShape` + `TabGhost`, TraceLoom | Close buttons, drag to reorder, scroll on overflow, the active tab's shape. The two copies are already drifting apart |
+| 3 | **Message bar, then alert** | absent | The explorer alone has eight: `OverwriteBar`, `EraseBar`, `ClashBar`, `TransferClashBar`, `LoginBar`, `PasswordBar`, `ConnectBar`, `ProfileNameBar` | A message, an optional field, two or three buttons, Escape as the cancel. `MessageBar(style:message:actions:)` first; a modal alert on the same parts after |
+| 4 | **`ProgressView`** (bar and spinner) | absent | LavaPlayer's seek bar, the explorer's transfers; Settings shows the text "Loading…" | Determinate bar and an indeterminate spinner. The spinner must wake the loop only while it is on screen (`FrameScheduler.requestRedraw`) |
+| 5 | **`Table`** | absent | The explorer's list view (header, sort, column widths), LavaDebug's pages | Resizable, sortable column headers over a lazy `List`. The explorer's file list is the target user |
+| 6 | **Tree / `OutlineGroup`** | absent | LavaPDF `OutlineSidebar` | Disclosure per row, indentation, ←/→ to fold. Probably a mode of `List` over a flattened tree rather than a new container |
+| 7 | **Segmented control** | absent | Settings `PickerRow` | One-of-few as a row of buttons; `Picker`'s other style beside `ComboBox` |
+| 8 | **Badge / chip** | absent | LavaFind `Badge` and `KeyChip` | Small outlined label. Cheap; worth it only once a third copy appears |
+| 9 | **`Stepper`, `DatePicker`, `LazyHStack`** | absent | — | No app asks for them yet |
+
+Not on the list on purpose: the panel's Wi-Fi window. It mixes headers,
+switches, wired ports and VPNs, nothing in it stays selected, and a popup
+takes no keyboard — `List` would add nothing it uses.
+
+### List follow-ups
+
+| Gap | Notes |
+|---|---|
+| Multiple selection | Ctrl and Shift ranges are still the explorer's own (`ExplorerSession.click`) |
+| Focus-aware selection fill | Dim the selected row while another control has the keyboard; `FocusManager.isActive` answers it once the list knows its node id |
+| Exact Page Up/Down with natural heights | Moves by the last laid-out row's height today |
+| `ComboBox` keys | `.focusable` exists now; the dropdown could take ↑/↓/Enter |
+| Popups and the keyboard | A popup surface takes no focus, so a `List` in one cannot be driven by keys |
 
 ---
 
@@ -235,12 +275,13 @@ Needed by most non-trivial UIs once Tier 0 is done.
 | Gap | Status | Notes |
 |---|---|---|
 | **`NavigationStack` / split / link** | absent | Or a thin app-level router first |
-| **`TabView`** | absent | |
+| **`TabView`** | absent | The tab strip itself is #2 under [Components the apps keep rebuilding](#components-the-apps-keep-rebuilding) |
 | **`LazyHStack` / `LazyHGrid`** | absent | Vertical-only lazy today |
-| **Variable-height virtualization** | absent | Fixed cell stride only (by design so far) |
+| **Variable-height virtualization** | absent | Fixed cell stride only (by design so far). `List` without `rowHeight` mounts every row instead |
 | **Both-axis `ScrollView`** | partial | One axis per scroll view |
-| **`ScrollViewReader` / programmatic scroll** | absent | |
-| **`Group` / `AnyView` / `EquatableView`** | absent | |
+| **`ScrollViewReader` / programmatic scroll** | partial | `ScrollPosition.scroll(to:)` and `.scrollIntoView(when:)`; no scroll-to-id |
+| **`AnyView`** | done | For recursion; a change of underlying type remounts |
+| **`Group` / `EquatableView`** | absent | |
 | **Custom `Layout` protocol** | absent | Yoga is the only engine |
 
 ---
@@ -270,15 +311,20 @@ retained identity, Observation.
 
 **State:** `@State`, `Binding`, `@Bindable`, `@DrawState` (Lava-only).
 
-**Layout:** `HStack`, `VStack`, `Spacer`, `ScrollView`, `LazyVStack`,
-`LazyVGrid`, `Dimension` (auto / pt / pct), flex grow/shrink.
+**Layout:** `HStack`, `VStack`, `Spacer`, `ScrollView` (with
+`ScrollPosition`), `LazyVStack`, `LazyVGrid`, `HSplitView` / `VSplitView`,
+`AnyView`, `Dimension` (auto / pt / pct), flex grow/shrink.
 
-**Controls:** `Text`, `Button`, `TextField`, `Toggle`, `Slider`, `Divider`,
-`Expand`, `Image`, `Canvas`, `EditorView`, `MarkdownView`.
+**Controls:** `Text`, `Button`, `TextField` (incl. `secure:`), `Toggle`,
+`Slider`, `ComboBox`, `ColorPicker`, `List`, `Divider`, `Expand`, `Image`,
+`Canvas`, `EditorView`, `MarkdownView`, `WindowControls`.
 
-**Modifiers:** padding (uniform), background color, hoverBackground,
-cornerRadius, frame (partial), flexGrow/Shrink, blur, backdropBlur, clipped,
-theme, font, transition, onDrop, overlay (composed + presented), agentId.
+**Modifiers:** padding (edge-aware), background color, hoverBackground,
+border, cornerRadius, frame (partial), flexGrow/Shrink, hidden, blur,
+backdropBlur, clipped, theme, font, transition, cursor, tooltip, onHover,
+onDrop, onFileDrag, onDragGesture, onAnyPress, onFrame, scrollIntoView,
+focusable, focused, overlay (composed + presented), underlay, overlayLayer,
+agentId.
 
 **Other:** menus, FileDialog, Scene3D, client/compositor frame path, agent
 server.
@@ -310,14 +356,16 @@ Concrete sequence for the next few PRs:
 | 3 | **`.frame` max sizes** | Yoga min/max already |
 | 4 | **`.disabled` / `.hidden`** | Hit-test + emit flags |
 | 5 | **`.onAppear` / `.onDisappear` / `.onChange`** | Mount lifecycle |
-| 6 | **`ZStack`** | Alignment enum reuse |
+| 6 | ~~`ZStack`~~ | deferred — overlays cover it |
 | 7 | **Stack main-axis justification** | Yoga justify-content |
 | 8 | General `.onTapGesture` / `.onHover` | Hit-test hooks |
 | 9 | `withAnimation` bridge into `Animated<T>` | Animation driver |
-| 10 | Focus traversal | FocusManager |
+| 10 | Focus traversal (Tab order) | `.focusable` / `.focused` exist |
 
-After that, pick by product pressure (navigation, gestures, a11y, lazy
-horizontal).
+Components run in parallel with this list, by the order in [Components the
+apps keep rebuilding](#components-the-apps-keep-rebuilding): `SearchField`,
+the tab strip and the message bar first. After that, pick by product pressure
+(navigation, gestures, a11y, lazy horizontal).
 
 ---
 
@@ -339,3 +387,4 @@ horizontal).
 | 2026-08-08 | Initial inventory from LavaUI sources + api.md + assessment |
 | 2026-08-08 | Tier 0.1 edge-aware padding shipped (`Edge` / `EdgeInsets` / overloads) |
 | 2026-08-24 | Tier 0.6 frame alignment shipped (`Alignment` / `OverlayAnchor`) |
+| 2026-10-28 | `List` shipped, with `.focusable` and `.focused($flag)`. Added the components apps keep rebuilding; `ZStack` deferred. Corrected stale rows: `.border`, `.hidden`, `.onHover`, `.tooltip`, `AnyView`, `ScrollPosition`, `TextField(secure:)` already existed |
