@@ -319,19 +319,14 @@ public enum LavaApp {
         /// Create the engine window, its arena and its compositor surface.
         /// The anchor, when there is one, makes a borderless popup of the
         /// window the app started with rather than another cascaded window.
-        /// The last three arguments are the backdrop-blur radius, the glass
-        /// refraction at its rim in pixels, and the frost's grain, 0…1; 0 is
-        /// no frost / a flat rim / no grain. Nil means the surface could not
-        /// be opened.
+        /// Nil means the surface could not be opened.
         nonisolated(unsafe) public static var open:
-            ((Float, Float, String, SurfaceAnchor?, Float, Float, Float) -> WindowID?)?
-        /// A hidden menu fly-out: width, height, backdrop-blur radius,
-        /// refraction, frost. The
-        /// compositor places it later, beside a row, so creating it must not
-        /// put a window on screen. Nil in a windowed app, which has no menu
-        /// compositor to ask.
+            ((Float, Float, String, SurfaceAnchor?) -> WindowID?)?
+        /// A hidden menu fly-out: width, height. The compositor places it
+        /// later, beside a row, so creating it must not put a window on
+        /// screen. Nil in a windowed app, which has no menu compositor to ask.
         nonisolated(unsafe) public static var openMenuPlate:
-            ((Float, Float, Float, Float, Float) -> WindowID?)?
+            ((Float, Float) -> WindowID?)?
         /// The view tree is gone. Drop the compositor surface. Idempotent.
         nonisolated(unsafe) public static var close: ((WindowID) -> Void)?
     }
@@ -377,7 +372,7 @@ public enum LavaApp {
         // would be two windows for one click.
         guard let id = openEngineWindow(
             editor: editor, title: title, width: width, height: height,
-            anchor: nil, backdropBlur: 0, refraction: 0
+            anchor: nil
         ) else { return nil }
         return adopt(
             editor: editor, id: id, title: title, onClose: onClose,
@@ -395,33 +390,36 @@ public enum LavaApp {
     /// window manager that is not ours this is an ordinary second window;
     /// the placement and the dismiss are compositor work.
     ///
-    /// `backdropBlur` is the frost behind the popup, in pixels. 0 leaves it
-    /// off. The plate is cut to the window's own corner radius, the same
-    /// mask as the popup, so the two are one outline. A windowed app ignores
-    /// the radius: nothing there can see the desktop behind the window.
+    /// The frost behind it is the root view's to state, like everything else
+    /// it draws:
     ///
-    /// `refraction` bends the frost's rim like glass, by up to that many
-    /// pixels; 0 is flat. `frost`, 0…1, gives it the grain of frosted glass
-    /// (see `View.glassEffect(frost:)`). Both only mean anything with
-    /// `backdropBlur`.
+    /// ```swift
+    /// LavaApp.openPopup(title: "Network", anchor: anchor) {
+    ///     NetworkWindow()
+    ///         .backdropBlur(radius: 12)
+    ///         .glassEffect(refraction: 20, frost: 1)
+    /// }
+    /// ```
     ///
-    /// All three are for frosting the whole popup. The views inside can say it
-    /// themselves instead: in a window whose backdrop is the desktop
-    /// (`WindowBackdrop.showsDesktop`), `.backdropBlur(radius:)` on any view
-    /// asks the compositor to frost that view's rectangle, cut to its corner
-    /// radius, and `.glassEffect(refraction:)` bends that plate alone — so two
-    /// siblings can be a flat frost and a bent one, with desktop between them.
-    /// A view that asks for glass without a blur gets only the rim: a plate is
-    /// a blur, and there is no sharp one.
+    /// On a view that fills the window those two are the window's plate of
+    /// the desktop, cut to the window's own corner radius — the same mask as
+    /// the popup, so the two are one outline. The blur is what makes a plate;
+    /// glass without it draws only the rim, because there is no sharp plate.
+    /// A windowed app frosts nothing: nothing there can see the desktop
+    /// behind the window.
+    ///
+    /// Views inside can frost rectangles of their own instead: in a window
+    /// whose backdrop is the desktop (`WindowBackdrop.showsDesktop`),
+    /// `.backdropBlur(radius:)` on a smaller view asks the compositor to frost
+    /// that view's rectangle, cut to its corner radius, and `.glassEffect`
+    /// bends that plate alone — so two siblings can be a flat frost and a bent
+    /// one, with desktop between them.
     @discardableResult
     public static func openPopup<V: View>(
         title: String,
         width: Float = 280,
         height: Float = 240,
         anchor: SurfaceAnchor,
-        backdropBlur: Float = 0,
-        refraction: Float = 0,
-        frost: Float = 0,
         onClose: (() -> Void)? = nil,
         makeRoot: @escaping () -> V
     ) -> WindowID? {
@@ -433,8 +431,7 @@ public enum LavaApp {
         }
         guard let id = openEngineWindow(
             editor: editor, title: title, width: width, height: height,
-            anchor: anchor, backdropBlur: backdropBlur, refraction: refraction,
-            frost: frost
+            anchor: anchor
         ) else { return nil }
         return adopt(
             editor: editor, id: id, title: title, onClose: onClose,
@@ -449,17 +446,13 @@ public enum LavaApp {
     /// Where that is — and which side of the row still fits on the work
     /// area — is decided when the plate has been measured, not here.
     ///
-    /// `backdropBlur` frosts the desktop behind the plate, as `openPopup`'s
-    /// does, and comes up with it: the compositor captures when it places
-    /// the plate, not before. 0 leaves it off. `refraction` and `frost` are
-    /// `openPopup`'s.
+    /// Frosted the way a popup is, by its root view (see `openPopup`); the
+    /// plate comes up with the fly-out, since the compositor captures when it
+    /// places it, not before.
     @discardableResult
     public static func openMenuPlate<V: View>(
         width: Float,
         height: Float,
-        backdropBlur: Float = 0,
-        refraction: Float = 0,
-        frost: Float = 0,
         onClose: (() -> Void)? = nil,
         makeRoot: @escaping () -> V
     ) -> WindowID? {
@@ -471,10 +464,7 @@ public enum LavaApp {
         }
         let id: WindowID?
         if let open = ClientSurfaceBridge.openMenuPlate {
-            id = open(
-                width, height, max(0, backdropBlur), max(0, refraction),
-                min(max(frost, 0), 1)
-            )
+            id = open(width, height)
         } else {
             id = editor.openWindow(width: width, height: height, title: "Menu")
         }
@@ -508,15 +498,11 @@ public enum LavaApp {
     /// compositor surface. Nil when neither could be opened.
     private static func openEngineWindow(
         editor: Editor, title: String, width: Float, height: Float,
-        anchor: SurfaceAnchor?, backdropBlur: Float, refraction: Float,
-        frost: Float = 0
+        anchor: SurfaceAnchor?
     ) -> WindowID? {
         let id: WindowID?
         if let open = ClientSurfaceBridge.open {
-            id = open(
-                width, height, title, anchor, max(0, backdropBlur),
-                max(0, refraction), min(max(frost, 0), 1)
-            )
+            id = open(width, height, title, anchor)
         } else {
             id = editor.openWindow(width: width, height: height, title: title)
         }

@@ -377,16 +377,28 @@ public enum BackdropBridge {
     nonisolated(unsafe) public static var frostOverlays:
         (@Sendable (_ radius: Float, _ rects: [FrostRect]) -> Void)?
 
-    /// The glass of the plate the window being drawn was opened on, once a
-    /// frame: a view covering the whole window asked for `.glassEffect`, and
-    /// its frost and bend are the plate's. nil goes back to what the window
-    /// was opened with.
+    /// The backdrop a view covering the whole window asks for: its
+    /// `.backdropBlur` radius (0 if it states none) and its `.glassEffect`.
+    public struct WindowPlate: Sendable, Equatable {
+        public var radius: Float
+        public var glass: GlassEffect?
+
+        public init(radius: Float, glass: GlassEffect?) {
+            self.radius = radius
+            self.glass = glass
+        }
+    }
+
+    /// The window being drawn's own plate, once a frame: what a view covering
+    /// the whole window asked for, or nil when none does. A popup's backdrop
+    /// is entirely this — `.backdropBlur(radius:)` and `.glassEffect` on its
+    /// root.
     ///
     /// Not a rectangle in `frostOverlays`: a region replaces the surface's
     /// plate, and the plate is the one thing the compositor cuts to the
-    /// window's own corner. A popup's glass belongs on the popup's plate.
-    nonisolated(unsafe) public static var surfaceGlass:
-        (@Sendable (_ glass: GlassEffect?) -> Void)?
+    /// window's own corner.
+    nonisolated(unsafe) public static var surfaceBackdrop:
+        (@Sendable (_ plate: WindowPlate?) -> Void)?
 }
 
 /// Styling for the floating surface an overlay draws on.

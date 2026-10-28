@@ -550,13 +550,13 @@ final class MenuSession {
             width: ShortcutsWindow.width,
             height: ShortcutsWindow.height(bindings.count),
             anchor: anchor,
-            backdropBlur: PanelChrome.popupBlurRadius,
-            refraction: PanelChrome.popupRefraction,
             onClose: {
                 if let id = opened, session.shortcutsWindow == id { session.shortcutsWindow = nil }
             }
         ) {
-            ShortcutsWindow(bindings: bindings).glassEffect(frost: 1)
+            ShortcutsWindow(bindings: bindings)
+                .backdropBlur(radius: PanelChrome.popupBlurRadius)
+                .glassEffect(magnification: PanelChrome.popupMagnification)
         }
         shortcutsWindow = opened
     }
@@ -761,8 +761,6 @@ final class MenuSession {
             width: width,
             height: LogoutWindow.height,
             anchor: anchor,
-            backdropBlur: PanelChrome.popupBlurRadius,
-            refraction: PanelChrome.popupRefraction,
             onClose: {
                 if let id = opened, session.logoutWindow == id {
                     session.logoutWindow = nil
@@ -771,6 +769,10 @@ final class MenuSession {
             }
         ) {
             LogoutWindow()
+                // The plate's bend, which the open call used to give it. The
+                // rim is the plate's (lit where it bends); this fill has none.
+                .backdropBlur(radius: PanelChrome.popupBlurRadius)
+                .glassEffect(magnification: PanelChrome.popupMagnification)
         }
         logoutWindow = opened
     }
@@ -799,15 +801,15 @@ final class MenuSession {
             width: width,
             height: 520,
             anchor: anchor,
-            backdropBlur: PanelChrome.popupBlurRadius,
-            refraction: PanelChrome.popupRefraction,
             onClose: {
                 if let id = opened, session.aboutWindow == id {
                     session.aboutWindow = nil
                 }
             }
         ) {
-            AboutWindow(image: image, font: font).glassEffect(frost: 1)
+            AboutWindow(image: image, font: font)
+                .backdropBlur(radius: PanelChrome.popupBlurRadius)
+                .glassEffect(magnification: PanelChrome.popupMagnification)
         }
         aboutWindow = opened
     }
@@ -842,15 +844,15 @@ final class MenuSession {
             width: SoundBlock.width,
             height: SoundBlock.height(of: SoundBlock.blocks(pulse)),
             anchor: anchor,
-            backdropBlur: PanelChrome.popupBlurRadius,
-            refraction: PanelChrome.popupRefraction,
             onClose: {
                 if let id = opened, session.volumeWindow == id {
                     session.volumeWindow = nil
                 }
             }
         ) {
-            VolumeWindow(pulse: pulse).glassEffect(frost: 1)
+            VolumeWindow(pulse: pulse)
+                .backdropBlur(radius: PanelChrome.popupBlurRadius)
+                .glassEffect(magnification: PanelChrome.popupMagnification)
         }
         volumeWindow = opened
     }
@@ -881,8 +883,6 @@ final class MenuSession {
             width: NetworkBlock.width,
             height: NetworkBlock.height(of: NetworkBlock.blocks(network)),
             anchor: anchor,
-            backdropBlur: PanelChrome.popupBlurRadius,
-            refraction: PanelChrome.popupRefraction,
             onClose: {
                 if let id = opened, session.networkWindow == id {
                     session.networkWindow = nil
@@ -891,7 +891,9 @@ final class MenuSession {
                 }
             }
         ) {
-            NetworkWindow(network: network).glassEffect(frost: 1)
+            NetworkWindow(network: network)
+                .backdropBlur(radius: PanelChrome.popupBlurRadius)
+                .glassEffect(magnification: PanelChrome.popupMagnification)
         }
         networkWindow = opened
     }
@@ -914,8 +916,6 @@ final class MenuSession {
             width: width,
             height: NetworkBlock.height(of: NetworkBlock.listBlocks(network)),
             anchor: .leftOf(parent, width: width),
-            backdropBlur: PanelChrome.popupBlurRadius,
-            refraction: PanelChrome.popupRefraction,
             onClose: {
                 if let id = opened, session.networkListWindow == id {
                     session.networkListWindow = nil
@@ -923,6 +923,10 @@ final class MenuSession {
             }
         ) {
             NetworkWindow(network: network, isList: true)
+                // The plate's bend, which the open call used to give it. The
+                // rim is the plate's (lit where it bends); this fill has none.
+                .backdropBlur(radius: PanelChrome.popupBlurRadius)
+                .glassEffect(magnification: PanelChrome.popupMagnification)
         }
         networkListWindow = opened
     }
@@ -999,8 +1003,6 @@ final class MenuSession {
             width: BluetoothBlock.width,
             height: BluetoothBlock.height(of: BluetoothBlock.blocks(bluetooth)),
             anchor: anchor,
-            backdropBlur: PanelChrome.popupBlurRadius,
-            refraction: PanelChrome.popupRefraction,
             onClose: {
                 if let id = opened, session.bluetoothWindow == id {
                     session.bluetoothWindow = nil
@@ -1008,7 +1010,9 @@ final class MenuSession {
                 }
             }
         ) {
-            BluetoothWindow(bluetooth: bluetooth).glassEffect(frost: 1)
+            BluetoothWindow(bluetooth: bluetooth)
+                .backdropBlur(radius: PanelChrome.popupBlurRadius)
+                .glassEffect(magnification: PanelChrome.popupMagnification)
         }
         bluetoothWindow = opened
     }
@@ -1029,8 +1033,6 @@ final class MenuSession {
             width: width,
             height: BluetoothBlock.searchHeight,
             anchor: .leftOf(parent, width: width),
-            backdropBlur: PanelChrome.popupBlurRadius,
-            refraction: PanelChrome.popupRefraction,
             onClose: {
                 if let id = opened, session.bluetoothSearchWindow == id {
                     session.bluetoothSearchWindow = nil
@@ -1038,7 +1040,9 @@ final class MenuSession {
                 }
             }
         ) {
-            BluetoothWindow(bluetooth: bluetooth, isSearch: true).glassEffect(frost: 1)
+            BluetoothWindow(bluetooth: bluetooth, isSearch: true)
+                .backdropBlur(radius: PanelChrome.popupBlurRadius)
+                .glassEffect(magnification: PanelChrome.popupMagnification)
         }
         bluetoothSearchWindow = opened
         if opened == nil { bluetooth.setSearching(false) }
@@ -1124,8 +1128,6 @@ final class MenuSession {
             width: CalendarWindow.width,
             height: CalendarWindow.height,
             anchor: anchor,
-            backdropBlur: PanelChrome.popupBlurRadius,
-            refraction: PanelChrome.popupRefraction,
             onClose: {
                 if let id = opened, session.calendarWindow == id {
                     session.calendarWindow = nil
@@ -1134,7 +1136,9 @@ final class MenuSession {
                 }
             }
         ) {
-            CalendarWindow(model: model).glassEffect(frost: 1)
+            CalendarWindow(model: model)
+                .backdropBlur(radius: PanelChrome.popupBlurRadius)
+                .glassEffect(magnification: PanelChrome.popupMagnification)
         }
         calendarWindow = opened
     }
@@ -1157,15 +1161,15 @@ final class MenuSession {
             width: width,
             height: YearWindow.height,
             anchor: .leftOf(parent, width: width),
-            backdropBlur: PanelChrome.popupBlurRadius,
-            refraction: PanelChrome.popupRefraction,
             onClose: {
                 if let id = opened, session.yearWindow == id {
                     session.yearWindow = nil
                 }
             }
         ) {
-            YearWindow(model: model).glassEffect(frost: 1)
+            YearWindow(model: model)
+                .backdropBlur(radius: PanelChrome.popupBlurRadius)
+                .glassEffect(magnification: PanelChrome.popupMagnification)
         }
         yearWindow = opened
     }
@@ -1196,15 +1200,15 @@ final class MenuSession {
             width: PlayerWindow.width,
             height: PlayerWindow.height,
             anchor: anchor,
-            backdropBlur: PanelChrome.popupBlurRadius,
-            refraction: PanelChrome.popupRefraction,
             onClose: {
                 if let id = opened, session.playerWindow == id {
                     session.playerWindow = nil
                 }
             }
         ) {
-            PlayerWindow(mpris: mpris).glassEffect(frost: 1)
+            PlayerWindow(mpris: mpris)
+                .backdropBlur(radius: PanelChrome.popupBlurRadius)
+                .glassEffect(magnification: PanelChrome.popupMagnification)
         }
         playerWindow = opened
     }
@@ -1381,9 +1385,10 @@ enum PanelChrome {
     /// Same radius a menu dropdown asks for. The plate's *corner* is not
     /// this — the compositor cuts it to the window's own corner radius.
     static let popupBlurRadius: Float = 12
-    /// How far the rim of that glass bends, in pixels — the context menu's,
-    /// so a dropdown and a right-click menu are the same slab.
-    static let popupRefraction: Float = 28
+
+    /// Magnification factor for the popup's glass effect, controlling how much
+    /// the background is scaled when the popup is displayed.
+    static let popupMagnification: Float = 1.35
 }
 
 struct PanelView: View {

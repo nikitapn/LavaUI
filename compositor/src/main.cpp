@@ -5062,8 +5062,14 @@ class SurfaceRegistry : public lava::CompositorHost {
     // nothing else says so. Capturing it would put the plate back up where
     // the last menu stood — and the restore below would switch the menu's
     // own node back on with it, since `frameShown` knows nothing of menus.
+    //
+    // An anchored popup still held for its first frame is off for a
+    // different reason, and has a place already (`CreatePopupSurface`
+    // positions it): its plate is captured now, before the reveal, so the
+    // popup comes up frosted. See `applyBackdrop`.
+    const bool heldPopup = surface.popup && surface.awaitingFirstFrame;
     if (surface.minimized || surface.fullscreen ||
-        (surface.menu && !visible(surface))) {
+        (surface.menu && !visible(surface) && !heldPopup)) {
       hidePlates(surface);
       return;
     }
@@ -6520,6 +6526,15 @@ class SurfaceRegistry : public lava::CompositorHost {
     wlr_log(WLR_INFO, "surface %u: backdrop blur %.0f over %zu rect(s)", id,
             next, surface->frostPlates.size());
     scheduleBackdropRefresh();
+    // A window still waiting for its first frame is captured now rather than
+    // on the next output frame. A popup's plate is its root view's, sent just
+    // before the frame that reveals it; captured a frame later, the popup
+    // would come up clear and frost under the user's eyes. Held, the window
+    // is not on screen, so the capture cannot contain it. A fly-out not yet
+    // placed, or the resident menu, is refused by `captureBackdrop` itself.
+    if (surface->awaitingFirstFrame && !surface->frostPlates.empty()) {
+      captureBackdrop(*surface);
+    }
   }
 
   void endSession() override {

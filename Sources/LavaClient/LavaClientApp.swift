@@ -1045,13 +1045,15 @@ public enum LavaClient {
         syncBackdrop(id, blocking: false)
     }
 
-    /// The calling window's plate takes the glass of a view covering the
-    /// whole window, or goes back to what it was opened with when there is
-    /// none. Sent only when it changes: this is asked every frame.
-    static func setSurfaceGlass(_ glass: GlassEffect?) {
+    /// The calling window's own plate, as a view covering the whole window
+    /// states it — a popup's root `.backdropBlur` and `.glassEffect` — or nil
+    /// when no view does. Sent only when it changes: this is asked every
+    /// frame.
+    static func setSurfaceBackdrop(_ plate: BackdropBridge.WindowPlate?) {
         let id = callingSurface()
-        updateBackdrop(id) {
-            $0.viewGlass = glass.map {
+        updateBackdrop(id) { backdrop in
+            backdrop.viewRadius = plate?.radius ?? 0
+            backdrop.viewGlass = plate?.glass.map {
                 PlateGlass(
                     refraction: $0.refraction, frost: $0.frost,
                     magnification: $0.magnification
@@ -1083,14 +1085,17 @@ public enum LavaClient {
     /// surface's, the stronger of two grains) were split between this file
     /// and the compositor. They are all in `plates(of:)` now.
     struct SurfaceBackdrop {
-        /// Whole-surface frost: what a popup was opened with, or for the main
-        /// window `setBackdropBlur` / `WindowBackdrop`.
+        /// The main window's whole-surface frost: `setBackdropBlur` or
+        /// `WindowBackdrop`. Zero for every other window, whose backdrop is
+        /// its root view's.
         var radius: Float = 0
-        /// The plate's glass as opened, or `setBackdropRefraction` /
-        /// `setBackdropFrost` for the main window.
+        /// The main window's plate glass: `setBackdropRefraction` /
+        /// `setBackdropFrost`.
         var glass = PlateGlass()
-        /// A view covering the whole window asked for glass this frame. Takes
-        /// precedence over `glass` while it does.
+        /// The blur a view covering the whole window asked for this frame; 0
+        /// when none. Takes precedence over `radius` while it does.
+        var viewRadius: Float = 0
+        /// The same view's glass. Takes precedence over `glass`.
         var viewGlass: PlateGlass?
         /// Rectangles a frame asked to frost — popup dropdowns. While there
         /// are any they replace the whole-surface plate.
@@ -1130,8 +1135,9 @@ public enum LavaClient {
                 )
             }
         }
-        guard backdrop.radius > 0 else { return [] }
-        return [Plate(radius: backdrop.radius, glass: glass)]
+        let radius = backdrop.viewRadius > 0 ? backdrop.viewRadius : backdrop.radius
+        guard radius > 0 else { return [] }
+        return [Plate(radius: radius, glass: glass)]
     }
 
     private static func updateBackdrop(
@@ -1160,6 +1166,11 @@ public enum LavaClient {
         let plates = plates(of: backdrop(of: id))
         // A surface nothing was ever sent for has no backdrop to clear.
         guard plates != (lastBackdrop[id] ?? []) else { return }
+        // A surface's first plate goes out before the frame that asked for it
+        // is presented: that frame is what reveals a new window, and a popup
+        // whose plate arrived after it would come up clear and frost a frame
+        // later. The compositor captures a held window's plate on arrival.
+        let first = lastBackdrop[id] == nil
         lastBackdrop[id] = plates
         let send: @Sendable () -> Void = {
             do {
@@ -1176,7 +1187,12 @@ public enum LavaClient {
                 )
             }
         }
-        if blocking { send() } else { backdropQueue.async(execute: send) }
+        if blocking || first {
+            // Behind anything already queued, which is older.
+            backdropQueue.sync(execute: send)
+        } else {
+            backdropQueue.async(execute: send)
+        }
     }
 
     private static func wire(_ plate: Plate) -> LavaIDL.BackdropPlate {
@@ -1561,8 +1577,8 @@ public enum LavaClient {
         // every frame without a popup then kept it cleared. An idle frame
         // asks for the backdrop the surface already has, which
         // `syncBackdrop` sends nothing for.
-        BackdropBridge.surfaceGlass = { glass in
-            LavaClient.setSurfaceGlass(glass)
+        BackdropBridge.surfaceBackdrop = { plate in
+            LavaClient.setSurfaceBackdrop(plate)
         }
 
         BackdropBridge.frostOverlays = { radius, rects in
@@ -1752,20 +1768,16 @@ public enum LavaClient {
         // Before the loop, so a window opened from the first frame has a
         // surface to draw into. Nil again is unnecessary: `run` does not
         // return until the process is leaving.
-        LavaApp.ClientSurfaceBridge.open = {
-            width, height, title, anchor, blur, refraction, frost in
+        LavaApp.ClientSurfaceBridge.open = { width, height, title, anchor in
             Self.openExtraSurface(
                 editor: editor, width: width, height: height, title: title,
-                anchor: anchor, backdropBlur: blur, refraction: refraction,
-                frost: frost
+                anchor: anchor
             )
         }
-        LavaApp.ClientSurfaceBridge.openMenuPlate = {
-            width, height, blur, refraction, frost in
+        LavaApp.ClientSurfaceBridge.openMenuPlate = { width, height in
             Self.openExtraSurface(
                 editor: editor, width: width, height: height, title: "Menu",
-                anchor: nil, backdropBlur: blur, refraction: refraction,
-                frost: frost, submenu: true
+                anchor: nil, submenu: true
             )
         }
         LavaApp.ClientSurfaceBridge.close = { window in
@@ -1891,8 +1903,7 @@ public enum LavaClient {
     /// not, or closing a mirror would quit the app.
     private static func openExtraSurface(
         editor: Editor, width: Float, height: Float, title: String,
-        anchor: LavaApp.SurfaceAnchor?, backdropBlur: Float,
-        refraction: Float = 0, frost: Float = 0, submenu: Bool = false
+        anchor: LavaApp.SurfaceAnchor?, submenu: Bool = false
     ) -> WindowID? {
         guard let compositor = Self.compositor else { return nil }
         guard let window = editor.openWindow(
@@ -1968,21 +1979,11 @@ public enum LavaClient {
             return nil
         }
         extra.surface = surface
-        // Whenever the caller asked — a popup or a menu fly-out. The wash on
-        // top has to be translucent or the plate is painted and then covered.
-        // The corner is not a parameter: the compositor cuts the plate to
-        // the same radius as the window mask, or the two disagree. A hidden
-        // fly-out is not captured until `ShowSubmenu` places it.
-        //
-        // Blocking, so the first plate is in place — bent and grained — before
-        // the input stream opens and the window can be shown.
-        backdrops[surface] = SurfaceBackdrop(
-            radius: max(0, backdropBlur),
-            glass: PlateGlass(
-                refraction: max(0, refraction), frost: min(max(frost, 0), 1)
-            )
-        )
-        syncBackdrop(surface, blocking: true)
+        // No backdrop yet: a popup's is its root view's, sent with its first
+        // frame (`setSurfaceBackdrop`). The corner is not the client's to
+        // say: the compositor cuts the plate to the same radius as the window
+        // mask, or the two disagree. A hidden fly-out is not captured until
+        // `ShowSubmenu` places it.
 
         let input: InputChannel
         do {

@@ -710,10 +710,11 @@ extension View {
     /// .showsDesktop`), with `.backdropBlur` as well, the bend and the frost
     /// apply to the compositor's plate of the desktop under the view too.
     ///
-    /// On a view that fills a window opened on a plate of its own — a popup
-    /// from `LavaApp.openPopup(backdropBlur:)` — the bend and the frost are
-    /// that plate's, in place of the ones the window was opened with, and
-    /// no blur needs stating: the plate is one.
+    /// On a view that fills its window — a popup's root — the blur and the
+    /// glass are the window's own plate of the desktop, cut to the window's
+    /// corner: `.backdropBlur(radius:).glassEffect(…)` on the root is the
+    /// whole of a frosted popup. The plate needs the blur; glass alone has no
+    /// plate to bend and draws only the rim.
     public func glassEffect(
         refraction: Float = 20, rim: Float = 1, frost: Float = 0,
         magnification: Float = 1

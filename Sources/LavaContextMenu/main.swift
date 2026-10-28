@@ -68,7 +68,10 @@ enum ContextMenu {
     static let refraction: Float = 28
     /// The grain of frosted glass on that frost, 0…1 — what makes the plate
     /// read as an etched pane rather than as a blur.
-    static let frost: Float = 1
+    static let frost: Float = 0
+    /// Magnification factor for the menu's glass effect, controlling how much
+    /// the background is scaled when the popup is displayed.
+    static let magnification: Float = 1.35
 }
 
 /// One fly-out this menu has open. `depth` 0 hangs off the root plate.
@@ -162,9 +165,6 @@ final class MenuModel {
         guard let window = LavaApp.openMenuPlate(
             width: ContextMenu.arenaWidth,
             height: ContextMenu.measureHeight,
-            backdropBlur: ContextMenu.backdropBlur,
-            refraction: ContextMenu.refraction,
-            frost: ContextMenu.frost,
             makeRoot: {
                 BranchMenuView(
                     plate: plate,
@@ -393,9 +393,17 @@ struct BranchMenuView: View {
     var onItemHover: () -> Void
 
     var body: some View {
+        // The fly-out's plate, as the root menu's is set with `LavaClient`:
+        // the same blur, bend and grain, so the two read as one glass. Rim 0
+        // on the view, because the plate lights its own where it bends.
         MenuPlate(
             title: "", rows: plate.rows, cap: plate.cap,
             onActivate: onActivate, onBranch: onBranch, onItemHover: onItemHover
+        )
+        .backdropBlur(radius: ContextMenu.backdropBlur)
+        .glassEffect(
+            refraction: ContextMenu.refraction, rim: 1, frost: ContextMenu.frost,
+            magnification: ContextMenu.magnification
         )
     }
 }
