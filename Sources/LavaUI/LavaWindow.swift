@@ -231,6 +231,10 @@ public final class LavaWindow {
             // spring-loaded target sends nothing, and resting is the gesture.
             DropRouter.tickSpring()
 
+            // After input, so a key handler that moved focus with
+            // `.focused($flag)` has it moved before anything is drawn.
+            FocusBindings.sync(in: scope)
+
             // After input and after menu activations, so a scale change from
             // any of them re-measures before this frame lays out.
             syncTextMetrics()
@@ -252,7 +256,9 @@ public final class LavaWindow {
             // `NodeVisibility` to know it is pointless: nobody can see a
             // minimized window's caret, so it must not schedule wakes or dirty
             // frames there.
-            if scope.windowVisible, FocusManager.focusedID != nil {
+            // Text only: a focused list has no caret, and waking four times a
+            // second for it would keep an idle window busy for nothing.
+            if scope.windowVisible, FocusManager.isEditingText {
                 if CaretBlink.phaseChanged() { ViewInvalidation.markNeedsRedraw() }
                 FrameScheduler.requestWake(in: CaretBlink.period / 4)
             }
@@ -562,6 +568,14 @@ public final class LavaWindow {
                     ? host.dragGestureSource(x: ev.x, y: ev.y, originY: menuH) : nil,
                 x: ev.x, y: ev.y
             )
+            // Focus first: a list pressed on has the keyboard by the time its
+            // row's click runs, and a text field inside it still takes focus
+            // in its own click, which comes after.
+            if ev.button == 0,
+               let target = host.focusTarget(x: ev.x, y: ev.y, originY: menuH)
+            {
+                FocusableRouter.focus(target)
+            }
             // Everything that asked to hear about a press in here, before the
             // press itself runs: a pane that becomes active has to be active
             // by the time the row it was clicked on asks which pane it is in.
@@ -872,6 +886,9 @@ enum NodeRegistries {
         FileDragRouter.unregisterAll(ids: ids)
         DragGestureRouter.unregisterAll(ids: ids)
         PressObserverRouter.unregisterAll(ids: ids)
+        FocusableRouter.unregisterAll(ids: ids)
+        FocusTargets.unregisterAll(ids: ids)
+        FocusBindings.unregisterAll(ids: ids)
         HoverState.unregisterAll(ids: ids)
         PointerCapture.discard(ids: ids)
     }

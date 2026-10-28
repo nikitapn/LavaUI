@@ -38,16 +38,18 @@ public struct TextField: PrimitiveView {
     /// before typing, which is asking them to aim at something before saying
     /// what they want.
     ///
-    /// Only on mount, and only when nothing else in the window is focused: a
-    /// field that re-took focus on every reconcile would steal the caret back
-    /// from wherever the user had since put it.
+    /// Only on mount, and only when no other text is being typed in: a field
+    /// that re-took focus on every reconcile would steal the caret back from
+    /// wherever the user had since put it.
     public var autoFocus: Bool = false
-    /// With `autoFocus`: what is selected on arrival, so typing replaces a
-    /// suggested value rather than appending to it — all of a new folder's
-    /// offered name, or a file's name up to its extension when renaming.
+    /// What is selected when focus arrives without a click — `autoFocus`, or
+    /// a `.focused` flag set from code — so typing replaces a suggested value
+    /// rather than appending to it: all of a new folder's offered name, a
+    /// file's name up to its extension when renaming, all of an address
+    /// after Ctrl+L. A click places the caret where it lands instead.
     public var selectionOnFocus: FocusSelection = .none
 
-    /// What `autoFocus` selects when the field takes focus.
+    /// What a field selects when it takes focus without a click.
     public enum FocusSelection: Equatable, Sendable {
         /// Nothing is selected.
         case none
@@ -74,7 +76,7 @@ public struct TextField: PrimitiveView {
     /// - maxLines: Most lines a multiline field grows to before it scrolls.
     /// - wraps: Whether a multiline field breaks long lines at its width.
     /// - autoFocus: Whether the field takes focus when it mounts.
-    /// - selectionOnFocus: What `autoFocus` selects.
+    /// - selectionOnFocus: What focus without a click selects.
     /// - focusRing: The focus chrome; `nil` uses the theme's.
     /// - focusRingWidth: Width of the focus ring; `nil` uses the theme's.
     /// - focusRingColor: Colour of the focus ring; `nil` uses the theme's.
@@ -128,23 +130,30 @@ public struct TextField: PrimitiveView {
             leaf.editing = TextEditingState(text)
         }
         leaf.installTextMeasure()
-        if autoFocus, FocusManager.focusedID == nil {
+        // Not over another field being typed in, but over a focused list
+        // yes: a rename prompt that opens from the file list is where the
+        // keys should go next.
+        if autoFocus, !FocusManager.isEditingText {
             leaf.focusSelf(binding: _text, onSubmit: onSubmit)
-            switch selectionOnFocus {
-            case .none:
-                break
-            case .all:
-                leaf.editing.selectAll()
-            case .leading(let count):
-                let text = leaf.editing.text
-                let end = text.index(
-                    text.startIndex, offsetBy: min(max(0, count), text.count)
-                )
-                leaf.editing.setCursor(text.startIndex)
-                leaf.editing.setCursor(end, extending: true)
-            }
+            Self.select(selectionOnFocus, in: leaf)
         }
         return leaf
+    }
+
+    private static func select(_ selection: FocusSelection, in leaf: LeafNode) {
+        switch selection {
+        case .none:
+            break
+        case .all:
+            leaf.editing.selectAll()
+        case .leading(let count):
+            let text = leaf.editing.text
+            let end = text.index(
+                text.startIndex, offsetBy: min(max(0, count), text.count)
+            )
+            leaf.editing.setCursor(text.startIndex)
+            leaf.editing.setCursor(end, extending: true)
+        }
     }
 
     public func reconcilePrimitive(_ node: any AnyViewNode) -> any AnyViewNode {
@@ -199,6 +208,15 @@ public struct TextField: PrimitiveView {
 
         let binding = _text
         let submit = onSubmit
+        // What `.focused($flag)` calls: the focus a click gives, with the
+        // selection `autoFocus` would make rather than a caret at a pointer.
+        let selection = selectionOnFocus
+        FocusTargets.register(leaf.id) { [weak leaf] in
+            guard let leaf else { return }
+            leaf.focusSelf(binding: binding, onSubmit: submit)
+            Self.select(selection, in: leaf)
+            ViewInvalidation.markNeedsRedraw()
+        }
 
         // Press: focus, place the caret, and start a drag session.
         leaf.onClickLocal = { [weak leaf] localX, localY, originX, originY, _, _ in

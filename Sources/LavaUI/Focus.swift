@@ -28,10 +28,12 @@ public enum FocusManager {
         onChar: @escaping (Character) -> Bool
     ) {
         let scope = WindowScope.currentOrMain
-        if scope.focused != id { ViewInvalidation.markDirty() }
+        let moved = scope.focused != id
+        if moved { ViewInvalidation.markDirty() }
         scope.focused = id
         scope.keyHandler = onKey
         scope.charHandler = onChar
+        if moved { FocusBindings.focusChanged(in: scope) }
     }
 
     /// Clears focus if `id` holds it; does nothing otherwise.
@@ -43,10 +45,22 @@ public enum FocusManager {
     /// Clears focus in the current window, so keys go to the default handler, if any.
     public static func clear() {
         let scope = WindowScope.currentOrMain
-        if scope.focused != nil { ViewInvalidation.markDirty() }
+        let moved = scope.focused != nil
+        if moved { ViewInvalidation.markDirty() }
         scope.focused = nil
         scope.keyHandler = nil
         scope.charHandler = nil
+        if moved { FocusBindings.focusChanged(in: scope) }
+    }
+
+    /// Whether what holds focus is something typed into — a field or an
+    /// editor — rather than a `.focusable` container such as a list. What a
+    /// caret blinks for, and what an app's shortcuts should step aside for:
+    /// a focused list wants Backspace to mean "up a folder", a focused field
+    /// wants it to delete a character.
+    public static var isEditingText: Bool {
+        guard let id = WindowScope.currentOrMain.focused else { return false }
+        return !FocusableRouter.has(id)
     }
 
     /// Gives focus back if the node holding it is no longer in the tree.
