@@ -2159,19 +2159,9 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       // Punch the source to the outline *before* the blur. A square
       // capture blurred at a rounded corner pulls the corner's bright
       // wallpaper into the curve as a one-pixel spark.
-      //
-      // One pixel outside the outline, concentric with it. Punched exactly
-      // on it, the mask's antialiased edge left the outermost row of the
-      // source part-transparent on every side, and the blur carried that
-      // inwards: a frosted plate faded out over its last seven pixels, the
-      // sharp desktop showing through the fade — darkest in the corners,
-      // where two edges add up, and read there as a gap in the glass. The
-      // composite still cuts the exact outline after the blur.
       if (open.param > 0) {
-        constexpr float kGrow = 1.f;
-        quads_.pushCornerMask({open.x - kGrow, open.y - kGrow},
-                              {open.w + 2 * kGrow, open.h + 2 * kGrow},
-                              static_cast<float>(open.param) + kGrow);
+        quads_.pushCornerMask({open.x, open.y}, {open.w, open.h},
+                              static_cast<float>(open.param));
       }
       quads_.closeSegment();
       const float radius = open.aux > 0.f ? open.aux : 8.f;
