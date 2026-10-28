@@ -36,6 +36,10 @@ struct SettingsWindow: View {
 /// cluster there reads as belonging to the window instead of to the page.
 struct SettingsSidebar: View {
     let store: SettingsStore
+    /// Starts true: the sidebar has the keyboard from the first frame, so
+    /// the arrows move between pages without a click first. A click into a
+    /// page's field takes it, and sets this back.
+    @State private var focused = true
 
     var body: some View {
         VStack(width: .pt(212), spacing: 0) {
@@ -54,13 +58,23 @@ struct SettingsSidebar: View {
             // Scrolls, because six pages with two-line subtitles are taller
             // than the window can be made, and the compositor reopens it at
             // whatever size it was last left — so no opening size settles it.
-            ScrollView(indicatorInset: 6) {
-                VStack(padding: 10, spacing: 3) {
-                    ForEach(SettingsSection.allCases, id: \.self) { section in
-                        SidebarRow(section: section, store: store)
-                    }
+            List(
+                SettingsSection.allCases, id: \.self,
+                selection: Binding(
+                    get: { store.section },
+                    set: { show($0, store: store) }
+                ),
+                spacing: 3, padding: 10,
+                rowInsets: EdgeInsets(top: 11, leading: 13, bottom: 11, trailing: 13)
+            ) { section, selected in
+                VStack(spacing: 4) {
+                    Text(section.title,
+                         color: selected ? Theme.current.textPrimary
+                                         : Theme.current.textSecondary)
+                    Text(section.subtitle, color: Theme.current.textDim)
                 }
             }
+            .focused($focused)
             .flexGrow(1)
         }
         .background(Theme.current.panel)
@@ -90,36 +104,6 @@ func show(_ section: SettingsSection, store: SettingsStore) {
     // drawing.
     if section == .keyboard { store.ensureLayouts() }
     if section == .background { store.ensurePictures() }
-}
-
-private struct SidebarRow: View {
-    let section: SettingsSection
-    let store: SettingsStore
-
-    var body: some View {
-        let selected = store.section == section
-        return VStack(
-            padding: 0,
-            spacing: 4,
-            onClick: { show(section, store: store) }
-        ) {
-            Text(section.title,
-                 color: selected ? Theme.current.textPrimary
-                                 : Theme.current.textSecondary)
-            Text(section.subtitle, color: Theme.current.textDim)
-        }
-        .padding(EdgeInsets(top: 11, leading: 13, bottom: 11, trailing: 13))
-        .background(
-            // `selectionFill`, not `selected`: the latter is the bright
-            // highlight a menu draws behind *dark* text, and light text on it
-            // is unreadable — which is what it looked like.
-            selected ? Theme.current.selectionFill : .clear
-        )
-        // The renderer's: no body pass, no round trip. A hover colour equal
-        // to the fill is no tint at all, which keeps the selection as it is.
-        .hoverBackground(selected ? Theme.current.selectionFill : Theme.current.hover)
-        .cornerRadius(8)
-    }
 }
 
 /// The pages, all of them, with one showing.
