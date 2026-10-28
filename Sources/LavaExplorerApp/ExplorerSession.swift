@@ -498,6 +498,26 @@ final class ExplorerSession: @unchecked Sendable {
         ViewInvalidation.markDirty()
     }
 
+    /// The pane whose address bar has the keyboard, or nil when none does.
+    /// Mirrored both ways by the field's `.focused`: a click into the field
+    /// sets it, a click into the files clears it, and setting it is how
+    /// Ctrl+L and Escape move the keyboard.
+    var editingPathPane: Int?
+
+    /// `editingPathPane` as one pane's field sees it.
+    func pathFocus(in paneID: Int) -> Binding<Bool> {
+        Binding(
+            get: { [unowned self] in editingPathPane == paneID },
+            set: { [unowned self] editing in
+                if editing {
+                    editingPathPane = paneID
+                } else if editingPathPane == paneID {
+                    editingPathPane = nil
+                }
+            }
+        )
+    }
+
     /// One pane's address bar, which is not necessarily the active one's: a
     /// field shows what its own pane is on.
     func pathDraft(in paneID: Int) -> String {

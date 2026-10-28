@@ -120,6 +120,13 @@ private struct PaneView: View {
         // Before anything in the pane handles the press, so the row, button
         // or field it lands on already acts on this pane.
         .onAnyPress { _ in session.activatePane(paneID) }
+        // A press anywhere in the pane takes the keyboard from the address
+        // bar — the files, a toolbar button, a tab — so its caret stops and
+        // the arrows are the list's again. Pressing the field itself still
+        // gives it the keyboard: its own click runs after this. The keys are
+        // still `keys` in the app, which runs first; this only says where
+        // focus is.
+        .focusable(onKey: { _ in false })
         .onFrame { frame in session.notePaneFrame(paneID, frame) }
         .overlayLayer { PaneDropPreview(session: session, paneID: paneID) }
     }
@@ -796,10 +803,18 @@ private struct Toolbar: View {
             TextField(
                 text: draft,
                 placeholder: "Path",
+                // Ctrl+L: the whole address, so typing replaces it.
+                selectionOnFocus: .all,
                 // The field was pressed to be typed in, which made this pane
                 // the active one — so the session's own draft is this one.
-                onSubmit: { session.go(session.pathDraft) }
+                // The keyboard goes back to the files, as a browser's does
+                // to the page: the address has been used.
+                onSubmit: {
+                    session.editingPathPane = nil
+                    session.go(session.pathDraft)
+                }
             )
+            .focused(session.pathFocus(in: paneID))
             .padding(6)
             .background(Theme.current.background)
             .cornerRadius(4)

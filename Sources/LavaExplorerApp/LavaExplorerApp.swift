@@ -193,7 +193,9 @@ struct LavaExplorerApp {
         let control = (mods & KeyMods.control) != 0
         let alt = (mods & KeyMods.alt) != 0
         let shift = (mods & KeyMods.shift) != 0
-        let typing = FocusManager.focusedID != nil
+        // A field being typed in, not the file list holding focus: the list
+        // is focusable too, and these keys are its.
+        let typing = FocusManager.isEditingText
 
         // Before the field gets it: Escape in the new folder's name is
         // "never mind", not "stop typing".
@@ -240,6 +242,13 @@ struct LavaExplorerApp {
            session.selectedEntries.count <= 1
         {
             session.cancelChoosing()
+            return true
+        }
+        // Escape in the address bar: the half-typed path is thrown away and
+        // the keyboard goes back to the files.
+        if event.button == KeyCode.escape, typing, session.editingPathPane != nil {
+            session.pathDraft = session.listing.path
+            session.editingPathPane = nil
             return true
         }
         if typing && !control && !alt { return false }
@@ -301,10 +310,10 @@ struct LavaExplorerApp {
         case KeyCode.escape where !typing && session.selectedEntries.count > 1:
             session.clearSelection()
         case KeyCode.l where control:
-            // The field is already there; focusing it is a click. Ctrl+L
-            // still reloads the draft from the current path so a half-typed
-            // address can be thrown away.
+            // Into the active pane's address bar, with the draft reloaded
+            // from the current path so a half-typed address is thrown away.
             session.pathDraft = session.listing.path
+            session.editingPathPane = session.layout.activePaneID
             ViewInvalidation.markDirty()
         default:
             return false
