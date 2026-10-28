@@ -49,6 +49,28 @@ public enum LavaClient {
         case output
     }
 
+    /// What kind of window `open(options:)` asks for, beyond its size and
+    /// its frame. Told to the compositor at creation (`CreateWindow`), which
+    /// is the only moment two of them mean anything — see `WindowTraits` in
+    /// the IDL.
+    public struct WindowOptions: OptionSet, Sendable {
+        public let rawValue: UInt8
+        public init(rawValue: UInt8) { self.rawValue = rawValue }
+
+        /// One window per app id. A second launch brings the first window
+        /// here and activates it, and the second process exits with status
+        /// 0 from `run` before it draws anything.
+        public static let singleInstance = WindowOptions(rawValue: 1 << 0)
+        /// Pinned above the rest of the workspace, as the window menu's
+        /// "Always on Top" does; the user can still un-pin it there.
+        public static let alwaysOnTop = WindowOptions(rawValue: 1 << 1)
+        /// The app places and sizes the window and the user does not: no
+        /// drag, no resize, no maximize or fullscreen from the compositor's
+        /// gestures, keys or menus, and no remembered frame. `fillScreen`
+        /// still works — it is the app stating its own frame.
+        public static let fixedFrame = WindowOptions(rawValue: 1 << 2)
+    }
+
     /// - Parameters:
     ///   - title: names the window the compositor opens, and the arena.
     ///   - width/height: a *request*. The window manager has the last word,
@@ -72,15 +94,20 @@ public enum LavaClient {
     ///     window is a quarter of that. `.maximized` is then fitted by the
     ///     compositor to what the shell leaves free; `.output` is made
     ///     fullscreen before the window is ever shown — see `ScreenFill`.
+    ///   - options: single instance, always on top, fixed frame — see
+    ///     `WindowOptions`. Empty is an ordinary window, created the way it
+    ///     always was, so it works against a compositor that predates them.
     public static func open(
         title: String,
         width: Float = 1280,
         height: Float = 800,
         frame: WindowFrame = .server,
         fillScreen: ScreenFill? = nil,
-        dialogParent: UInt32? = nil
+        dialogParent: UInt32? = nil,
+        options: WindowOptions = []
     ) -> Editor? {
         Self.title = title
+        Self.options = options
         Self.requestedWidth = width
         Self.requestedHeight = height
         Self.frame = frame
@@ -1376,6 +1403,19 @@ public enum LavaClient {
                         appId: Self.appId
                     )
                 }
+                if !Self.options.isEmpty {
+                    return try await compositor.createWindow(
+                        arenaId: arenaID,
+                        width: UInt32(requestedWidth), height: UInt32(requestedHeight),
+                        title: title, frame: Self.frame, appId: Self.appId,
+                        parentId: Self.dialogParent ?? 0,
+                        traits: LavaIDL.WindowTraits(
+                            singleInstance: Self.options.contains(.singleInstance),
+                            alwaysOnTop: Self.options.contains(.alwaysOnTop),
+                            fixedFrame: Self.options.contains(.fixedFrame)
+                        )
+                    )
+                }
                 if let parent = Self.dialogParent {
                     return try await compositor.createDialogSurface(
                         arenaId: arenaID,
@@ -1445,6 +1485,14 @@ public enum LavaClient {
                 pendingLockHandler = nil
                 startLockStream(pending)
             }
+        } catch let running as AlreadyRunning {
+            // `.singleInstance`, and this app already has a window: the
+            // compositor has brought that one forward, which is all a second
+            // launch was asking for.
+            FileHandle.standardError.write(Data(
+                "\(Self.appId): already running as surface \(running.surfaceId)\n".utf8
+            ))
+            exit(0)
         } catch {
             fail("surface setup failed: \(error)")
         }
@@ -2100,6 +2148,8 @@ public enum LavaClient {
     nonisolated(unsafe) private static var startsFullscreen = false
     /// `fillScreen: .maximized`. Applied at the same moment.
     nonisolated(unsafe) private static var startsMaximized = false
+    /// `open(options:)`. Read once, at `CreateWindow`.
+    nonisolated(unsafe) private static var options: WindowOptions = []
     /// What this application calls itself, for a dock looking for its icon.
     /// The executable's name unless the app says otherwise, which is the
     /// closest thing a process has to an identity without being told one.

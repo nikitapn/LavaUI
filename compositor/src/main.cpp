@@ -1985,6 +1985,11 @@ struct ClientSurface {
   /// Frame id of the parent window, if we know one. Used to centre a
   /// dialog on whatever opened it.
   uint32_t parentId = 0;
+  /// `WindowTraits.fixedFrame`: the app places this window and the user
+  /// does not. Every gesture that moves, resizes, maximizes or fullscreens
+  /// a window refuses it, and it takes and leaves no remembered frame —
+  /// the client's own `SetMaximized` / `SetFullscreen` still apply.
+  bool fixedFrame = false;
 
   /// When this window asked for its application's remembered frame and was
   /// refused because another window still held it. Default-constructed when
@@ -2894,6 +2899,12 @@ class SurfaceRegistry : public lava::CompositorHost {
     return activateWindow(surface->id);
   }
 
+  uint32_t bringInstanceHere(const std::string &appId) override {
+    ClientSurface *surface = findByAppId(appId);
+    if (surface == nullptr || surface->furniture()) return 0;
+    return bringAppHere(appId) ? surface->id : 0;
+  }
+
   ClientSurface *findByAppId(const std::string &appId) {
     if (appId.empty()) return nullptr;
     for (auto &s : surfaces_) {
@@ -3594,7 +3605,8 @@ class SurfaceRegistry : public lava::CompositorHost {
   uint32_t createSurface(const std::string &arenaId, uint32_t width,
                          uint32_t height, const std::string &title,
                          bool decorated, const std::string &appId,
-                         bool dialog, uint32_t parentId) override {
+                         bool dialog, uint32_t parentId, bool alwaysOnTop,
+                         bool fixedFrame) override {
     if (workspaces_ == nullptr) return 0;
     // On whichever workspace is current, because that is where the user was
     // when they asked for it.
@@ -3609,7 +3621,13 @@ class SurfaceRegistry : public lava::CompositorHost {
       // "always on top" would make the setting a suggestion.
       if (isTransientApp(appId)) {
         opened->rank = ClientSurface::StackRank::Overlay;
+      } else if (alwaysOnTop) {
+        // Pinned, the rank the user's own "Always on Top" gives — so the
+        // menu's checkmark tells the truth and the user can take it back.
+        // Stacked by the focus below, which raises and re-ranks.
+        opened->rank = ClientSurface::StackRank::Pinned;
       }
+      opened->fixedFrame = fixedFrame;
       // A new overlay must not reuse posters from the last Alt+Tab.
       if (appId == kSwitcherAppId) invalidatePosters();
       // Before placement, which is what reads it: a dialog neither takes its
@@ -6253,7 +6271,8 @@ class SurfaceRegistry : public lava::CompositorHost {
   bool centerWindow(uint32_t id) override {
     ClientSurface *surface = find(id);
     if (surface == nullptr) return false;
-    if (surface->furniture() || surface->maximized || surface->fullscreen) {
+    if (surface->furniture() || surface->fixedFrame || surface->maximized ||
+        surface->fullscreen) {
       return true;
     }
     const WorkArea area =
@@ -8340,9 +8359,11 @@ bool SurfaceRegistry::hintToplevelConfigure(const std::string &appId,
 void SurfaceRegistry::rememberPlacement(const ClientSurface &surface) {
   // A menu is furniture like a panel: it is placed at the pointer every time
   // and never opens where it last was, so remembering a frame for it would
-  // only be a line in the file nothing reads.
+  // only be a line in the file nothing reads. A fixed window's frame is the
+  // app's, not something the user left it at.
   if (surface.furniture() || surface.appId.empty() ||
-      isTransientApp(surface.appId) || surface.transient) {
+      isTransientApp(surface.appId) || surface.transient ||
+      surface.fixedFrame) {
     return;
   }
   // Only the owner writes. Otherwise the copy-progress window — which was
@@ -8384,7 +8405,7 @@ bool SurfaceRegistry::placementHeld(const std::string &appId,
 }
 
 void SurfaceRegistry::claimPlacement(ClientSurface &surface) {
-  if (surface.furniture() || surface.transient) return;
+  if (surface.furniture() || surface.transient || surface.fixedFrame) return;
   if (surface.appId.empty() || isTransientApp(surface.appId)) return;
   if (placementHeld(surface.appId, surface.id)) return;
   takePlacement(surface);
@@ -10858,7 +10879,7 @@ bool perform_binding(Server *server, const BindingSpec &spec,
 
   case BindingAction::Fullscreen: {
     ClientSurface *focused = focusedWindow(server);
-    if (focused == nullptr) return false;
+    if (focused == nullptr || focused->fixedFrame) return false;
     server->surfaces->setFullscreen(*focused, !focused->fullscreen);
     return true;
   }
@@ -12022,11 +12043,13 @@ bool Server::openContextMenu(int x, int y, uint32_t target) {
     // of the window.
     items.push_back(
         menuCommand(MenuAction::Minimize, "Minimize", !surface->fullscreen));
+    // Disabled for a fixed window the same way: its frame is the app's.
     items.push_back(menuCommand(MenuAction::MaximizeRestore,
                                 surface->maximized ? "Restore" : "Maximize",
-                                !surface->fullscreen));
+                                !surface->fullscreen && !surface->fixedFrame));
     items.push_back(menuCheckbox(MenuAction::Fullscreen, "Fullscreen",
-                                 surface->fullscreen, true, mod + "+F"));
+                                 surface->fullscreen, !surface->fixedFrame,
+                                 mod + "+F"));
     items.push_back(menuSeparator());
     items.push_back(menuCommand(MenuAction::Close, "Close", true, mod + "+Q"));
   } else {
@@ -12217,7 +12240,7 @@ void Server::applyMenuChoice(uint32_t serial, uint32_t chosen) {
       minimizeSurface(*surface);
       return;
     case MenuAction::MaximizeRestore:
-      if (surface->fullscreen) return;
+      if (surface->fullscreen || surface->fixedFrame) return;
       surfaces->setMaximized(*surface, !surface->maximized);
       if (surface->isForeign()) {
         // Told, so the client draws itself as maximized — the same courtesy
@@ -12226,6 +12249,7 @@ void Server::applyMenuChoice(uint32_t serial, uint32_t chosen) {
       }
       return;
     case MenuAction::Fullscreen:
+      if (surface->fixedFrame) return;
       surfaces->setFullscreen(*surface, !surface->fullscreen);
       return;
     case MenuAction::Close:
@@ -12847,7 +12871,7 @@ bool Server::update_drag() {
 }
 
 bool Server::beginInteractiveMove(ClientSurface &surface, bool fromClient) {
-  if (surfaces == nullptr || surface.panel) return false;
+  if (surfaces == nullptr || surface.panel || surface.fixedFrame) return false;
   // Nothing to carry the move: a client that asks for one with no button down
   // would get a window glued to the cursor until the next click.
   if (pointerButtonsDown == 0) return false;
@@ -12898,7 +12922,7 @@ bool Server::beginInteractiveMove(ClientSurface &surface, bool fromClient) {
 
 bool Server::beginInteractiveResize(ClientSurface &surface, uint32_t edges,
                                     bool fromClient) {
-  if (surfaces == nullptr || surface.panel) return false;
+  if (surfaces == nullptr || surface.panel || surface.fixedFrame) return false;
   if (pointerButtonsDown == 0) return false;
   // A resize with no side named is not a resize. Nothing sensible to grow
   // from, and the drag would move the window instead.
@@ -14238,6 +14262,7 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
           server->surfaces->requestClose(*frame);
           return;
         case lava::DecorationHit::Maximize:
+          if (frame->fixedFrame) return;
           server->surfaces->setMaximized(*frame, !frame->maximized);
           if (frame->isForeign()) {
             // Told, so the client draws itself as maximized — squared corners,
@@ -14259,6 +14284,7 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
               event->time_msec - server->lastBarClickTime <= kDoubleClickMs;
           if (dbl) {
             server->lastBarClickSurface = 0;
+            if (frame->fixedFrame) return;
             if (frame->fullscreen) {
               server->surfaces->setFullscreen(*frame, false);
             }

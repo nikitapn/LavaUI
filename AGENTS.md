@@ -1216,6 +1216,15 @@ reason.
 Unpinning moves nothing: the window is simply no longer put back, which leaves
 it where the user can still see it.
 
+A client *can* ask to start pinned — `LavaClient.open(options: [.alwaysOnTop])`,
+`WindowTraits` on `CreateWindow` — because that is only the rank the user
+could give it anyway, and the user can take it back. The same call carries
+`.singleInstance` (a second launch raises `AlreadyRunning` and the first
+window is brought here, checked on the loop so two racing launches get one
+window) and `.fixedFrame` (`ClientSurface::fixedFrame`: every move, resize,
+maximize and fullscreen gesture refuses it, and it has no remembered frame).
+The launcher asks for all three.
+
 A Lava app that draws its own chrome has no title bar to right-click, so the
 panel adds a **Window menu** to every focused window's global menu — Always on
 Top, Center on Screen, Close — through `SetAlwaysOnTop`, `CenterWindow` and

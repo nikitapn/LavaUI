@@ -224,6 +224,14 @@ exception SurfaceNotFound {
   surfaceId: u32;
 }
 
+/// `CreateWindow` with `singleInstance`, and the application already has a
+/// window. That window has been brought to the current workspace and
+/// activated — what a second launch is asking for — and `surfaceId` is it.
+/// Not a failure the caller should report: it is the cue to exit quietly.
+exception AlreadyRunning {
+  surfaceId: u32;
+}
+
 /// The surface exists but there was nothing to read back — it has not drawn a
 /// frame yet, or the read-back itself failed.
 ///
@@ -1167,6 +1175,29 @@ message PointerSettings {
 /// is not the lock screen the compositor started for this lock.
 exception LockRefused {
   reason: string;
+}
+
+/// What a window is, beyond its size and who draws its frame. All false is
+/// an ordinary window: `CreateWindow` with these zeroed is `CreateSurface`.
+message WindowTraits {
+  /// One window per `appId`: a second `CreateWindow` for an application
+  /// that already has one brings that one here instead and raises
+  /// `AlreadyRunning`. An empty `appId` has no identity to compare, so it
+  /// is never refused.
+  singleInstance: boolean;
+  /// Pinned above the rest of the workspace from the first frame, as the
+  /// window menu's "Always on Top" does — and the user can still un-pin it
+  /// there. Not an overlay: the desktop's own launcher and switcher outrank
+  /// pinned windows because the compositor knows them, never because a
+  /// client asked.
+  alwaysOnTop: boolean;
+  /// The application places and sizes this window, and the user does not:
+  /// no drag to move or resize it (title bar, edges, Mod+drag, `BeginMove`),
+  /// no maximize or fullscreen from the title bar, the context menu or the
+  /// keyboard, no Center on Screen, and no remembered frame. `SetMaximized`
+  /// and `SetFullscreen` still work — they are how the app states the frame
+  /// it wants, and nothing but a client calls them.
+  fixedFrame: boolean;
 }
 
 interface Compositor {
@@ -2531,6 +2562,26 @@ interface Compositor {
   /// appending is what keeps clients built against older stubs working.
   void SetBackdrop(surfaceId: in u32, plates: in vector<BackdropPlate>)
       raises(SurfaceNotFound);
+
+  /// `CreateSurface`, with what kind of window it is decided at the same
+  /// moment — see `WindowTraits`. `parentId` non-zero makes it a dialog of
+  /// that surface, as `CreateDialogSurface` does.
+  ///
+  /// One call rather than a setter per trait, because two of them only mean
+  /// anything at creation: a single-instance check made after the window
+  /// exists has already lost to a second launch, and a window that takes
+  /// its remembered frame and is only then told it is fixed has been placed
+  /// by the user's last session anyway. Dispatched on the loop like every
+  /// call here, so two launches racing each other are answered one after
+  /// the other and exactly one of them gets a window.
+  ///
+  /// Last in the interface, because method indices are positional:
+  /// appending is what keeps clients built against older stubs working.
+  u32 CreateWindow(arenaId: in string, width: in u32, height: in u32,
+                   title: in string, frame: in WindowFrame,
+                   appId: in string, parentId: in u32,
+                   traits: in WindowTraits)
+      raises(ArenaNotFound, AlreadyRunning);
 }
 
 /// Image registration that does not stop the desktop.

@@ -2038,6 +2038,26 @@ class CompositorImpl final : public ICompositor_Servant {
 
   void ToggleShowDesktop() override { host_.toggleShowDesktop(); }
 
+  uint32_t CreateWindow(nprpc::flat::Span<char> arenaId, uint32_t width,
+                        uint32_t height, nprpc::flat::Span<char> title,
+                        WindowFrame frame, nprpc::flat::Span<char> appId,
+                        uint32_t parentId,
+                        flat::WindowTraits_Direct traits) override {
+    const std::string arena{arenaId};
+    const std::string app{appId};
+    if (traits.singleInstance()) {
+      if (const uint32_t running = host_.bringInstanceHere(app)) {
+        throw AlreadyRunning(running);
+      }
+    }
+    const uint32_t id = host_.createSurface(
+        arena, width, height, std::string{title}, frame == WindowFrame::server,
+        app, /*dialog=*/parentId != 0, parentId, traits.alwaysOnTop(),
+        traits.fixedFrame());
+    if (id == 0) throw ArenaNotFound(arena);
+    return id;
+  }
+
   void SetBackdrop(
       uint32_t surfaceId,
       nprpc::flat::Span_ref<flat::BackdropPlate, flat::BackdropPlate_Direct>

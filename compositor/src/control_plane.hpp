@@ -278,10 +278,21 @@ struct CompositorHost {
   /// `dialog` opens it as a transient window of `parentId` (0 for none): no
   /// remembered frame is read or written for it, and it is centred over its
   /// parent. See `CreateDialogSurface` in the IDL.
+  ///
+  /// `alwaysOnTop` and `fixedFrame` are `WindowTraits`' — see the IDL. Set
+  /// before the window is placed, because a fixed window takes no
+  /// remembered frame.
   virtual uint32_t createSurface(const std::string &arenaId, uint32_t width,
                                  uint32_t height, const std::string &title,
                                  bool decorated, const std::string &appId,
-                                 bool dialog = false, uint32_t parentId = 0) = 0;
+                                 bool dialog = false, uint32_t parentId = 0,
+                                 bool alwaysOnTop = false,
+                                 bool fixedFrame = false) = 0;
+  /// `WindowTraits.singleInstance`: the window `appId` already has, brought
+  /// to the current workspace and activated, or 0 when it has none (or
+  /// `appId` is empty). Asked in the same loop turn as the `createSurface`
+  /// that follows a 0, which is what makes the check race-free.
+  virtual uint32_t bringInstanceHere(const std::string &appId) = 0;
   /// Opens a panel docked to `edge`, `thickness` deep. 0 if the arena does
   /// not exist. `reserve` asks that windows be laid out around it.
   virtual uint32_t createPanel(const std::string &arenaId, uint32_t edge,
