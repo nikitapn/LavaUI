@@ -31,7 +31,8 @@ import LavaUI
 WindowBackdrop.current = .theme
 
 guard let editor = LavaClient.open(
-    title: "Settings", width: 900, height: 700, frame: .client
+    title: "Settings", width: 900, height: 700, frame: .client,
+    options: [.singleInstance]
 ) else { exit(1) }
 
 let store = SettingsStore()

@@ -82,3 +82,12 @@ packaging/install.sh lava-index      # also part of a plain packaging/install.sh
 
 After editing the config: `systemctl --user restart lava-index`. To see what it
 is doing: `lava-index-query status`, `journalctl --user -u lava-index`.
+
+## Dock menu actions
+
+The eleventh field of a row is the app's `[Desktop Action]` items:
+`Name=arguments` separated by `;`, each run as the app's own command with the
+arguments after it. The dock lists them on the icon's right-click menu,
+whether the app is running or not — `New Window=` is how a second terminal is
+opened from its icon. An app with actions and no `MimeType` leaves the tenth
+field empty (`…|1||New Window=`).

@@ -74,16 +74,19 @@ keywords=()
 wmclasses=()
 clients=()
 mimetypes=()
+actions=()
 
 load_catalog() {
   products=(); names=(); generics=(); comments=()
   icons=(); categories=(); keywords=(); wmclasses=(); clients=(); mimetypes=()
+  actions=()
   local line product
   while IFS= read -r line || [[ -n $line ]]; do
     [[ -z $line || $line == \#* ]] && continue
-    # `mime` is the optional tenth field; rows written before it existed
-    # leave it empty, which is exactly what they mean.
-    IFS='|' read -r product name generic comment icon cats keys wm client mime <<<"$line"
+    # `mime` and `acts` are the optional tenth and eleventh fields; rows
+    # written before they existed leave them empty, which is exactly what
+    # they mean.
+    IFS='|' read -r product name generic comment icon cats keys wm client mime acts <<<"$line"
     [[ -n $product ]] || continue
     products+=("$product")
     names+=("$name")
@@ -95,6 +98,7 @@ load_catalog() {
     wmclasses+=("$wm")
     clients+=("$client")
     mimetypes+=("${mime:-}")
+    actions+=("${acts:-}")
   done <"$conf"
 }
 
@@ -201,14 +205,16 @@ install_service() {
 write_desktop() {
   local path=$1 product=$2 name=$3 generic=$4 comment=$5
   local icon=$6 cats=$7 keys=$8 wm=$9 bin=${10} client=${11} mime=${12:-}
+  local acts=${13:-}
 
-  local exec_line try_line mime_line=""
+  local exec_line try_line mime_line="" command
   try_line="TryExec=$bin"
   if [[ $client == 1 ]]; then
-    exec_line="Exec=env LAVA_CLIENT=1 $bin"
+    command="env LAVA_CLIENT=1 $bin"
   else
-    exec_line="Exec=$bin"
+    command="$bin"
   fi
+  exec_line="Exec=$command"
   # A handler needs somewhere for the file to go. `%F` only where a MimeType
   # was declared: an app that takes no arguments should not carry a field
   # code, and some launchers reject an Exec that has one it cannot fill.
@@ -233,7 +239,43 @@ Keywords=$keys
 StartupWMClass=$wm
 StartupNotify=false$mime_line
 EOF
+  if [[ -n $acts ]]; then write_actions "$path" "$command" "$acts"; fi
   chmod 644 "$path"
+}
+
+# `Name=args;Name=args` from apps.conf, appended as `Actions=` and one
+# `[Desktop Action …]` group each — what the dock lists on an icon's
+# right-click menu. The id is the name in lower case with every run of
+# anything but letters and digits as one `-`, so "New Window" is
+# `new-window`, the id every other desktop file uses for it. An action runs
+# the app's own command with its arguments after it; never `%F`, since
+# nothing hands an action a file.
+write_actions() {
+  local path=$1 command=$2 acts=$3
+  local ids=() labels=() args=() entry label id
+  local IFS=';'
+  for entry in $acts; do
+    [[ -n $entry ]] || continue
+    label=${entry%%=*}
+    id=$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-')
+    id=${id#-}
+    id=${id%-}
+    ids+=("$id")
+    labels+=("$label")
+    args+=("${entry#*=}")
+  done
+  unset IFS
+  [[ ${#ids[@]} -gt 0 ]] || return 0
+  (IFS=';'; echo "Actions=${ids[*]};") >>"$path"
+  local i
+  for i in "${!ids[@]}"; do
+    {
+      echo
+      echo "[Desktop Action ${ids[$i]}]"
+      echo "Name=${labels[$i]}"
+      echo "Exec=$command${args[$i]:+ ${args[$i]}}"
+    } >>"$path"
+  done
 }
 
 install_one() {
@@ -253,6 +295,7 @@ install_one() {
   local wm=${wmclasses[$i]}
   local client=${clients[$i]}
   local mime=${mimetypes[$i]}
+  local acts=${actions[$i]}
 
   local bin="$bin_root/$product"
   if [[ ! -x $bin ]]; then
@@ -294,7 +337,7 @@ install_one() {
   write_desktop \
     "$apps_dir/$product.desktop" \
     "$product" "$name" "$generic" "$comment" \
-    "$icon" "$cats" "$keys" "$wm" "$bin" "$client" "$mime"
+    "$icon" "$cats" "$keys" "$wm" "$bin" "$client" "$mime" "$acts"
 
   cp -f "$icon_src" "$icons_dir/$icon.svg"
   chmod 644 "$icons_dir/$icon.svg"

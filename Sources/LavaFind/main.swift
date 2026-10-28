@@ -26,7 +26,8 @@ WindowBackdrop.current = .none
 // and closes it. A window the size of the card would need the compositor to
 // place it, and a click outside it would go to whatever was underneath.
 guard let editor = LavaClient.open(
-    title: "Find", frame: .client, fillScreen: .maximized
+    title: "Find", frame: .client, fillScreen: .maximized,
+    options: [.singleInstance, .alwaysOnTop, .fixedFrame]
 ) else { exit(1) }
 
 FindFonts.small = UIFont.loadUI(assetsRoot: LavaResources.root, pixelSize: 13)

@@ -21,7 +21,8 @@ struct LavaShotApp {
         AppSettings.configure(appName: "LavaShot")
 
         guard let editor = LavaClient.open(
-            title: "LavaShot", frame: .client, fillScreen: .output
+            title: "LavaShot", frame: .client, fillScreen: .output,
+            options: [.singleInstance, .alwaysOnTop, .fixedFrame]
         ) else { exit(1) }
         Theme.current = .nebula
 
