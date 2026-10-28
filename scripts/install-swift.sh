@@ -2,7 +2,7 @@
 # Install a Swift 6.3+ toolchain if this machine does not already have one.
 #
 #   scripts/install-swift.sh
-#   LAVA_SWIFT_VERSION=6.3.3 scripts/install-swift.sh
+#   LAVA_SWIFT_VERSION=6.4.1 scripts/install-swift.sh
 #
 # Order:
 #   1. an existing `swift` on PATH that is already 6.3+

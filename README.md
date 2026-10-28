@@ -109,7 +109,7 @@ The docs site is at [lavaui.nikitapn.com](https://lavaui.nikitapn.com).
 
 ## Built with
 
-- **Swift 6.1+** with C++ interop, and **C++23** for the engine and compositor
+- **Swift 6.4+** with C++ interop, and **C++23** for the engine and compositor
 - **Vulkan** — rendering
 - **Yoga** — flexbox layout
 - **FreeType** and **HarfBuzz** — fonts and text shaping

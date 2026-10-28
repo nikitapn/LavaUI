@@ -10,7 +10,7 @@ LAVA_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LAVA_NPRPC_URL="${LAVA_NPRPC_URL:-https://github.com/nikitapn/nprpc.git}"
 LAVA_NPRPC_REF="${LAVA_NPRPC_REF:-main}"
 LAVA_WLROOTS_VERSION="${LAVA_WLROOTS_VERSION:-0.19.3}"
-LAVA_SWIFT_VERSION="${LAVA_SWIFT_VERSION:-6.3.3}"
+LAVA_SWIFT_VERSION="${LAVA_SWIFT_VERSION:-6.4.1}"
 
 # ── logging ────────────────────────────────────────────────────────────────
 
