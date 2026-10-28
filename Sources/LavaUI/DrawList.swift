@@ -2349,18 +2349,43 @@ extension DrawList {
             emitFocusRing(leaf, x: x, y: y, w: w, h: h)
         }
 
+        // Single-line is centred in its box, and stays centred in a box
+        // shorter than the line: the overflow is cut evenly off the top and
+        // bottom by the clip below, which is where a line's empty leading is.
+        // Pinned at the top instead, a short box cut the descenders and kept
+        // the space above the caps. Multi-line starts at the top inset.
+        let firstTop = leaf.isMultiline ? y + inset : y + (h - lineH) / 2
+
+        // Across, as well as down: a row that fits vertically can still run
+        // past the right edge — a long path in an address bar narrowed by a
+        // split drew straight over the button beside it.
+        //
+        // Across, the clip is the text area, not the box: a row slid left
+        // has a selection starting before the visible part, and clipped at
+        // the box it filled the padding and painted over the focus ring and
+        // the rounded corner. The caret's width is let through on the right,
+        // where the caret sits at the end of a row slid as far as it goes.
+        //
+        // The placeholder is under it too. It used to be drawn outside, and
+        // as the only part of a field not held to the rows' rule below it was
+        // what still showed in a box too short for a line — the typed text
+        // and the caret were skipped, and the field looked like it was not
+        // taking input.
+        let clipLeft = x + min(inset, w / 2)
+        let clipRight = x + min(w, max(w - inset + theme.caretWidth, w / 2))
+        pushClip(x: clipLeft, y: y, w: max(0, clipRight - clipLeft), h: h)
+        defer { popClip() }
+
         if state.text.isEmpty {
             if !leaf.placeholder.isEmpty {
-                let top = leaf.isMultiline ? y + inset : y + max(0, (h - lineH) / 2)
                 text(
-                    leaf.placeholder, x: x + inset - 4, y: top,
+                    leaf.placeholder, x: x + inset - 4, y: firstTop,
                     w: w, h: lineH, color: theme.textMuted, font: font
                 )
             }
             if focused, CaretBlink.isVisible {
-                let top = leaf.isMultiline ? y + inset : y + max(0, (h - lineH) / 2)
                 rect(
-                    x: x + inset, y: top,
+                    x: x + inset, y: firstTop,
                     w: theme.caretWidth, h: lineH, color: theme.textPrimary
                 )
             }
@@ -2383,33 +2408,20 @@ extension DrawList {
         }
         let textX = x + inset - leaf.scrollX
 
-        // Single-line stays vertically centred in its box; multi-line starts
-        // at the top inset and stacks.
-        let firstTop = leaf.isMultiline ? y + inset : y + max(0, (h - lineH) / 2)
         let rows = state.layout.rows
         let selection = state.hasSelection ? state.selectedRange : nil
         let caretRow = state.layout.rowIndex(
             ofOffset: state.offset(of: state.focus), affinity: state.affinity
         )
 
-        // Across, as well as down: a row that fits vertically can still run
-        // past the right edge — a long path in an address bar narrowed by a
-        // split drew straight over the button beside it.
-        //
-        // Across, the clip is the text area, not the box: a row slid left
-        // has a selection starting before the visible part, and clipped at
-        // the box it filled the padding and painted over the focus ring and
-        // the rounded corner. The caret's width is let through on the right,
-        // where the caret sits at the end of a row slid as far as it goes.
-        let clipLeft = x + min(inset, w / 2)
-        let clipRight = x + min(w, max(w - inset + theme.caretWidth, w / 2))
-        pushClip(x: clipLeft, y: y, w: max(0, clipRight - clipLeft), h: h)
-        defer { popClip() }
         for (row, rowRange) in rows.enumerated() {
             let lineTop = firstTop + Float(row) * lineH
-            // Same rule as the editor: draw only rows that fully fit, so a
-            // shrunk box cannot spill text onto its neighbours.
-            if lineTop + lineH > y + h { break }
+            // Same rule as the editor for several rows: draw only rows that
+            // fully fit, so a shrunk box shows whole lines. A single-line
+            // field has one row and always draws it, cut by the clip — a row
+            // held to the rule there vanished whole, with the caret, in a box
+            // a few points shorter than the line.
+            if leaf.isMultiline, lineTop + lineH > y + h { break }
 
             let lineStart = state.index(atOffset: rowRange.lowerBound)
             let lineEnd = state.index(atOffset: rowRange.upperBound)
