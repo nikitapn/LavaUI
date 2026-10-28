@@ -315,10 +315,11 @@ install_one() {
       fi
     fi
   fi
-  # Canonicalise.
-  if [[ -e $bin ]]; then
-    bin="$(readlink -f "$bin")"
-  fi
+  # Deliberately not canonicalised. .build/release is SwiftPM's own alias and
+  # it keeps it pointing at whatever layout the toolchain uses; the target is
+  # not stable. Swift 6.4 moved it from x86_64-unknown-linux-gnu/release to
+  # out/Products/Release-linux-x86_64, and links resolved through it went on
+  # running the 6.3 binaries left behind, whose runtime the upgrade deleted.
   if [[ ! -x $bin ]]; then
     echo "skip $product: no executable at $bin_root/$product" >&2
     echo "  build:  swift build -c release --product $product" >&2
