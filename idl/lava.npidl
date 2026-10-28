@@ -613,37 +613,6 @@ message InputRect {
   h: u32;
 }
 
-/// One rectangle of desktop to frost behind a surface, in its own coordinates.
-///
-/// `w` or `h` of 0 means the whole surface, which is what a window that is
-/// itself the glass asks for. `cornerRadius` rounds the plate so it matches
-/// the popup sitting on it; 0 is square.
-message FrostRect {
-  x: f32;
-  y: f32;
-  w: f32;
-  h: f32;
-  cornerRadius: f32;
-}
-
-/// A `FrostRect` that also says how far its own rim bends, for
-/// `SetBackdropGlassRegions`. `refraction` is in pixels; 0 is flat, and a
-/// negative value takes the surface's `SetBackdropRefraction`. `frost`, 0…1,
-/// is the grain of frosted glass on the plate (`.glassEffect(frost:)`).
-///
-/// A message of its own rather than a field on `FrostRect`, which would change
-/// the layout `SetBackdropBlurRegions` reads and break every client built
-/// against the older stubs.
-message GlassFrostRect {
-  x: f32;
-  y: f32;
-  w: f32;
-  h: f32;
-  cornerRadius: f32;
-  refraction: f32;
-  frost: f32;
-}
-
 /// The desktop under a plate, blurred. `radius` in layout pixels. A plate
 /// without one is not drawn: a sharp plate is not supported yet.
 message BackdropBlur {
@@ -668,9 +637,9 @@ message BackdropFrost {
 /// One thing a plate does to the desktop under it. They stack: a plate is
 /// blurred, then bent and lit, then grained, whatever order they are listed
 /// in. Named one of a list rather than fields of the plate because a message
-/// cannot grow — `GlassFrostRect` exists only because `FrostRect` could not —
-/// and a new kind of effect can be added here as a new arm, which a
-/// compositor that does not know it skips.
+/// cannot grow — adding a field changes the layout every client built against
+/// the older stubs reads — and a new kind of effect can be added here as a new
+/// arm, which a compositor that does not know it skips.
 alias BackdropEffect = one of {
   blur: BackdropBlur;
   glass: BackdropGlass;
@@ -2245,23 +2214,6 @@ interface Compositor {
   void SetFullscreen(surfaceId: in u32, on: in boolean)
       raises(SurfaceNotFound);
 
-  /// Frost the desktop behind this surface.
-  ///
-  /// The client's own pixels stay sharp — this is not `.blur()`. In-window
-  /// `backdropBlur` can only sample this surface's framebuffer, so a window
-  /// that wants the wallpaper and the windows under it softened has to ask
-  /// the compositor, which is the only process that can see them.
-  ///
-  /// `radius` is in layout pixels. 0 turns the effect off. The compositor
-  /// draws a blurred copy of what is *behind* the window, then the window
-  /// on top; a translucent `WindowBackdrop` is what lets the frost show
-  /// through. An opaque fill hides it completely.
-  ///
-  /// A property of the surface, not a draw command: the radius changes
-  /// rarely, and the pixels it samples are not the client's to name.
-  void SetBackdropBlur(surfaceId: in u32, radius: in f32)
-      raises(SurfaceNotFound);
-
   // ─── Diagnostics ───────────────────────────────────────────────────────
 
   /// What is in the compositor's VRAM, and which window asked for it.
@@ -2296,25 +2248,6 @@ interface Compositor {
   /// the device. Ask when a human asks, not on a timer.
   vector<string> DumpAtlasImages(directory: in string) raises(AtlasDumpFailed);
 
-  /// Frost a rectangle of the desktop behind this surface, not the whole
-  /// window.
-  ///
-  /// `SetBackdropBlur` is the window-sized version: a terminal that is itself
-  /// the glass wants that. A panel that is a 32pt strip on a 600pt surface
-  /// does not — frosting the whole thing would haze the desktop under every
-  /// pixel the panel owns, most of which are empty so clicks fall through.
-  /// A menu dropdown is a small rect on that surface, and this is how it
-  /// asks for frost under just that rect.
-  ///
-  /// `x,y,w,h` are in the surface's own coordinates. `w` or `h` of 0 is the
-  /// whole surface, the same as `SetBackdropBlur`. `cornerRadius` rounds the
-  /// frost plate so it matches the popup sitting on it; 0 is square.
-  /// `radius` 0 turns the effect off.
-  void SetBackdropBlurRegion(surfaceId: in u32, radius: in f32,
-                             x: in f32, y: in f32, w: in f32, h: in f32,
-                             cornerRadius: in f32)
-      raises(SurfaceNotFound);
-
   /// Ends the session. Same as the compositor's own quit binding.
   ///
   /// For the panel's Log Out item. A client cannot terminate the display
@@ -2326,24 +2259,6 @@ interface Compositor {
   /// a display that closed. There is no confirm here; the panel asks the
   /// user first.
   void EndSession();
-
-  /// Frost several rectangles of the desktop behind this surface at once.
-  ///
-  /// **A list, because one rectangle was not enough**, and for the reason
-  /// `SetInputRegion` grew one. A menu dropdown is a single rect; a dropdown
-  /// with a fly-out submenu beside it is two, and neither contains the other.
-  /// With one plate between them the second call simply replaced the first,
-  /// so opening a submenu took the frost off the menu it came from. Their
-  /// union is no answer either — the corner between them is desktop nothing
-  /// is drawn over, and frosting it would leave a blurred rectangle hanging
-  /// in mid-air.
-  ///
-  /// Each rect gets its own plate. They may overlap. An empty list turns the
-  /// effect off, the same as `radius` 0. One rect here is exactly
-  /// `SetBackdropBlurRegion`, which stays for callers that only ever have one.
-  void SetBackdropBlurRegions(surfaceId: in u32, radius: in f32,
-                              rects: in vector<FrostRect>)
-      raises(SurfaceNotFound);
 
   // ─── Menus a client asks for ───────────────────────────────────────────
   //
@@ -2500,20 +2415,6 @@ interface Compositor {
                    width: in u32, height: in u32)
       raises(SurfaceNotFound);
 
-  /// Bend the rim of this surface's frost like glass, by up to `px` pixels.
-  ///
-  /// A separate switch from `SetBackdropBlur` because the same frost is right
-  /// for two things that want different edges: a menu is a small slab of
-  /// glass and reads better refracted, while a terminal whose whole window is
-  /// frosted just looks warped at the edges. 0 is flat, and where every
-  /// surface starts. Kept on the surface like the blur radius, so it may be
-  /// sent before or after the frost is turned on.
-  ///
-  /// Last in the interface on purpose: indices are positional, and appending
-  /// is what keeps clients built against the older stubs working.
-  void SetBackdropRefraction(surfaceId: in u32, px: in f32)
-      raises(SurfaceNotFound);
-
   /// The lock screen's surface: above everything, covering the screen the
   /// pointer is on, and the only surface that hears any input while locked.
   ///
@@ -2591,37 +2492,11 @@ interface Compositor {
   /// bar's close button does.
   void CloseWindow(surfaceId: in u32) raises(SurfaceNotFound);
 
-  /// `SetBackdropBlurRegions` with a refraction per rectangle.
-  ///
-  /// `SetBackdropRefraction` is one number for the surface, and a popup can
-  /// hold two views of glass that want different edges — a frosted row
-  /// beside one that bends, which is what `.backdropBlur` and `.glassEffect`
-  /// on two siblings say. Each plate is drawn on its own already; this only
-  /// lets each carry its own bend. A rectangle whose `refraction` is negative
-  /// bends by the surface's, as every plate of the older call does.
-  ///
-  /// Last in the interface, like `SetBackdropRefraction` and for the same
-  /// reason. A client facing a compositor without it falls back to
-  /// `SetBackdropBlurRegions` and gets one bend for the surface.
-  void SetBackdropGlassRegions(surfaceId: in u32, radius: in f32,
-                               rects: in vector<GlassFrostRect>)
-      raises(SurfaceNotFound);
-
-  /// The grain of frosted glass on every plate of this surface, 0…1 — the
-  /// whole-surface counterpart of `GlassFrostRect.frost`, as
-  /// `SetBackdropRefraction` is of its `refraction`. For a surface that is
-  /// frosted edge to edge by `SetBackdropBlur`: a menu, a popup. A plate with
-  /// a frost of its own takes whichever is stronger. 0, where every surface
-  /// starts, is no grain.
-  ///
-  /// Last in the interface, for the reason `SetBackdropRefraction` gives.
-  void SetBackdropFrost(surfaceId: in u32, frost: in f32)
-      raises(SurfaceNotFound);
-
   /// The mouse and the touchpad as libinput is set up now, and how a wheel
   /// scroll settles. See `PointerSettings`.
   ///
-  /// Last in the interface, for the reason `SetBackdropRefraction` gives.
+  /// Last in the interface, because method indices are positional:
+  /// appending is what keeps clients built against older stubs working.
   PointerSettings GetPointer();
 
   /// Applies to every pointer plugged in and every one plugged in later,
@@ -2630,8 +2505,9 @@ interface Compositor {
 
   /// Shows workspace `index`, 0-based, as Mod+1…9 does. Out of range, or
   /// the one already on screen, does nothing. For the panel's Workspaces
-  /// menu; last in the interface, for the reason `SetBackdropRefraction`
-  /// gives.
+  /// menu; last in the interface, because method indices are
+  /// positional: appending is what keeps clients built against older
+  /// stubs working.
   void SwitchWorkspace(index: in u32);
 
   /// Hides every window, or brings them back, as Mod+D does.
@@ -2640,16 +2516,19 @@ interface Compositor {
   /// Everything about the desktop behind this surface, in one call: every
   /// plate, and on each everything it does. An empty list is no backdrop.
   ///
-  /// Replaces `SetBackdropBlur`, `SetBackdropBlurRegion(s)`,
-  /// `SetBackdropGlassRegions`, `SetBackdropRefraction` and
-  /// `SetBackdropFrost`, which each set a piece of this — and whose pieces a
-  /// client could only send one at a time, so a frame could be composited
-  /// with the new bend and the old grain. Those stay for clients built
-  /// before this; a surface follows whichever kind of call reached it last,
-  /// and this one leaves no surface-wide bend or grain behind to mix into
-  /// its plates.
+  /// One call rather than one per part. There used to be six — the blur, a
+  /// region list, a region list with glass, the bend, the grain — and a
+  /// client could only send them one at a time, so a frame could be
+  /// composited with the new bend and the old grain.
   ///
-  /// Last in the interface, for the reason `SetBackdropRefraction` gives.
+  /// The plates are what the desktop under the surface looks like, not
+  /// decoration on it: a whole-surface plate (`w`, `h` 0) for a frosted
+  /// window, a rectangle per popup for a panel whose surface is mostly empty.
+  /// Each is captured and drawn on its own, so two may overlap and a menu and
+  /// its fly-out are two plates with desktop between them.
+  ///
+  /// Last in the interface, because method indices are positional:
+  /// appending is what keeps clients built against older stubs working.
   void SetBackdrop(surfaceId: in u32, plates: in vector<BackdropPlate>)
       raises(SurfaceNotFound);
 }

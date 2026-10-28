@@ -425,8 +425,8 @@ class CanvasSurface {
  private:
   /// Content-blur pass over an already-uploaded texture. Shared by the
   /// CPU and dma-buf frost paths.
-  /// `refractPx` bends the rim like glass; 0 is flat. See `SetBackdropRefraction`.
-  /// `frost` (0…1) adds the grain of frosted glass. See `GlassFrostRect`.
+  /// `refractPx` bends the rim like glass; 0 is flat. `frost` (0…1) adds the
+  /// grain of frosted glass. See `BackdropGlass` and `BackdropFrost`.
   /// `rim` (0…1) lights the plate's edge; `magnification` draws the desktop
   /// under it that much larger, about its centre. See `BackdropGlass`.
   bool frostWithTexture(int id, float radius, float cornerRadius,

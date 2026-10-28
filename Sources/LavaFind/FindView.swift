@@ -324,7 +324,7 @@ private struct Footer: View {
 ///
 /// Per box rather than one plate for the card, so the 12 pt between the bar
 /// and the list stays clear desktop. Both rects go to the compositor in one
-/// `SetBackdropBlurRegions` per frame, and only on frames where one moved —
+/// `SetBackdrop` per frame, and only on frames where one moved —
 /// the list growing as results arrive is a new rect on the frame it grows.
 ///
 /// With no compositor to ask (a windowed run), `frostDesktop` says so and

@@ -371,7 +371,7 @@ class QuadRenderer {
   /// Only for an opaque source: a content blur's own silhouette passes 0.
   ///
   /// `glass` bends the composite at its rim and lights it — a compositor
-  /// plate's `SetBackdropRefraction`, or a view's `.glassEffect()`. It is
+  /// plate's `BackdropGlass`, or a view's `.glassEffect()`. It is
   /// stated here rather than taken from `setGlass` because the plate path has
   /// no draw-list prefix to take it from.
   ///

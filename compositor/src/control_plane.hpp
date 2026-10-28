@@ -230,51 +230,33 @@ struct CompositorHost {
   virtual bool setInputRegion(uint32_t surfaceId,
                               std::vector<InputRect> rects) = 0;
 
-  /// One rectangle of desktop frosted behind a surface, mirroring `FrostRect`
-  /// in the IDL for the same reason `InputRect` above is a mirror.
+  /// One plate of desktop frosted behind a surface: `BackdropPlate` in the
+  /// IDL with its effects read out, for the same reason `InputRect` above is
+  /// a mirror.
   struct FrostRect {
     float x = 0.f;
     float y = 0.f;
     float w = 0.f;
     float h = 0.f;
     float cornerRadius = 0.f;
-    /// This plate's own bend, in pixels. Negative takes the surface's
-    /// `setBackdropRefraction`, which is what every rect of the older call
-    /// gets. See `SetBackdropGlassRegions`.
-    float refraction = -1.f;
-    /// The grain of frosted glass on this plate, 0…1.
+    /// How far its rim bends, in pixels; 0 is flat.
+    float refraction = 0.f;
+    /// The grain of frosted glass on it, 0…1.
     float frost = 0.f;
-    /// This plate's own blur radius; 0 takes the call's. Only `SetBackdrop`
-    /// gives plates radii of their own.
+    /// Its blur radius. A plate without one is not drawn.
     float radius = 0.f;
-    /// The light its rim catches, 0…1. Negative is the older calls' rule: a
-    /// rim exactly where the plate bends.
-    float rim = -1.f;
+    /// The light its rim catches, 0…1.
+    float rim = 0.f;
     /// How much larger the desktop under it is drawn, about its centre; 1 is
     /// none.
     float magnification = 1.f;
   };
 
-  /// Frost the desktop behind this surface, one plate per rect. `radius` 0 or
-  /// an empty list turns it off. A rect with `w` or `h` of 0 is the whole
-  /// surface, which is what a window that is itself the glass asks for;
-  /// otherwise it is in the surface's own coordinates, and `cornerRadius`
-  /// rounds its plate so a popup's frost matches the popup.
-  virtual bool setBackdropBlur(uint32_t surfaceId, float radius,
-                               std::vector<FrostRect> rects) = 0;
-
-  /// Glass refraction at the rim of this surface's frost plates, in pixels;
-  /// 0 is flat, which is also where every surface starts.
-  virtual bool setBackdropRefraction(uint32_t surfaceId, float px) = 0;
-
-  /// The grain of frosted glass on this surface's frost plates, 0…1; 0 is
-  /// none, which is also where every surface starts.
-  virtual bool setBackdropFrost(uint32_t surfaceId, float frost) = 0;
-
-  /// The whole backdrop at once (`SetBackdrop`): these plates, each carrying
-  /// its own radius, bend, rim, grain and magnification, and no surface-wide
-  /// bend or grain left over from `setBackdropRefraction`/`setBackdropFrost`
-  /// to mix into them. Empty turns the backdrop off.
+  /// The desktop behind this surface (`SetBackdrop`), one plate per rect. A
+  /// rect with `w` or `h` of 0 is the whole surface, which is what a window
+  /// that is itself the glass asks for; otherwise it is in the surface's own
+  /// coordinates, and `cornerRadius` rounds its plate so a popup's frost
+  /// matches the popup. Empty turns the backdrop off.
   virtual bool setBackdrop(uint32_t surfaceId, std::vector<FrostRect> plates) = 0;
 
   /// Remembers the pointer image a surface wants, and applies it now if the

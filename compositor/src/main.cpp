@@ -2057,9 +2057,11 @@ struct ClientSurface {
   uint32_t shadowH = 0;
   float    shadowRadius = -1.f;
 
-  /// Compositor frost under this window. See `SetBackdropBlur`.
-  /// A canvas surface so the blur runs on the compositing Vulkan device
-  /// (`BlurPass`), not a CPU box filter.
+  /// Compositor frost under this window: the largest of its plates' blur
+  /// radii (`SetBackdrop`), and what the rest of the compositor reads as
+  /// "this surface is frosted". Each plate is blurred at its own. A canvas
+  /// surface so the blur runs on the compositing Vulkan device (`BlurPass`),
+  /// not a CPU box filter.
   float backdropBlurRadius = 0.f;
   /// Something behind this window's frost painted since it was captured.
   /// Only these are recaptured on a live pass — see `notePainted`.
@@ -2067,12 +2069,6 @@ struct ClientSurface {
   /// Something in front of this frost moved, or this window did: recaptured
   /// on the next output frame, outside the live rate limit.
   bool frostMoved = false;
-  /// Glass refraction at the rim of every plate, in pixels; 0 is flat. The
-  /// client's choice (`SetBackdropRefraction`): a menu reads as glass, a
-  /// terminal whose whole window is frosted just looks warped.
-  float backdropRefractPx = 0.f;
-  /// The grain of frosted glass on every plate, 0…1 (`SetBackdropFrost`).
-  float backdropFrost = 0.f;
   /// One frosted rectangle: where it goes, and the plate it is drawn on.
   ///
   /// `w`/`h` of 0 means the whole surface, which is what a terminal wants. A
@@ -2084,16 +2080,15 @@ struct ClientSurface {
     float w = 0.f;
     float h = 0.f;
     float corner = 0.f;
-    /// This plate's own bend; negative takes the surface's
-    /// `backdropRefractPx`. See `refractionOf`.
-    float refraction = -1.f;
+    /// How far its rim bends, in pixels; 0 is flat. A menu reads as glass;
+    /// a terminal whose whole window is frosted just looks warped.
+    float refraction = 0.f;
     /// The grain of frosted glass on this plate, 0…1.
     float frost = 0.f;
-    /// This plate's blur radius; 0 takes the surface's `backdropBlurRadius`,
-    /// as every plate of the older calls does.
+    /// This plate's blur radius.
     float radius = 0.f;
-    /// The light its rim catches, 0…1; negative lights it where it bends.
-    float rim = -1.f;
+    /// The light its rim catches, 0…1.
+    float rim = 0.f;
     /// How much larger the desktop under it is drawn; 1 is none.
     float magnification = 1.f;
     std::unique_ptr<lava::CanvasSurface> canvas;
@@ -2230,11 +2225,7 @@ struct ClientSurface {
   /// client sends its plates as it draws, so the frame drawn for the new size
   /// names them in the new size's coordinates — measured from the old origin,
   /// the dock's plate was cropped from where the preview had been.
-  struct HeldFrost {
-    float radius = 0.f;
-    std::vector<lava::CompositorHost::FrostRect> rects;
-  };
-  std::optional<HeldFrost> heldFrost;
+  std::optional<std::vector<lava::CompositorHost::FrostRect>> heldFrost;
 
   /// Where a maximized or fullscreen window came from, so restoring is exact.
   bool maximized = false;
@@ -4353,9 +4344,9 @@ class SurfaceRegistry : public lava::CompositorHost {
     panel.pendingPanelGeometry = false;
     // Before the move, which places the plates from these.
     if (panel.heldFrost) {
-      ClientSurface::HeldFrost held = std::move(*panel.heldFrost);
+      auto held = std::move(*panel.heldFrost);
       panel.heldFrost.reset();
-      applyBackdropBlur(panel, held.radius, std::move(held.rects));
+      applyBackdrop(panel, std::move(held));
     }
     if (!panel.canvas) return;
     panel.width = panel.canvas->width();
@@ -5261,10 +5252,8 @@ class SurfaceRegistry : public lava::CompositorHost {
       wlr_dmabuf_attributes attribs{};
       if (srcX >= 0 && srcY >= 0 && wlr_buffer_get_dmabuf(captured, &attribs)) {
         frosted = plate.canvas->frostFromDmabuf(
-            attribs, srcX, srcY, srcW, srcH, radiusOf(surface, plate),
-            plate.key, frost, refractionOf(surface, plate),
-            frostOf(surface, plate), rimOf(surface, plate),
-            plate.magnification);
+            attribs, srcX, srcY, srcW, srcH, plate.radius, plate.key, frost,
+            plate.refraction, plate.frost, plate.rim, plate.magnification);
       }
       if (!frosted) {
         // The CPU path uploads through the ordinary texture cache, which would
@@ -5279,9 +5268,8 @@ class SurfaceRegistry : public lava::CompositorHost {
         frosted = read && plate.canvas->frostFromRgba(
                               raw.data(), static_cast<uint32_t>(srcW),
                               static_cast<uint32_t>(srcH),
-                              radiusOf(surface, plate), plate.key, frost,
-                              refractionOf(surface, plate),
-                              frostOf(surface, plate), rimOf(surface, plate),
+                              plate.radius, plate.key, frost,
+                              plate.refraction, plate.frost, plate.rim,
                               plate.magnification);
       }
       if (!frosted) continue;
@@ -5462,36 +5450,6 @@ class SurfaceRegistry : public lava::CompositorHost {
       plate.canvas->setCornerRadius(frostCornerRadius(surface, plate), true,
                                     true);
     }
-  }
-
-  /// How far a plate's rim bends: its own, when the client said
-  /// (`SetBackdropGlassRegions`), and otherwise the surface's.
-  static float refractionOf(const ClientSurface &surface,
-                            const ClientSurface::FrostPlate &plate) {
-    return plate.refraction >= 0.f ? std::min(plate.refraction, 64.f)
-                                   : surface.backdropRefractPx;
-  }
-
-  /// How much grain a plate has: its own (`GlassFrostRect.frost`) or the
-  /// surface's (`SetBackdropFrost`), whichever is stronger.
-  static float frostOf(const ClientSurface &surface,
-                       const ClientSurface::FrostPlate &plate) {
-    return std::max(plate.frost, surface.backdropFrost);
-  }
-
-  /// The radius a plate is blurred at: its own (`SetBackdrop`) or the
-  /// surface's.
-  static float radiusOf(const ClientSurface &surface,
-                        const ClientSurface::FrostPlate &plate) {
-    return plate.radius > 0.f ? plate.radius : surface.backdropBlurRadius;
-  }
-
-  /// How strongly a plate's rim is lit: its own (`SetBackdrop`), or for the
-  /// older calls a full rim wherever the plate bends.
-  static float rimOf(const ClientSurface &surface,
-                     const ClientSurface::FrostPlate &plate) {
-    if (plate.rim >= 0.f) return plate.rim;
-    return refractionOf(surface, plate) > 0.f ? 1.f : 0.f;
   }
 
   /// The radius a frost plate is cut to.
@@ -6495,24 +6453,24 @@ class SurfaceRegistry : public lava::CompositorHost {
     return true;
   }
 
-  bool setBackdropBlur(uint32_t id, float radius,
-                       std::vector<FrostRect> rects) override {
+  bool setBackdrop(uint32_t id, std::vector<FrostRect> plates) override {
     ClientSurface *surface = find(id);
     if (surface == nullptr) return false;
     // Rects in the coordinates of a size the scene does not show yet: kept
     // for `commitPanelGeometry`, the newest winning.
     if (surface->pendingPanelGeometry) {
-      surface->heldFrost = ClientSurface::HeldFrost{radius, std::move(rects)};
+      surface->heldFrost = std::move(plates);
       return true;
     }
-    applyBackdropBlur(*surface, radius, std::move(rects));
+    applyBackdrop(*surface, std::move(plates));
     return true;
   }
 
-  void applyBackdropBlur(ClientSurface &surfaceRef, float radius,
-                         std::vector<FrostRect> rects) {
+  void applyBackdrop(ClientSurface &surfaceRef, std::vector<FrostRect> rects) {
     ClientSurface *surface = &surfaceRef;
     const uint32_t id = surface->id;
+    float radius = 0.f;
+    for (const auto &rect : rects) radius = std::max(radius, rect.radius);
     const float next = std::clamp(radius, 0.f, 64.f);
 
     // Same radius over the same rectangles is the common case by a distance:
@@ -6552,61 +6510,16 @@ class SurfaceRegistry : public lava::CompositorHost {
         plate.w = std::max(0.f, rects[i].w);
         plate.h = std::max(0.f, rects[i].h);
         plate.corner = std::max(0.f, rects[i].cornerRadius);
-        plate.refraction = rects[i].refraction;
+        plate.refraction = std::clamp(rects[i].refraction, 0.f, 64.f);
         plate.frost = std::clamp(rects[i].frost, 0.f, 1.f);
         plate.radius = std::clamp(rects[i].radius, 0.f, 64.f);
-        plate.rim = rects[i].rim < 0.f ? -1.f : std::min(rects[i].rim, 1.f);
+        plate.rim = std::clamp(rects[i].rim, 0.f, 1.f);
         plate.magnification = std::clamp(rects[i].magnification, 1.f, 4.f);
       }
     }
     wlr_log(WLR_INFO, "surface %u: backdrop blur %.0f over %zu rect(s)", id,
             next, surface->frostPlates.size());
     scheduleBackdropRefresh();
-  }
-
-  bool setBackdrop(uint32_t id, std::vector<FrostRect> plates) override {
-    ClientSurface *surface = find(id);
-    if (surface == nullptr) return false;
-    // The call states every plate in full, so nothing surface-wide may be
-    // left to mix in: a popup opened with a grain by the older calls and
-    // then given plates by this one would otherwise keep the grain under
-    // `frostOf`'s "whichever is stronger".
-    const bool glassChanged =
-        surface->backdropRefractPx != 0.f || surface->backdropFrost != 0.f;
-    surface->backdropRefractPx = 0.f;
-    surface->backdropFrost = 0.f;
-    // The surface radius is the largest plate's: it is what the rest of the
-    // compositor reads as "this surface is frosted", and each plate is
-    // blurred at its own.
-    float radius = 0.f;
-    for (const auto &plate : plates) radius = std::max(radius, plate.radius);
-    if (glassChanged && !surface->frostPlates.empty()) {
-      scheduleBackdropRefresh();
-    }
-    return setBackdropBlur(id, radius, std::move(plates));
-  }
-
-  bool setBackdropRefraction(uint32_t id, float px) override {
-    ClientSurface *surface = find(id);
-    if (surface == nullptr) return false;
-    const float next = std::clamp(px, 0.f, 64.f);
-    if (surface->backdropRefractPx == next) return true;
-    surface->backdropRefractPx = next;
-    // The bend is baked into the plate, so an existing one has to be drawn
-    // again to show it.
-    if (!surface->frostPlates.empty()) scheduleBackdropRefresh();
-    return true;
-  }
-
-  bool setBackdropFrost(uint32_t id, float frost) override {
-    ClientSurface *surface = find(id);
-    if (surface == nullptr) return false;
-    const float next = std::clamp(frost, 0.f, 1.f);
-    if (surface->backdropFrost == next) return true;
-    surface->backdropFrost = next;
-    // Baked into the plate, like the bend.
-    if (!surface->frostPlates.empty()) scheduleBackdropRefresh();
-    return true;
   }
 
   void endSession() override {

@@ -1025,28 +1025,13 @@ public enum LavaClient {
         }
     }
 
-    /// Frost rectangles of the desktop behind this surface.
+    /// Frost rectangles of the desktop behind this surface, each with its own
+    /// glass — a frosted view beside a glass one in the same popup. A
+    /// negative `refraction` takes the surface's.
     ///
     /// An empty list means every popup is gone, and the surface goes back to
     /// its own whole-surface frost, if it has one — the two are parts of the
     /// same backdrop (`SurfaceBackdrop`). Idle frames send nothing.
-    public static func setBackdropBlurRegions(
-        radius: Float, rects: [LavaIDL.FrostRect]
-    ) {
-        setBackdropRegions(
-            radius: radius,
-            rects: rects.map {
-                BackdropBridge.FrostRect(
-                    x: $0.x, y: $0.y, w: $0.w, h: $0.h,
-                    cornerRadius: $0.cornerRadius
-                )
-            }
-        )
-    }
-
-    /// `setBackdropBlurRegions` with each rectangle's own glass — a frosted
-    /// view beside a glass one in the same popup. A negative `refraction`
-    /// takes the surface's.
     public static func setBackdropRegions(
         radius: Float, rects: [BackdropBridge.FrostRect]
     ) {
@@ -1176,10 +1161,13 @@ public enum LavaClient {
         // A surface nothing was ever sent for has no backdrop to clear.
         guard plates != (lastBackdrop[id] ?? []) else { return }
         lastBackdrop[id] = plates
-        let state = backdrop(of: id)
         let send: @Sendable () -> Void = {
             do {
-                try sendBackdrop(compositor, id, plates, state)
+                try blockingCall {
+                    try await compositor.setBackdrop(
+                        surfaceId: id, plates: plates.map(wire)
+                    )
+                }
             } catch is LavaIDL.SurfaceNotFound {
                 // Closed under us; there is nothing left to frost.
             } catch {
@@ -1189,29 +1177,6 @@ public enum LavaClient {
             }
         }
         if blocking { send() } else { backdropQueue.async(execute: send) }
-    }
-
-    private static func sendBackdrop(
-        _ compositor: Compositor, _ id: UInt32, _ plates: [Plate],
-        _ state: SurfaceBackdrop
-    ) throws {
-        if !backdropCallMissing {
-            do {
-                try blockingCall {
-                    try await compositor.setBackdrop(
-                        surfaceId: id, plates: plates.map(wire)
-                    )
-                }
-                return
-            } catch let gone as LavaIDL.SurfaceNotFound {
-                throw gone
-            } catch {
-                // Anything but a missing surface: a compositor older than the
-                // call. The older ones, from now on.
-                backdropCallMissing = true
-            }
-        }
-        try sendLegacyBackdrop(compositor, id, state)
     }
 
     private static func wire(_ plate: Plate) -> LavaIDL.BackdropPlate {
@@ -1228,39 +1193,6 @@ public enum LavaClient {
             x: plate.x, y: plate.y, w: plate.w, h: plate.h,
             cornerRadius: plate.cornerRadius, effects: effects
         )
-    }
-
-    /// The same backdrop through the calls `SetBackdrop` replaced, for a
-    /// compositor that predates it. No magnification: they cannot say it.
-    private static func sendLegacyBackdrop(
-        _ compositor: Compositor, _ id: UInt32, _ state: SurfaceBackdrop
-    ) throws {
-        let glass = state.viewGlass ?? state.glass
-        try blockingCall {
-            try await compositor.setBackdropRefraction(surfaceId: id, px: glass.refraction)
-            try await compositor.setBackdropFrost(surfaceId: id, frost: glass.frost)
-            if state.regionRadius > 0, !state.regions.isEmpty {
-                try await compositor.setBackdropGlassRegions(
-                    surfaceId: id, radius: state.regionRadius,
-                    rects: state.regions.map {
-                        LavaIDL.GlassFrostRect(
-                            x: $0.x, y: $0.y, w: $0.w, h: $0.h,
-                            cornerRadius: $0.cornerRadius,
-                            refraction: $0.refraction, frost: $0.frost
-                        )
-                    }
-                )
-            } else if state.radius > 0 {
-                try await compositor.setBackdropBlur(
-                    surfaceId: id, radius: state.radius
-                )
-            } else {
-                try await compositor.setBackdropBlurRegion(
-                    surfaceId: id, radius: 0, x: 0, y: 0, w: 0, h: 0,
-                    cornerRadius: 0
-                )
-            }
-        }
     }
 
     /// One rectangle this surface takes pointer input in, in its own
@@ -2143,9 +2075,6 @@ public enum LavaClient {
     /// The plates last sent per surface, so a frame that asks for the same
     /// backdrop costs nothing.
     nonisolated(unsafe) private static var lastBackdrop: [UInt32: [Plate]] = [:]
-    /// Set once a compositor answers `SetBackdrop` with anything but a
-    /// missing surface: it predates the call. See `sendBackdrop`.
-    nonisolated(unsafe) private static var backdropCallMissing = false
     /// Where backdrop changes asked from the frame loop are sent, in order.
     private static let backdropQueue = DispatchQueue(label: "lava.client.backdrop")
     /// Input lease for `quit()` / compositor-side close. Set in `run`.
@@ -2256,10 +2185,3 @@ public enum LavaClient {
     }
 }
 
-extension LavaIDL.GlassFrostRect {
-    /// The same rectangle for `SetBackdropBlurRegions`, which has no bend of
-    /// its own to carry.
-    var plain: LavaIDL.FrostRect {
-        LavaIDL.FrostRect(x: x, y: y, w: w, h: h, cornerRadius: cornerRadius)
-    }
-}

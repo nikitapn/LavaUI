@@ -2001,65 +2001,7 @@ class CompositorImpl final : public ICompositor_Servant {
     return host_.clipboardPng();
   }
 
-  void SetBackdropBlur(uint32_t surfaceId, float radius) override {
-    // One rect, all zeroes: the whole surface, which is this call's meaning.
-    if (!host_.setBackdropBlur(surfaceId, radius, {{}})) {
-      throw SurfaceNotFound(surfaceId);
-    }
-  }
-
-  void SetBackdropBlurRegion(uint32_t surfaceId, float radius, float x, float y,
-                             float w, float h, float cornerRadius) override {
-    if (!host_.setBackdropBlur(surfaceId, radius,
-                               {{x, y, w, h, cornerRadius}})) {
-      throw SurfaceNotFound(surfaceId);
-    }
-  }
-
-  void SetBackdropBlurRegions(
-      uint32_t surfaceId, float radius,
-      nprpc::flat::Span_ref<flat::FrostRect, flat::FrostRect_Direct> rects)
-      override {
-    std::vector<CompositorHost::FrostRect> plates;
-    plates.reserve(rects.size());
-    for (auto rect : rects) {
-      plates.push_back(
-          {rect.x(), rect.y(), rect.w(), rect.h(), rect.cornerRadius()});
-    }
-    if (!host_.setBackdropBlur(surfaceId, radius, std::move(plates))) {
-      throw SurfaceNotFound(surfaceId);
-    }
-  }
-
-  void SetBackdropGlassRegions(
-      uint32_t surfaceId, float radius,
-      nprpc::flat::Span_ref<flat::GlassFrostRect, flat::GlassFrostRect_Direct>
-          rects) override {
-    std::vector<CompositorHost::FrostRect> plates;
-    plates.reserve(rects.size());
-    for (auto rect : rects) {
-      plates.push_back({rect.x(), rect.y(), rect.w(), rect.h(),
-                        rect.cornerRadius(), rect.refraction(),
-                        rect.frost()});
-    }
-    if (!host_.setBackdropBlur(surfaceId, radius, std::move(plates))) {
-      throw SurfaceNotFound(surfaceId);
-    }
-  }
-
   void EndSession() override { host_.endSession(); }
-
-  void SetBackdropRefraction(uint32_t surfaceId, float px) override {
-    if (!host_.setBackdropRefraction(surfaceId, px)) {
-      throw SurfaceNotFound(surfaceId);
-    }
-  }
-
-  void SetBackdropFrost(uint32_t surfaceId, float frost) override {
-    if (!host_.setBackdropFrost(surfaceId, frost)) {
-      throw SurfaceNotFound(surfaceId);
-    }
-  }
 
   // ─── Session lock ────────────────────────────────────────────────────────
 
@@ -2105,10 +2047,6 @@ class CompositorImpl final : public ICompositor_Servant {
     for (auto plate : plates) {
       CompositorHost::FrostRect rect{plate.x(), plate.y(), plate.w(),
                                      plate.h(), plate.cornerRadius()};
-      // Explicit, not the older calls' "the surface's": this call is the
-      // whole truth about the plate.
-      rect.refraction = 0.f;
-      rect.rim = 0.f;
       for (auto effect : plate.effects()) {
         switch (static_cast<BackdropEffect::Kind>(effect.kind())) {
         case BackdropEffect::Kind::blur:
