@@ -48,19 +48,15 @@ struct PassView: View {
     private var toolbar: some View {
         HStack(height: .pt(48), padding: 8, alignment: .center, spacing: 8) {
             if WindowBridge.drawsOwnChrome { WindowControls(beforeClose: { session.lock() }) }
-            VaultMark(size: 24, color: Theme.current.accent)
             Text(session.isDemo ? "Vault · Demo" : "Vault", color: Theme.current.textPrimary)
             if let vault = session.snapshot {
                 Text("/  \(vault.name)", color: Theme.current.textDim, lineLimit: 1).flexShrink(1)
             }
             Spacer()
-            Button("Open…", isEnabled: !session.busy && !session.isDemo) { session.chooseVault() }
-                .agentId("open-vault")
+            iconAction("folder", "Open vault", id: "open-vault", enabled: !session.busy && !session.isDemo) { session.chooseVault() }
             if session.snapshot != nil {
-                Button("New Entry", isEnabled: session.writable && session.draft == nil) { session.newEntry() }
-                    .agentId("new-entry")
-                Button("Lock") { session.lock() }
-                    .agentId("lock-vault")
+                iconAction("plus", "New entry", id: "new-entry", enabled: session.writable && session.draft == nil) { session.newEntry() }
+                iconAction("lock", "Lock vault", id: "lock-vault") { session.lock() }
             }
         }
         .background(Theme.current.panel)
@@ -69,84 +65,127 @@ struct PassView: View {
 
     private var unlockScreen: some View {
         ScrollView(.vertical) {
-            VStack(flexGrow: 1, padding: 24, alignment: .center, spacing: 16) {
-                Spacer()
-                Text(session.creating ? "Create an encrypted vault" : "Your passwords. Your vault.", color: Theme.current.textPrimary)
-                Text("KeePass-compatible KDBX files, on your own disk", color: Theme.current.textDim)
-                VStack(padding: 0, spacing: 10) {
-                    if !session.creating && !session.recentVaults.isEmpty {
-                        HStack(padding: 0, alignment: .center, spacing: 8) {
-                            Text("Most Recent", color: Theme.current.textSecondary)
-                            Spacer()
-                            Button("Clear", isEnabled: !session.busy) { session.clearRecentVaults() }
-                        }
-                        ScrollView(.vertical, showsIndicator: false) {
-                            VStack(padding: 0, spacing: 4) {
-                                ForEach(Array(session.recentVaults.enumerated()), id: \.offset) { item in
-                                    let path = item.element
-                                    HStack(padding: 8, alignment: .center, spacing: 8,
-                                           onClick: { session.openRecentVault(path) }) {
-                                        VStack(padding: 0, spacing: 2) {
-                                            Text((path as NSString).lastPathComponent, color: Theme.current.textPrimary, lineLimit: 1)
-                                            Text((path as NSString).deletingLastPathComponent, color: Theme.current.textDim, lineLimit: 1)
-                                        }
-                                    }
-                                    .background(session.vaultPath == path ? Theme.current.selectionFill : Color.clear)
-                                    .hoverBackground(Theme.current.hover)
-                                    .cornerRadius(6)
-                                    .cursor(.pointer)
-                                    .agentId("recent-vault-\(item.offset)")
-                                }
-                            }
-                        }
-                        .frame(height: .pt(Float(min(session.recentVaults.count, 2)) * 64))
+            VStack(padding: 16, alignment: .center, spacing: 12) {
+                HStack(padding: 0, alignment: .center, spacing: 12) {
+                    VaultMark(size: 28, color: Theme.current.accent)
+                        .padding(10)
+                        .background(Theme.current.panel)
+                        .cornerRadius(12)
+                    VStack(padding: 0, spacing: 4) {
+                        Text(session.creating ? "Create an encrypted vault" : "Your passwords. Your vault.", color: Theme.current.textPrimary)
+                        Text("KeePass-compatible. Encrypted and stored on your disk.", color: Theme.current.textSecondary)
                     }
-                    Text("Vault", color: Theme.current.textSecondary)
-                    TextField(text: $session.vaultPath, placeholder: "Choose an existing .kdbx file")
-                        .agentId("vault-path")
-                    if !session.creating {
-                        HStack(padding: 0, alignment: .center, spacing: 8) {
-                            Button("Key File…", isEnabled: !session.busy && !session.isDemo) { session.chooseKeyFile() }
-                            Text(session.keyFilePath.isEmpty ? "Optional" : (session.keyFilePath as NSString).lastPathComponent,
-                                 color: Theme.current.textDim, lineLimit: 1).flexShrink(1)
-                            if !session.keyFilePath.isEmpty {
-                                Button("Clear", isEnabled: !session.busy) { session.keyFilePath = "" }
-                            }
-                        }
-                    }
-                    Text("Master password", color: Theme.current.textSecondary)
-                    TextField(text: $session.masterPassword, placeholder: "Master password", secure: true,
-                              onSubmit: { session.unlock() })
-                        .agentId("master-password")
-                    if session.creating {
-                        TextField(text: $session.confirmation, placeholder: "Confirm master password", secure: true,
-                                  onSubmit: { session.unlock() })
-                            .agentId("master-confirmation")
-                    }
-                    Toggle("Remember master password in desktop keyring", isOn: $session.rememberMaster, isEnabled: !session.isDemo && !session.busy)
-                    HStack(padding: 0, alignment: .center, spacing: 8) {
-                        Button("New Vault…", isEnabled: !session.busy && !session.isDemo) { session.newVault() }
-                        Spacer()
-                        if !session.creating {
-                            Button("Use Keyring", isEnabled: !session.busy && !session.vaultPath.isEmpty && !session.isDemo) {
-                                session.unlock(fromKeyring: true)
-                            }
-                            .agentId("keyring-unlock")
-                        }
-                        Button(session.creating ? "Create Vault" : "Unlock", isEnabled: !session.busy && !session.vaultPath.isEmpty) {
-                            session.unlock()
-                        }
-                        .agentId("unlock-vault")
-                    }
-                    if !session.creating && !session.vaultPath.isEmpty {
-                        Button("Forget Remembered Password", isEnabled: !session.busy && !session.isDemo) { session.forgetMaster() }
-                    }
+                    Spacer()
                 }
-                .frame(width: .pt(550))
-                Spacer()
+                .frame(width: .pt(840))
+                HStack(padding: 0, alignment: .start, spacing: 20) {
+                    if !session.creating && !session.recentVaults.isEmpty {
+                        recentVaults
+                            .frame(width: .pt(270))
+                    }
+                    unlockForm
+                        .frame(width: .pt(550))
+                }
                 Text("Locks after 5 minutes of inactivity. Copied passwords clear after 30 seconds.", color: Theme.current.textDim)
             }
         }
+    }
+
+    private var recentVaults: some View {
+        VStack(padding: 0, spacing: 8) {
+            HStack(padding: 0, alignment: .center, spacing: 8) {
+                Text("Recent vaults", color: Theme.current.textSecondary)
+                Spacer()
+                iconAction("trash", "Clear recent vaults", id: "clear-recent-vaults", enabled: !session.busy) { session.clearRecentVaults() }
+            }
+            ScrollView(.vertical, showsIndicator: false) {
+                VStack(padding: 0, spacing: 4) {
+                    ForEach(Array(session.recentVaults.enumerated()), id: \.offset) { item in
+                        let path = item.element
+                        HStack(padding: 8, alignment: .center, spacing: 8,
+                               onClick: { if !session.busy { session.openRecentVault(path) } }) {
+                            VaultMark(size: 24, color: Theme.current.accent)
+                            VStack(padding: 0, spacing: 2) {
+                                Text((path as NSString).lastPathComponent, color: Theme.current.textPrimary, lineLimit: 1)
+                                Text((path as NSString).deletingLastPathComponent, color: Theme.current.textSecondary, lineLimit: 1)
+                            }
+                        }
+                        .background(session.vaultPath == path ? Theme.current.selectionFill : Color.clear)
+                        .hoverBackground(Theme.current.hover)
+                        .cornerRadius(6)
+                        .cursor(.pointer)
+                        .agentId("recent-vault-\(item.offset)")
+                    }
+                }
+            }
+            .frame(height: .pt(300))
+        }
+    }
+
+    private var unlockForm: some View {
+        VStack(padding: 14, spacing: 8) {
+            Text(session.creating ? "New vault" : "Unlock your vault", color: Theme.current.textPrimary)
+            Text("Vault file", color: Theme.current.textSecondary)
+            TextField(text: $session.vaultPath, placeholder: "Choose an existing .kdbx file")
+                .agentId("vault-path")
+            if !session.creating {
+                HStack(padding: 0, alignment: .center, spacing: 8) {
+                    iconAction("key", "Choose key file", id: "choose-key-file", label: "Key file", enabled: !session.busy && !session.isDemo) { session.chooseKeyFile() }
+                    Text(session.keyFilePath.isEmpty ? "Optional" : (session.keyFilePath as NSString).lastPathComponent,
+                         color: Theme.current.textDim, lineLimit: 1).flexShrink(1)
+                    if !session.keyFilePath.isEmpty {
+                        iconAction("trash", "Remove key file", id: "remove-key-file", enabled: !session.busy) { session.keyFilePath = "" }
+                    }
+                }
+            }
+            Text("Master password", color: Theme.current.textSecondary)
+            TextField(text: $session.masterPassword, placeholder: "Master password", secure: true,
+                      onSubmit: { session.unlock() })
+                .agentId("master-password")
+            if session.creating {
+                TextField(text: $session.confirmation, placeholder: "Confirm master password", secure: true,
+                          onSubmit: { session.unlock() })
+                    .agentId("master-confirmation")
+            }
+            Toggle("Remember master password in desktop keyring", isOn: $session.rememberMaster, isEnabled: !session.isDemo && !session.busy)
+            HStack(padding: 0, alignment: .center, spacing: 8) {
+                iconAction("plus", "Create a new vault", id: "create-vault", enabled: !session.busy && !session.isDemo) { session.newVault() }
+                Spacer()
+                if !session.creating {
+                    iconAction("key", "Unlock with desktop keyring", id: "keyring-unlock", label: "Use keyring", enabled: !session.busy && !session.vaultPath.isEmpty && !session.isDemo) {
+                        session.unlock(fromKeyring: true)
+                    }
+                }
+                iconAction("lock", session.creating ? "Create vault" : "Unlock vault", id: "unlock-vault", label: session.creating ? "Create vault" : "Unlock", primary: true, enabled: !session.busy && !session.vaultPath.isEmpty) {
+                    session.unlock()
+                }
+            }
+            if !session.creating && !session.vaultPath.isEmpty {
+                HStack(padding: 0, alignment: .center, spacing: 8) {
+                    Text("Desktop keyring", color: Theme.current.textSecondary)
+                    Spacer()
+                    iconAction("trash", "Forget remembered password", id: "forget-password", enabled: !session.busy && !session.isDemo) { session.forgetMaster() }
+                }
+            }
+        }
+        .background(Theme.current.panel)
+        .cornerRadius(12)
+    }
+
+    private func iconAction(_ icon: String, _ title: String, id: String,
+                            label: String? = nil, primary: Bool = false,
+                            enabled: Bool = true, action: @escaping () -> Void) -> some View {
+        HStack(padding: 10, alignment: .center, spacing: 8,
+               onClick: { if enabled { action() } }) {
+            PassIcon(symbol: icon, color: enabled ? (primary ? .white : Theme.current.textPrimary) : Theme.current.textDim)
+            if let label { Text(label, color: enabled ? (primary ? .white : Theme.current.textPrimary) : Theme.current.textDim) }
+        }
+        .background(primary && enabled ? Color(r: 0.20, g: 0.38, b: 0.72) : Color.clear)
+        .hoverBackground(enabled ? (primary ? Color(r: 0.25, g: 0.45, b: 0.80) : Theme.current.hover) : Color.clear)
+        .cornerRadius(7)
+        .cursor(enabled ? .pointer : .arrow)
+        .tooltip(title)
+        .agentId(id)
     }
 
     private func sidebar(_ vault: VaultSnapshot) -> some View {
@@ -410,6 +449,36 @@ private struct VaultMark: View {
             list.circle(cx: frame.x + 12 * u, cy: frame.y + 15 * u, radius: 1.5 * u, color: color)
             list.line(x1: frame.x + 12 * u, y1: frame.y + 15 * u,
                       x2: frame.x + 12 * u, y2: frame.y + 18 * u, color: color, width: 1.5 * u)
+        }
+    }
+}
+
+/// Small vector marks that stay sharp at the window's scale.
+private struct PassIcon: View {
+    let symbol: String
+    let color: Color
+    var body: some View {
+        Canvas(label: symbol, width: .pt(18), height: .pt(18)) { list, f in
+            func line(_ x: Float, _ y: Float, _ x2: Float, _ y2: Float) {
+                list.line(x1: f.x + x, y1: f.y + y, x2: f.x + x2, y2: f.y + y2, color: color, width: 1.5)
+            }
+            switch symbol {
+            case "plus":
+                line(9, 3, 9, 15); line(3, 9, 15, 9)
+            case "folder":
+                line(2, 5, 2, 15); line(2, 15, 16, 15); line(16, 15, 16, 6)
+                line(16, 6, 8, 6); line(8, 6, 6, 3); line(6, 3, 2, 3); line(2, 3, 2, 5)
+            case "trash":
+                line(3, 5, 15, 5); line(7, 2, 11, 2); line(5, 5, 6, 16)
+                line(6, 16, 12, 16); line(12, 16, 13, 5); line(8, 8, 8, 13); line(10, 8, 10, 13)
+            case "key":
+                list.strokedRect(x: f.x + 2, y: f.y + 2, w: 7, h: 7, color: color, radius: 3.5, width: 1.5)
+                line(8, 8, 15, 15); line(12, 12, 14, 10); line(14, 14, 16, 12)
+            default:
+                list.strokedRect(x: f.x + 3, y: f.y + 8, w: 12, h: 8, color: color, radius: 2, width: 1.5)
+                line(5, 8, 5, 3); line(5, 3, 13, 3); line(13, 3, 13, 8)
+                line(9, 11, 9, 13)
+            }
         }
     }
 }

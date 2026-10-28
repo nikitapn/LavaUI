@@ -11,7 +11,7 @@ struct LavaPassApp {
         if !demo { unsetenv("LAVA_AGENT_PORT") }
         AppSettings.configure(appName: demo ? "LavaPassDemo" : "LavaPass")
         Theme.current = .nebula
-        guard let editor = LavaHost.open(title: "LavaPass", width: 1120, height: 720) else { return }
+        guard let editor = LavaHost.open(title: "LavaPass", width: 960, height: 620) else { return }
         LavaHost.setMinimumSize(editor: editor, width: 900, height: 560)
         let path = CommandLine.arguments.dropFirst().first { !$0.hasPrefix("-") }
         let session = PassSession(path: path, demo: demo)
