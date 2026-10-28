@@ -171,14 +171,31 @@ private struct Rows: View {
         // being swapped for the message. Swapped out and back in, its rows
         // came back laid out but never drawn.
         let shown = min(rows.count, FindStyle.visibleRows)
+        // The field above keeps the keyboard and moves `model.selected`
+        // (`handleKey`); the list only follows it, and the pointer.
+        //
+        // Keyed by path, not `Hit.id`: a recent file outside the indexed
+        // folders has no index row, so its id is 0 — and every such row
+        // matched the selection and was drawn selected.
+        let selection = Binding<String?>(
+            get: { rows.indices.contains(model.selected) ? rows[model.selected].path : nil },
+            set: { path in
+                if let index = rows.firstIndex(where: { $0.path == path }) {
+                    model.selected = index
+                }
+            }
+        )
         VStack(spacing: 0) {
             if let message { Message(message) }
-            ScrollView(indicatorInset: 6) {
-                VStack(padding: 6, spacing: 2) {
-                    ForEach(Array(rows.enumerated()), id: \.element.id) { item in
-                        Row(hit: item.element, index: item.offset)
-                    }
-                }
+            List(
+                rows, id: \.path, selection: selection,
+                rowHeight: FindStyle.rowHeight, spacing: 2, padding: 6,
+                rowInsets: EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 14),
+                behavior: .results, selectionFill: FindStyle.raised, cornerRadius: 8,
+                indicatorInset: 6,
+                onActivate: { model.open($0) }
+            ) { hit, selected in
+                Row(hit: hit, isSelected: selected)
             }
             .frame(height: .pt(shown == 0 ? 0 : Float(shown) * (FindStyle.rowHeight + 2) + 12))
         }
@@ -195,12 +212,12 @@ private struct Message: View {
     }
 }
 
+/// One result's contents. The fill, the hover and the click are the list's.
 private struct Row: View {
     let hit: Hit
-    let index: Int
+    let isSelected: Bool
 
     var body: some View {
-        let isSelected = model.selected == index
         let isDirectory = hit.kind == .directory
         let (name, folder) = FindFormat.split(hit.path, home: NSHomeDirectory())
         // Only a search highlights: a recent item matched nothing.
@@ -208,11 +225,7 @@ private struct Row: View {
             ? FindFormat.highlight(name, start: hit.matchStart, length: hit.matchLength)
             : (before: name, match: "", after: "")
 
-        return HStack(
-            height: .pt(FindStyle.rowHeight), padding: 0, alignment: .center, spacing: 14,
-            onClick: { model.open(hit) },
-            onHover: { inside in if inside { model.selected = index } }
-        ) {
+        return HStack(alignment: .center, spacing: 14) {
             Badge(text: FindFormat.badge(ext: hit.ext, isDirectory: isDirectory))
             VStack(spacing: 4) {
                 HighlightedName(parts: parts)
@@ -229,10 +242,7 @@ private struct Row: View {
             Text("Open ↵", color: isSelected ? FindStyle.accent : .clear,
                  font: FindFonts.mono, lineLimit: 1)
         }
-        .padding(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 14))
-        .background(isSelected ? FindStyle.raised : .clear)
-        .cornerRadius(8)
-        .scrollIntoView(when: isSelected)
+        .flexGrow(1)
     }
 }
 
