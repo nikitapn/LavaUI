@@ -452,7 +452,8 @@ var targets: [Target] = [
     .target(
         name: "LavaHost",
         dependencies: ["LavaUI"]
-            + (haveNprpc ? [Target.Dependency("LavaClient")] : []),
+            + (haveNprpc ? [Target.Dependency("LavaClient"),
+                           .product(name: "NPRPC", package: "nprpc_swift")] : []),
         swiftSettings: interopCxx + (haveNprpc ? [.define("LAVA_HAS_CLIENT")] : [])
     ),
     .executableTarget(

@@ -2,6 +2,7 @@ import Foundation
 import LavaUI
 #if LAVA_HAS_CLIENT
 import LavaClient
+import NPRPC
 #endif
 
 /// Selects the process that hosts a LavaUI app from the runtime environment.
@@ -9,6 +10,12 @@ import LavaClient
 /// This stays above LavaUI so the framework does not acquire NPRPC or a
 /// compositor dependency merely to support application entry points.
 public enum LavaHost {
+    #if LAVA_HAS_CLIENT
+    /// Borrow after `open` in client mode. The host owns this runtime;
+    /// application RPCs share its transport and already-running worker pool.
+    public static var rpcRuntime: Rpc? { LavaClient.rpcRuntime }
+    #endif
+
     /// Whether `LAVA_CLIENT=1` is set, which makes `open` go through the compositor.
     public static var isClient: Bool {
         ProcessInfo.processInfo.environment["LAVA_CLIENT"] == "1"

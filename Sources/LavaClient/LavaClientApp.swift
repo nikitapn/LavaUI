@@ -2168,6 +2168,11 @@ public enum LavaClient {
     /// Set by `openMenuSurface`; nil for anything else. The size is the arena
     /// the menus are drawn into, not a menu's size.
     nonisolated(unsafe) private static var menuSurface: (width: Float, height: Float)?
+    /// The running control-plane runtime, available after `open` or `connect`.
+    /// Borrow it for application RPCs; LavaClient owns its worker pool and
+    /// lifetime. Callers must not stop it or initialize a second runtime.
+    public static var rpcRuntime: Rpc? { runtime }
+
     /// The `Rpc` owns the transport — the shared-memory listener, its ring
     /// buffers, the worker threads — and dropping it tears all of that down.
     ///
