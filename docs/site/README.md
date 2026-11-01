@@ -27,8 +27,11 @@ why.
 | `docs/site/guides/*.md` | the guides |
 
 It finds npdoc and npidl in the nprpc checkout (`third-party/nprpc` or
-`../nprpc`); `NPDOC=` and `NPIDL=` override that. npdoc exists only where
-nprpc's CMake found libclang, md4c and Boost.ProgramOptions.
+`../nprpc`); `NPDOC=` and `NPIDL=` override that. For npdoc it prefers
+`NPRPC_BUILD_DIR`, then `.build_relwith_debinfo`, `.build_release` and
+`.build_lava_shm`. It does not select the newest `.build*` executable, which
+could be an ASan/TSan build. npdoc exists only where nprpc's CMake found
+libclang, md4c and Boost.ProgramOptions.
 
 The API pages are only as good as the `///` comments in the source. The home
 page shows how many declarations each module documents.
@@ -109,6 +112,30 @@ link to it.
 | `DOCS_HTTP3` | unset; `1` also serves HTTP/3 (needs TLS) |
 | `DOCS_SHM_CHANNEL` | unset; a name takes HTTP/3 through npquicrouter's shared-memory rings `/nprpc_<name>_c2s` / `_s2c` instead of loopback UDP. The deploy script sets it (`--shm-channel`, `--no-shm`) and mounts the router's directory as `/dev/shm` |
 | `DOCS_TEMPLATE_RELOAD` | unset; `1` re-reads templates and articles per request |
+| `DOCS_TELEMETRY_CLIENTS` | unset; a PEM of trusted client certificates enables NPRPC Monitor telemetry (requires TLS) |
+| `DOCS_TELEMETRY_PORT` | `8446`; native QUIC UDP port for telemetry |
+
+## Telemetry
+
+Pass `--telemetry-clients <pem>` to the deploy script to enable NPRPC Monitor
+telemetry. It installs only the trusted client certificates on the VPS and
+mounts them read-only; keep the monitor's private key on your own machine.
+The existing Monitor identity used for `mysite` and nscalc can be reused:
+
+```sh
+docs/site/deploy/deploy.sh --ssh debian@nikitapn.com \
+  --telemetry-clients ~/.config/nprpc-monitor/mysite-client.crt
+```
+
+Telemetry connects directly on public UDP **8446**, separate from HTTP/3 and
+the other sites' telemetry ports. Override with `--telemetry-port <port>` and
+allow that UDP port through the host firewall. The listener uses the HTTPS
+server certificate and admits only clients trusted by the PEM file. The
+deploy rejects certificate files containing a private key.
+
+The container logs `telemetry: <object-reference>` at startup. Paste it into
+NPRPC Monitor and select your client certificate and key. A later deploy
+without `--telemetry-clients` disables telemetry.
 
 ## Deploying
 

@@ -27,12 +27,31 @@ MODULES=(LavaUI LavaHost LavaClient LavaText LavaMenu)
 NPRPC_ROOT_DIR="$(lava_find_nprpc_root || true)"
 [[ -n $NPRPC_ROOT_DIR ]] || lava_die "nprpc not found (third-party/nprpc or ../nprpc); see scripts/fetch-nprpc.sh"
 
-# npdoc is built only where nprpc's CMake found libclang, md4c and Boost, so it
-# is not necessarily in the build dir npidl comes from: take the newest.
+# npdoc may not be in npidl's build. Prefer the configured build, then normal
+# release builds; choosing by mtime can accidentally pick an ASan/TSan tool.
 if [[ -z ${NPDOC:-} ]]; then
-  NPDOC="$(ls -t "$NPRPC_ROOT_DIR"/.build*/npdoc/npdoc 2>/dev/null | head -n1 || true)"
+  candidates=()
+  if [[ -n ${NPRPC_BUILD_DIR:-} ]]; then
+    case "$NPRPC_BUILD_DIR" in
+      /*) candidates+=("$NPRPC_BUILD_DIR/npdoc/npdoc") ;;
+      *) candidates+=("$NPRPC_ROOT_DIR/$NPRPC_BUILD_DIR/npdoc/npdoc") ;;
+    esac
+  fi
+  candidates+=(
+    "$NPRPC_ROOT_DIR/.build_relwith_debinfo/npdoc/npdoc"
+    "$NPRPC_ROOT_DIR/.build_release/npdoc/npdoc"
+    "$NPRPC_ROOT_DIR/.build_lava_shm/npdoc/npdoc"
+  )
+  for candidate in "${candidates[@]}"; do
+    if [[ -x $candidate ]]; then
+      NPDOC="$candidate"
+      break
+    fi
+  done
 fi
-[[ -x ${NPDOC:-} ]] || lava_die "npdoc not found under $NPRPC_ROOT_DIR/.build*/npdoc/; build it there (cmake --build <dir> --target npdoc) or set NPDOC="
+[[ -x ${NPDOC:-} ]] || lava_die "npdoc not found in a normal NPRPC build; build it (cmake --build <dir> --target npdoc) or set NPDOC="
+"$NPDOC" --help >/dev/null \
+  || lava_die "npdoc could not run: $NPDOC; select a non-sanitized build with NPDOC="
 
 NPIDL="$(lava_find_npidl || true)"
 [[ -x ${NPIDL:-} ]] || lava_die "npidl not found; build nprpc (scripts/build-nprpc.sh) or set NPIDL="
