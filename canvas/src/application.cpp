@@ -1,5 +1,6 @@
 
 #include <chrono>
+#include <cmath>
 #include <format>
 #include <algorithm>
 #include <optional>
@@ -322,20 +323,28 @@ struct Application::Impl
   /// atlas, the texture cache — already exists and is not paid for again. A
   /// second surface costs its own attachments, its own sync objects and its
   /// own exported image, which is exactly what a second window should cost.
-  uint32_t openExportedWindow(uint32_t w, uint32_t h)
+  uint32_t openExportedWindow(uint32_t w, uint32_t h, float scale)
   {
     if (!deviceUp) {
       std::cerr << "openExportedWindow: no device — call initExported first\n";
       return 0;
     }
+    if (!(scale > 0.f)) scale = 1.f;
     try {
-      auto image = takeExportImage(exportCapacity(w), exportCapacity(h));
+      auto image = takeExportImage(exportCapacity(devicePixels(w, scale)),
+                                   exportCapacity(devicePixels(h, scale)));
       if (!image) return 0;
 
       const uint32_t id = nextWindowId++;
       auto window = std::make_unique<AppWindow>(
         device, id, static_cast<int>(w), static_cast<int>(h));
       bringUpWindow(*window);
+      if (scale != 1.f) {
+        // Before the export target is set, which checks the image against the
+        // framebuffer: the image above was sized for the scaled one.
+        window->renderWindow().resizeTo(w, h, scale);
+        window->queueScale(scale);
+      }
       // Composited by whoever imports the buffer, so the frame clears to
       // nothing rather than to black — see `RenderWindow::setTransparent`.
       window->renderWindow().setTransparent(true);
@@ -365,27 +374,35 @@ struct Application::Impl
   ///
   /// The client is told separately, by whoever owns the window, with a
   /// `Resize`. It has to re-lay-out before its next frame means anything.
-  bool resizeExportedWindow(uint32_t windowId, uint32_t w, uint32_t h)
+  bool resizeExportedWindow(uint32_t windowId, uint32_t w, uint32_t h,
+                            float scale)
   {
     AppWindow *window = win(windowId);
     if (window == nullptr || !window->hasRenderer()) return false;
     auto it = exportImages.find(windowId);
     if (it == exportImages.end()) return false;
+    if (!(scale > 0.f)) scale = 1.f;
+    const bool scaleChanged = scale != window->renderWindow().deviceScale();
+    // The buffer holds the framebuffer, which is the layout size times the
+    // scale; `w`/`h` stay the layout size for everything the client hears.
+    const uint32_t bufferW = devicePixels(w, scale);
+    const uint32_t bufferH = devicePixels(h, scale);
 
     // Allocated before anything is torn down, so a failure here leaves the
     // window exactly as it was rather than half resized with nowhere to draw.
     std::unique_ptr<canvas::DmabufImage> replacement;
-    if (it->second == nullptr || it->second->width() < w ||
-        it->second->height() < h) {
-      replacement = takeExportImage(exportCapacity(w), exportCapacity(h));
+    if (it->second == nullptr || it->second->width() < bufferW ||
+        it->second->height() < bufferH) {
+      replacement =
+        takeExportImage(exportCapacity(bufferW), exportCapacity(bufferH));
       if (!replacement) {
-        std::cerr << "resizeExportedWindow: could not export " << w << "x" << h
-                  << '\n';
+        std::cerr << "resizeExportedWindow: could not export " << bufferW
+                  << "x" << bufferH << '\n';
         return false;
       }
     }
 
-    if (!window->renderWindow().resizeTo(w, h)) return false;
+    if (!window->renderWindow().resizeTo(w, h, scale)) return false;
 
     if (replacement) {
       // The old image is let go only after the window points at the new one,
@@ -404,8 +421,21 @@ struct Application::Impl
     // The producer has no surface to measure and learns its size only by being
     // told. Queued here rather than by the caller so no exported resize can
     // happen without the client hearing about it.
+    // The scale goes first, so a client that re-lays-out on the resize
+    // already knows what it is laying out for.
+    if (scaleChanged) window->queueScale(scale);
     window->queueResize(static_cast<float>(w), static_cast<float>(h));
     return true;
+  }
+
+  /// `layout` layout pixels at `scale`, as `RenderWindow::resizeTo` rounds
+  /// them — the two have to agree, or a buffer is sized for a framebuffer
+  /// a pixel smaller than the one drawn into it.
+  static uint32_t devicePixels(uint32_t layout, float scale)
+  {
+    return std::max<uint32_t>(
+      1, static_cast<uint32_t>(
+           std::lround(static_cast<double>(layout) * scale)));
   }
 
   /// See `RenderWindow::takeFrameFence`. -1 for a window that has no renderer
@@ -717,15 +747,16 @@ canvas::VoidResult Application::initExported(
   return impl_->initExported(assetsRoot, drmFd, consumerFormats, sampleCap);
 }
 
-uint32_t Application::openExportedWindow(uint32_t width, uint32_t height)
+uint32_t Application::openExportedWindow(uint32_t width, uint32_t height,
+                                         float scale)
 {
-  return impl_->openExportedWindow(width, height);
+  return impl_->openExportedWindow(width, height, scale);
 }
 
 bool Application::resizeExportedWindow(uint32_t windowId, uint32_t width,
-                                       uint32_t height)
+                                       uint32_t height, float scale)
 {
-  return impl_->resizeExportedWindow(windowId, width, height);
+  return impl_->resizeExportedWindow(windowId, width, height, scale);
 }
 
 void Application::setExportFenceHonoured(bool honoured)

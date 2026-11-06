@@ -217,7 +217,20 @@ class RenderWindow {
   /// draw into an image it no longer matches. The caller sets one again
   /// afterwards, which is usually the *same* image at a size the window now
   /// fills less of; see `Application::resizeExportedWindow`.
-  bool resizeTo(uint32_t width, uint32_t height);
+  ///
+  /// `scale` is the output scale of the screen the window is on. `width` and
+  /// `height` stay in layout pixels — what the producer lays out against,
+  /// what input arrives in, what hit-testing and damage reason about — and
+  /// the framebuffer is that times `scale`, rounded. 1 is a framebuffer the
+  /// size of the layout, which is what every window was before HiDPI.
+  bool resizeTo(uint32_t width, uint32_t height, float scale = 1.f);
+
+  /// The size the producer lays out against, in layout pixels. Equal to
+  /// `getExtent()` unless the window has an output scale — see `resizeTo`.
+  const VkExtent2D &logicalExtent() const { return logical_; }
+
+  /// Framebuffer pixels per layout pixel; see `resizeTo`.
+  float deviceScale() const { return scale_; }
 
   // ─── Window ──────────────────────────────────────────────────────────────
 
@@ -726,6 +739,11 @@ class RenderWindow {
 
   /// Scene render target. Sized to the window, format fixed by the device.
   VkExtent2D extent_{};
+  /// The same window in layout pixels, and the ratio between the two. Only an
+  /// exported window can have them differ — see `resizeTo`; a windowed one
+  /// keeps them equal, because GLFW already reports its framebuffer size.
+  VkExtent2D logical_{};
+  float      scale_ = 1.f;
 
   // MSAA color attachment.
   VkImage       colorImage_      = VK_NULL_HANDLE;

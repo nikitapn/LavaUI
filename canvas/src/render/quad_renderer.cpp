@@ -1654,10 +1654,14 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
   // still says the window is the window, so NDC is unchanged and every quad
   // lands where it would have — just onto fewer pixels.
   const float targetScale = intoSceneTarget ? sceneTargetScale_ : 1.f;
+  // The output scale goes in the same way, and for the same reason: the push
+  // constant is the layout size, the viewport is the framebuffer's.
+  const float sx = deviceScaleX_ * targetScale;
+  const float sy = deviceScaleY_ * targetScale;
   VkViewport viewport{
     .x = 0.0f, .y = 0.0f,
-    .width = viewportSize_.x * targetScale,
-    .height = viewportSize_.y * targetScale,
+    .width = viewportSize_.x * sx,
+    .height = viewportSize_.y * sy,
     .minDepth = 0.0f, .maxDepth = 1.0f,
   };
   vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
@@ -1691,14 +1695,16 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
 
   // Scissors are recorded in window pixels and the target may be smaller.
   // Outward-rounded, so a clip never eats a pixel the unscaled draw kept.
+  // So is the output scale, which is where most of a HiDPI frame's scissors
+  // grow rather than shrink.
   auto toTarget = [&](VkRect2D s) -> VkRect2D {
-    if (targetScale == 1.f) return s;
-    const int32_t x0 = static_cast<int32_t>(std::floor(float(s.offset.x) * targetScale));
-    const int32_t y0 = static_cast<int32_t>(std::floor(float(s.offset.y) * targetScale));
+    if (sx == 1.f && sy == 1.f) return s;
+    const int32_t x0 = static_cast<int32_t>(std::floor(float(s.offset.x) * sx));
+    const int32_t y0 = static_cast<int32_t>(std::floor(float(s.offset.y) * sy));
     const int32_t x1 = static_cast<int32_t>(
-      std::ceil(float(s.offset.x + int32_t(s.extent.width)) * targetScale));
+      std::ceil(float(s.offset.x + int32_t(s.extent.width)) * sx));
     const int32_t y1 = static_cast<int32_t>(
-      std::ceil(float(s.offset.y + int32_t(s.extent.height)) * targetScale));
+      std::ceil(float(s.offset.y + int32_t(s.extent.height)) * sy));
     return VkRect2D{{x0, y0},
                     {static_cast<uint32_t>(std::max(0, x1 - x0)),
                      static_cast<uint32_t>(std::max(0, y1 - y0))}};

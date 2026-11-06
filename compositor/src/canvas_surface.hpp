@@ -83,8 +83,13 @@ class CanvasRenderer {
   CanvasRenderer &operator=(const CanvasRenderer &) = delete;
 
   /// Opens a surface. Null if the device could not export one that size.
+  ///
+  /// `width`/`height` are layout pixels — what the scene places and what input
+  /// arrives in — and `scale` the output scale it will be shown at; the buffer
+  /// is their product. See `CanvasSurface::setScale`.
   std::unique_ptr<CanvasSurface> createSurface(uint32_t width,
-                                               uint32_t height);
+                                               uint32_t height,
+                                               float scale = 1.f);
 
   /// Loads a face into the shared glyph atlas and returns the id a client's
   /// `GlyphInstance`s must carry, or -1.
@@ -219,7 +224,8 @@ class CanvasRenderer {
 class CanvasSurface {
  public:
   CanvasSurface(CanvasRenderer &renderer, uint32_t windowId,
-                DmabufBuffer *buffer, uint32_t width, uint32_t height);
+                DmabufBuffer *buffer, uint32_t width, uint32_t height,
+                float scale = 1.f);
   ~CanvasSurface();
 
   CanvasSurface(const CanvasSurface &)            = delete;
@@ -256,6 +262,25 @@ class CanvasSurface {
   /// buffer keeps it — see `Application::resizeExportedWindow`. False if
   /// nothing changed.
   bool resize(uint32_t width, uint32_t height);
+
+  /// Draws at `scale` framebuffer pixels per layout pixel from now on: the
+  /// output scale of the screen the surface is on.
+  ///
+  /// Without it a surface on a scaled output is drawn at layout size and
+  /// stretched by the scene — every edge resampled, text blurred, and a
+  /// one-pixel rim of transparency bled into the last row of anything with a
+  /// transparent neighbour. With it the scene shows the buffer 1:1. Same
+  /// contract as `resize`: the buffer may be a new one, and the caller hands
+  /// it to the scene again. The client hears a `Scale` event. False if
+  /// nothing changed.
+  bool setScale(float scale);
+  float scale() const { return scale_; }
+
+  /// The part of `buffer()` the frame occupies, in buffer pixels: the layout
+  /// size times `scale()`, rounded the way canvas rounds it. What a scene
+  /// node's *source* box is; `width()`/`height()` is its destination.
+  uint32_t bufferWidth() const;
+  uint32_t bufferHeight() const;
 
   /// Draws a list built here rather than one published by a client.
   ///
@@ -416,8 +441,8 @@ class CanvasSurface {
   /// See `DrawCommandKind::OpaqueBounds`.
   bool opaqueBounds(float &x, float &y, float &w, float &h) const;
 
-  /// What changed in this surface's buffer since the last call, in surface
-  /// pixels, or false for all of it. Draining: each change is reported once,
+  /// What changed in this surface's buffer since the last call, in *buffer*
+  /// pixels — see `bufferWidth` — or false for all of it. Draining: each change is reported once,
   /// so the caller has to hand every answer to the scene.
   /// See `Engine::takeFrameDamage`.
   bool takeDamage(std::vector<canvas::DamageRect> &out);
@@ -433,6 +458,11 @@ class CanvasSurface {
                         float refractPx, float frost, float rim,
                         float magnification);
 
+  /// The second half of `resize` and `setScale`, once canvas has resized:
+  /// picks up the window's image, which is a new one only if it outgrew the
+  /// old, and records the new layout size.
+  bool adoptImage(uint32_t width, uint32_t height);
+
   /// Writes the resolve target to `$LAVA_CANVAS_DUMP` if it is set.
   void dumpIfRequested();
 
@@ -446,6 +476,7 @@ class CanvasSurface {
   DmabufBuffer   *buffer_   = nullptr;
   uint32_t        width_    = 0;
   uint32_t        height_   = 0;
+  float           scale_    = 1.f;
   /// Frames drawn as of the last `renderFromArena`, so a poll that found
   /// nothing published can be told from one that drew.
   uint64_t drawn_ = 0;

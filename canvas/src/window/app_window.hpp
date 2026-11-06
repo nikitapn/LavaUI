@@ -133,6 +133,9 @@ class AppWindow {
   /// takes an event arriving *at* a client and turns a `Resize` into
   /// `setClientSize`, which a window with a renderer ignores.
   void queueResize(float width, float height);
+  /// Queues a `Scale` event: the output scale this window is now drawn at.
+  /// Coalesced like `queueResize`.
+  void queueScale(float scale);
 
   /// Takes the next published frame, if the producer has published one, and
   /// says whether it did. Draws nothing.

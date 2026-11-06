@@ -309,6 +309,21 @@ void AppWindow::queueResize(float width, float height)
   inputEvents_.push_back(ev);
 }
 
+void AppWindow::queueScale(float scale)
+{
+  canvas::InputEvent ev;
+  ev.kind = static_cast<uint32_t>(canvas::InputEventKind::Scale);
+  ev.x    = scale;
+  std::lock_guard lock(inputMu_);
+  for (auto &queued : inputEvents_) {
+    if (queued.kind == ev.kind) {
+      queued = ev;
+      return;
+    }
+  }
+  inputEvents_.push_back(ev);
+}
+
 bool AppWindow::pollDrawArena()
 {
   if (!arena_) return false;

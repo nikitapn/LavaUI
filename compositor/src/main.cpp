@@ -2369,6 +2369,12 @@ struct ClientSurface {
 /// Returns the extents of what was damaged, in surface pixels — empty when
 /// nothing changed — for anyone who cares whether *these* pixels moved, which
 /// is what the frost behind other windows wants to know.
+///
+/// On a scaled output the buffer is bigger than the window by the output's
+/// scale (`CanvasSurface::setScale`): the source box and the damage are in
+/// buffer pixels, the destination size and the opaque region in layout
+/// pixels, and the scene does the conversion between them — 1:1, because the
+/// output it is drawn on has exactly that scale.
 wlr_box show_surface(wlr_scene_buffer *node, lava::CanvasSurface &surface) {
   if (node == nullptr) return {};
   const lava::CanvasSurface::FrameFence fence = surface.frameFence();
@@ -2382,6 +2388,7 @@ wlr_box show_surface(wlr_scene_buffer *node, lava::CanvasSurface &surface) {
   pixman_region32_init(&damage);
   wlr_box extents{0, 0, static_cast<int>(surface.width()),
                   static_cast<int>(surface.height())};
+  const float scale = surface.scale();
   if (partial) {
     for (const canvas::DamageRect &r : rects) {
       pixman_region32_union_rect(&damage, &damage, r.x, r.y,
@@ -2389,9 +2396,13 @@ wlr_box show_surface(wlr_scene_buffer *node, lava::CanvasSurface &surface) {
                                  static_cast<unsigned>(r.height));
     }
     const pixman_box32_t *box = pixman_region32_extents(&damage);
+    // Back to surface pixels, outward, for the caller.
+    const int x0 = static_cast<int>(std::floor(box->x1 / scale));
+    const int y0 = static_cast<int>(std::floor(box->y1 / scale));
+    const int x1 = static_cast<int>(std::ceil(box->x2 / scale));
+    const int y1 = static_cast<int>(std::ceil(box->y2 / scale));
     extents = pixman_region32_not_empty(&damage)
-                  ? wlr_box{box->x1, box->y1, box->x2 - box->x1,
-                            box->y2 - box->y1}
+                  ? wlr_box{x0, y0, x1 - x0, y1 - y0}
                   : wlr_box{};
   }
   const wlr_scene_buffer_set_buffer_options options{
@@ -2405,8 +2416,8 @@ wlr_box show_surface(wlr_scene_buffer *node, lava::CanvasSurface &surface) {
   const wlr_fbox source{
       .x = 0,
       .y = 0,
-      .width = static_cast<double>(surface.width()),
-      .height = static_cast<double>(surface.height()),
+      .width = static_cast<double>(surface.bufferWidth()),
+      .height = static_cast<double>(surface.bufferHeight()),
   };
   wlr_scene_buffer_set_source_box(node, &source);
   wlr_scene_buffer_set_dest_size(node, static_cast<int>(surface.width()),
@@ -4081,6 +4092,9 @@ class SurfaceRegistry : public lava::CompositorHost {
       wlr_scene_node_set_position(&surface.node->node, surface.x,
                                   surface.contentY());
     }
+    // Every move comes through here, and a move can cross onto a screen with
+    // another scale.
+    syncScale(surface);
   }
 
   /// Moves a window. Every node, because a frame, its content and the shadow
@@ -4446,6 +4460,9 @@ class SurfaceRegistry : public lava::CompositorHost {
       else if (surface->maximized) fillWorkArea(*surface);
       else evictOntoLayout(*surface);
     }
+    // A scale change resizes the output's box, which is how it gets here; the
+    // windows on it may not have moved at all.
+    for (auto &surface : surfaces_) syncScale(*surface);
   }
 
   /// A window that lived entirely on an output that just vanished is
@@ -5676,6 +5693,8 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (!surface.canvas->resize(width, height)) return;
     surface.width = width;
     surface.height = height;
+    // A resize moves the centre, which is what picks the output.
+    syncScale(surface);
     // The shadow is the window's rectangle blurred, so a new rectangle is a
     // new shadow. Rebuilt rather than stretched: a stretched one would soften
     // along one axis and not the other.
@@ -7539,6 +7558,13 @@ class SurfaceRegistry : public lava::CompositorHost {
     }
   }
 
+  float surfaceScale(uint32_t id) const override {
+    for (const auto &s : surfaces_) {
+      if (s->id == id) return s->canvas ? s->canvas->scale() : 1.f;
+    }
+    return 1.f;
+  }
+
   void surfaceSize(uint32_t id, float &outW, float &outH) const override {
     outW = 0.f;
     outH = 0.f;
@@ -8002,6 +8028,54 @@ class SurfaceRegistry : public lava::CompositorHost {
     outH = static_cast<uint32_t>(box.height);
   }
 
+  /// The scale of the output containing `(x, y)`, or of the primary output
+  /// when that point is in a gap between screens. 1 with no outputs.
+  float outputScaleAt(int x, int y) const {
+    if (server_ == nullptr || server_->output_layout == nullptr) return 1.f;
+    wlr_output *output = wlr_output_layout_output_at(
+        server_->output_layout, static_cast<double>(x), static_cast<double>(y));
+    if (output == nullptr) {
+      output = wlr_output_layout_output_at(
+          server_->output_layout,
+          static_cast<double>(primaryX_) + primaryWidth_ / 2.0,
+          static_cast<double>(primaryY_) + primaryHeight_ / 2.0);
+    }
+    return output != nullptr && output->scale > 0.f ? output->scale : 1.f;
+  }
+
+  /// What a new surface is drawn at: the primary output's scale, since that
+  /// is where a window opens. `syncScale` corrects it if placement put it
+  /// somewhere else.
+  float primaryScale() const {
+    return outputScaleAt(primaryX_ + static_cast<int>(primaryWidth_ / 2),
+                         primaryY_ + static_cast<int>(primaryHeight_ / 2));
+  }
+
+  /// Draws a window's canvas surfaces at the scale of the output under its
+  /// centre.
+  ///
+  /// The centre, as for the work area, so a window straddling two screens
+  /// is sharp on the one that holds most of it and resampled on the other —
+  /// one buffer cannot be both. Cheap when nothing changed, which is nearly
+  /// every call: one output lookup per move.
+  void syncScale(ClientSurface &surface) {
+    const float scale =
+        outputScaleAt(surfaceCenterX(surface), surfaceCenterY(surface));
+    if (surface.canvas && surface.canvas->setScale(scale)) {
+      wlr_log(WLR_DEBUG, "surface %u: drawn at scale %.2f", surface.id, scale);
+      show_surface(surface.node, *surface.canvas);
+      // The `Scale` and `Resize` the surface just queued go to the client;
+      // meanwhile the frame it already sent is drawn again at the new scale,
+      // so the window is the right size on screen before the client answers.
+      pump(surface);
+      if (surface.canvas->redraw()) damage(surface);
+    }
+    if (surface.bar && surface.bar->setScale(scale)) {
+      show_surface(surface.barNode, *surface.bar);
+      drawBar(surface);
+    }
+  }
+
   static int surfaceCenterX(const ClientSurface &surface) {
     return surface.x + static_cast<int>(surface.width / 2);
   }
@@ -8054,7 +8128,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     }
 
     auto surface = std::make_unique<ClientSurface>();
-    surface->canvas = renderer_->createSurface(width, height);
+    surface->canvas = renderer_->createSurface(width, height, primaryScale());
     if (!surface->canvas) return 0;
     if (!surface->canvas->attachArena(arenaId)) {
       // The client creates the arena and the compositor attaches, so this
@@ -8092,7 +8166,8 @@ class SurfaceRegistry : public lava::CompositorHost {
     surface->title = title;
     surface->decorated = decorated;
     if (decorated) {
-      surface->bar = renderer_->createSurface(width, lava::Decoration::kHeight);
+      surface->bar = renderer_->createSurface(
+          width, lava::Decoration::kHeight, surface->canvas->scale());
       if (!surface->bar) return 0;
     }
 
@@ -8643,8 +8718,8 @@ uint32_t SurfaceRegistry::adoptWindow(FramedWindow *window,
   // Undecorated if there is no canvas device to draw a bar with. The window
   // still gets a position and a workspace, which is most of what it needed.
   if (renderer_ != nullptr && decorated) {
-    surface->bar =
-        renderer_->createSurface(surface->width, lava::Decoration::kHeight);
+    surface->bar = renderer_->createSurface(
+        surface->width, lava::Decoration::kHeight, primaryScale());
     if (surface->bar) {
       surface->barNode = wlr_scene_buffer_create(
           workspaces_->tree[surface->workspace], surface->bar->buffer());

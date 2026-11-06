@@ -576,6 +576,20 @@ enum class InputEventKind : uint32_t {
   DragOver = 15,
   /// The drag left this surface, or ended anywhere. No payload.
   DragLeave = 16,
+  /// The output scale this surface is drawn at changed. `x` = the scale
+  /// (1, 1.25, 1.5, 2…).
+  ///
+  /// Framebuffer pixels per layout pixel. A producer keeps laying out in
+  /// layout pixels — `Resize` still says the window's size in those — and
+  /// the renderer draws the list onto that many more pixels. What a producer
+  /// can do with this is everything the renderer cannot do for it: rasterise
+  /// text and decode images at the size they will actually cover. One that
+  /// ignores it still draws in the right place, with text resampled.
+  ///
+  /// Sent before the `Resize` that accompanies it, and only on a change, so
+  /// a producer at scale 1 never sees one. Sent by a compositor; a windowed
+  /// app has no source for it yet.
+  Scale = 17,
 };
 
 struct InputEvent {

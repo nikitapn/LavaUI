@@ -541,6 +541,10 @@ struct CompositorHost {
   /// The size a surface's client should draw at, for the opening `Resize`.
   virtual void surfaceSize(uint32_t surfaceId, float &outW, float &outH) const = 0;
 
+  /// The output scale a surface is drawn at, for the opening `Scale` — sent
+  /// only when it is not 1. See `InputEventKind::Scale`.
+  virtual float surfaceScale(uint32_t /*surfaceId*/) const { return 1.f; }
+
   /// "The client has been told what size it is, on event `serial`." The
   /// window's first reveal then waits for a `present` carrying at least that
   /// serial, so the frame the user first sees was laid out for the size the

@@ -148,17 +148,20 @@ VoidResult Engine::openExported(
   return ok();
 }
 
-uint32_t Engine::openExportedWindow(uint32_t width, uint32_t height)
+uint32_t Engine::openExportedWindow(uint32_t width, uint32_t height,
+                                    float scale)
 {
-  return impl_->offscreen ? impl_->offscreen->openExportedWindow(width, height)
-                          : 0;
+  return impl_->offscreen
+           ? impl_->offscreen->openExportedWindow(width, height, scale)
+           : 0;
 }
 
 bool Engine::resizeExportedWindow(uint32_t windowId, uint32_t width,
-                                  uint32_t height)
+                                  uint32_t height, float scale)
 {
   return impl_->offscreen
-           ? impl_->offscreen->resizeExportedWindow(windowId, width, height)
+           ? impl_->offscreen->resizeExportedWindow(windowId, width, height,
+                                                    scale)
            : false;
 }
 

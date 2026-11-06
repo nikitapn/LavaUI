@@ -411,6 +411,20 @@ class QuadRenderer {
     sceneTargetScale_ = scale > 0.f ? scale : 1.f;
   }
 
+  /// How many framebuffer pixels one layout pixel covers, per axis.
+  ///
+  /// The output scale of a HiDPI screen, applied the same way as
+  /// `setSceneTargetScale`: positions stay in layout pixels, the vertex shader
+  /// keeps dividing by the layout size, and only the viewport and the scissors
+  /// grow. Every quad then lands on as many device pixels as the screen has
+  /// for it, and `fwidth` antialiasing — which is measured per fragment — is
+  /// a device pixel wide without being told. Per axis so that a framebuffer
+  /// rounded to whole pixels still maps the layout onto exactly all of it.
+  void setDeviceScale(float sx, float sy) {
+    deviceScaleX_ = sx > 0.f ? sx : 1.f;
+    deviceScaleY_ = sy > 0.f ? sy : 1.f;
+  }
+
   /// Records every batch, in order, into `commandBuffer`.
   void draw(VkCommandBuffer commandBuffer);
 
@@ -609,6 +623,9 @@ class QuadRenderer {
   vec2 viewportSize_{800.0f, 600.0f};
   /// See `setSceneTargetScale`.
   float sceneTargetScale_ = 1.f;
+  /// See `setDeviceScale`.
+  float deviceScaleX_ = 1.f;
+  float deviceScaleY_ = 1.f;
   float viewZoom_ = 1.0f;
   float viewPanX_ = 0.0f;
   float viewPanY_ = 0.0f;

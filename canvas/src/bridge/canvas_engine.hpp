@@ -113,12 +113,15 @@ class Engine {
     uint32_t sampleCap = 0);
 
   /// Opens one exported surface. Returns its window id, or 0.
-  uint32_t openExportedWindow(uint32_t width, uint32_t height);
+  /// `scale` is the output scale; see `Application::openExportedWindow`.
+  uint32_t openExportedWindow(uint32_t width, uint32_t height,
+                              float scale = 1.f);
 
   /// Resizes an exported surface. True if it changed. Its buffer is only a new
   /// one when the window outgrew the old — compare `exportedImage` to find
   /// out. See `Application::resizeExportedWindow`.
-  bool resizeExportedWindow(uint32_t windowId, uint32_t width, uint32_t height);
+  bool resizeExportedWindow(uint32_t windowId, uint32_t width, uint32_t height,
+                            float scale = 1.f);
 
   /// Attributes of a surface's exported buffer, or null. At least the window's
   /// size, and usually larger; the frame sits in its top-left corner.

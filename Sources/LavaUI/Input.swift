@@ -283,6 +283,10 @@ public enum InputEventKind: UInt32, Sendable, Equatable {
     case dragOver = 15
     /// The drag left this window, or ended anywhere. No payload.
     case dragLeave = 16
+    /// The output scale this window is drawn at, in `x`: framebuffer pixels
+    /// per layout pixel. Layout stays in layout pixels either way. See
+    /// `Scale` in `draw_command.hpp`.
+    case scale = 17
 }
 
 /// One polled event from `Editor.pollInputEvent`.

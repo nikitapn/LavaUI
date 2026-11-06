@@ -1840,6 +1840,18 @@ class CompositorImpl final : public ICompositor_Servant {
     // has usually already resized the surface away from the size the client
     // asked for. So it is serialised, and the window stays off screen until a
     // `Present` arrives carrying that serial — see `CompositorHost::holdReveal`.
+    //
+    // Preceded by the opening `Scale` on a scaled output, for the same reason
+    // the `Resize` exists: whatever the surface queued before this stream was
+    // here has gone nowhere, and a client that lays out its first frame
+    // without knowing the scale rasterises it for the wrong screen.
+    if (const float scale = host_.surfaceScale(surfaceId); scale != 1.f) {
+      InputEvent scaleEvent = make_event(
+          static_cast<uint32_t>(canvas::InputEventKind::Scale), scale, 0.f, 0,
+          0);
+      scaleEvent.serial = broker_.nextSerial();
+      sub->send(scaleEvent);
+    }
     float width = 0.f, height = 0.f;
     host_.surfaceSize(surfaceId, width, height);
     InputEvent opening =

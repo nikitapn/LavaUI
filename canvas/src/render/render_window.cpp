@@ -94,6 +94,7 @@ RenderWindow::RenderWindow(RenderDevice &device, uint32_t width,
   quads_.setOwner(this);
   blur_.setOwner(this);
   extent_ = {width < 1 ? 1 : width, height < 1 ? 1 : height};
+  logical_ = extent_;
 
   createSizedResources();
   createCommandBuffer();
@@ -275,6 +276,7 @@ void RenderWindow::createSwapchain()
 
   // Keep offscreen target size in sync with the window framebuffer.
   extent_ = swapchainExtent_;
+  logical_ = extent_;
 
   uint32_t imageCount = caps.minImageCount + 1;
   if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount) {
@@ -1223,6 +1225,17 @@ bool RenderWindow::capturePng(std::vector<uint8_t> &outPng, int x, int y, int w,
   const int fullH = static_cast<int>(extent_.height);
   if (fullW < 1 || fullH < 1) return false;
 
+  // A region is asked for in layout pixels — it is a node's frame, usually —
+  // and cut from the framebuffer, so it comes back at full resolution.
+  if (scale_ != 1.f && w > 0 && h > 0) {
+    const int x1 = static_cast<int>(std::ceil((x + w) * scale_));
+    const int y1 = static_cast<int>(std::ceil((y + h) * scale_));
+    x = static_cast<int>(std::floor(x * scale_));
+    y = static_cast<int>(std::floor(y * scale_));
+    w = x1 - x;
+    h = y1 - y;
+  }
+
   if (w <= 0 || h <= 0) {
     x = 0;
     y = 0;
@@ -1346,6 +1359,7 @@ bool RenderWindow::resize()
   cleanupSwapchain();
 
   extent_ = {static_cast<uint32_t>(fbW), static_cast<uint32_t>(fbH)};
+  logical_ = extent_;
 
   createSwapchain();
   createSizedResources();
@@ -1355,11 +1369,34 @@ bool RenderWindow::resize()
   return true;
 }
 
-bool RenderWindow::resizeTo(uint32_t width, uint32_t height)
+bool RenderWindow::resizeTo(uint32_t width, uint32_t height, float scale)
 {
   if (windowed_) return false;
   if (width < 1 || height < 1) return false;
-  if (width == extent_.width && height == extent_.height) return false;
+  if (!(scale > 0.f)) scale = 1.f;
+  // Rounded, not ceiled: the scene shows the buffer at the layout size, so a
+  // framebuffer a pixel too big is resampled by the compositor — the blur
+  // this is here to get rid of — while one rounded to the nearest pixel is
+  // off by under half of one.
+  const uint32_t deviceW = std::max<uint32_t>(
+    1, static_cast<uint32_t>(std::lround(static_cast<double>(width) * scale)));
+  const uint32_t deviceH = std::max<uint32_t>(
+    1, static_cast<uint32_t>(std::lround(static_cast<double>(height) * scale)));
+  if (width == logical_.width && height == logical_.height &&
+      deviceW == extent_.width && deviceH == extent_.height) {
+    return false;
+  }
+  logical_ = {width, height};
+  scale_ = scale;
+  width = deviceW;
+  height = deviceH;
+  if (width == extent_.width && height == extent_.height) {
+    // Only the layout size moved (a scale change that rounds to the same
+    // framebuffer): nothing sized to the extent has to be rebuilt, but the
+    // tile grid damage is counted on has.
+    damage_.invalidate();
+    return true;
+  }
 
   // This window's own frames, not the device's. Only these attachments are
   // being rebuilt, and they are named by nobody else's command buffers — so
@@ -1441,7 +1478,26 @@ bool RenderWindow::takeDamage(std::vector<canvas::DamageRect> &out)
     out.clear();
     return false;
   }
-  return damage_.take(out);
+  if (!damage_.take(out)) return false;
+  if (scale_ != 1.f) {
+    // The consumer damages the buffer, so the tiles go out in its pixels —
+    // outward, so a scaled edge never leaves half a pixel stale.
+    const float sx = static_cast<float>(extent_.width) / logical_.width;
+    const float sy = static_cast<float>(extent_.height) / logical_.height;
+    for (auto &r : out) {
+      const int x0 = static_cast<int>(std::floor(r.x * sx));
+      const int y0 = static_cast<int>(std::floor(r.y * sy));
+      const int x1 = std::min(static_cast<int>(extent_.width),
+                              static_cast<int>(std::ceil((r.x + r.width) * sx)));
+      const int y1 = std::min(static_cast<int>(extent_.height),
+                              static_cast<int>(std::ceil((r.y + r.height) * sy)));
+      r.x = x0;
+      r.y = y0;
+      r.width = std::max(0, x1 - x0);
+      r.height = std::max(0, y1 - y0);
+    }
+  }
+  return true;
 }
 
 int RenderWindow::takeFrameFence()
@@ -2698,12 +2754,22 @@ void RenderWindow::render(const canvas::DrawList &list)
   slotSubmission_[currentFrame_] = dev_.nextSubmission();
 
   const auto ext = getExtent();
-  const float viewW = static_cast<float>(ext.width);
-  const float viewH = static_cast<float>(ext.height);
+  // The producer laid this list out in layout pixels, so that is what it is
+  // replayed against; the framebuffer may be bigger, and only the viewport
+  // knows (`QuadRenderer::setDeviceScale`).
+  const float viewW = static_cast<float>(logical_.width);
+  const float viewH = static_cast<float>(logical_.height);
+  quads_.setDeviceScale(static_cast<float>(ext.width) / viewW,
+                        static_cast<float>(ext.height) / viewH);
+  // A blur radius is a layout length, and the blur runs on framebuffer
+  // pixels.
+  const auto deviceRadius = [this](float radius) {
+    return std::min(radius * scale_, BlurPass::kMaxRadius);
+  };
 
   sharpGlass_ = false;
   if (anyBlur) {
-    blur_.ensureSize(ext.width, ext.height, finestRadius);
+    blur_.ensureSize(ext.width, ext.height, deviceRadius(finestRadius));
     sharpGlass_ = anySharp && blur_.ensureSharp();
     // A content blur draws its subtree into the capture target, which is
     // smaller than the window — told here rather than inside the blur, because
@@ -2741,7 +2807,9 @@ void RenderWindow::render(const canvas::DrawList &list)
   // compared against one that never reached the buffer, and the difference
   // between the two is still in what is pending.
   if (!windowed_ && exportTarget_ != nullptr) {
-    damage_.begin(ext.width, ext.height);
+    // Counted in layout pixels, which is what the batches were recorded in;
+    // `takeDamage` hands it out in buffer pixels.
+    damage_.begin(logical_.width, logical_.height);
     if (anyBlur || sampledLiveSurface_) damage_.markAll();
     else quads_.accumulateDamage(damage_);
     damage_.end();
@@ -2773,7 +2841,8 @@ void RenderWindow::render(const canvas::DrawList &list)
           endMainRenderPass(commandBuffer);
           blur_.captureAndBlur(commandBuffer, frameImage(),
                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               extent.width, extent.height, b.radius);
+                               extent.width, extent.height,
+                               deviceRadius(b.radius));
           beginMainRenderPass(commandBuffer, /*clear=*/false);
           quads_.drawSegment(commandBuffer, segment);
           break;
@@ -2793,7 +2862,7 @@ void RenderWindow::render(const canvas::DrawList &list)
           blur_.captureAndBlur(commandBuffer, blur_.sceneImage(),
                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                blur_.captureWidth(), blur_.captureHeight(),
-                               b.radius);
+                               deviceRadius(b.radius));
           beginMainRenderPass(commandBuffer, /*clear=*/false);
           quads_.drawSegment(commandBuffer, segment);
           break;

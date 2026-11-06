@@ -67,7 +67,12 @@ public:
   /// Opens one more exported surface on the device. Returns its window id, or
   /// 0. Everything shared — pipelines, glyph atlas, texture cache — is already
   /// paid for; this costs attachments and an image.
-  uint32_t openExportedWindow(uint32_t width, uint32_t height);
+  ///
+  /// `width`/`height` are layout pixels and `scale` the output scale of the
+  /// screen it opens on; the buffer is their product. See
+  /// `RenderWindow::resizeTo`.
+  uint32_t openExportedWindow(uint32_t width, uint32_t height,
+                              float scale = 1.f);
 
   /// Resizes an exported surface, keeping its buffer if the new size still
   /// fits. True if anything changed.
@@ -77,7 +82,11 @@ public:
   /// inside the image already there and the pointer does not move. Only when a
   /// window outgrows its buffer is a new one allocated — and only then does
   /// anything have to import a dmabuf again.
-  bool resizeExportedWindow(uint32_t windowId, uint32_t width, uint32_t height);
+  ///
+  /// A change of `scale` alone is a resize too — the buffer changes size and
+  /// the client is told the new scale with a `Scale` event.
+  bool resizeExportedWindow(uint32_t windowId, uint32_t width, uint32_t height,
+                            float scale = 1.f);
 
   /// A window's exported buffer, or null. Owned here; the consumer reads its
   /// descriptors and does not take them.

@@ -8,6 +8,7 @@ extern "C" {
 #include <unistd.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -214,8 +215,10 @@ void CanvasRenderer::reportVramIfDue()
 }
 
 std::unique_ptr<CanvasSurface> CanvasRenderer::createSurface(uint32_t width,
-                                                             uint32_t height) {
-  const uint32_t windowId = engine_.openExportedWindow(width, height);
+                                                             uint32_t height,
+                                                             float scale) {
+  if (!(scale > 0.f)) scale = 1.f;
+  const uint32_t windowId = engine_.openExportedWindow(width, height, scale);
   if (windowId == 0) {
     wlr_log(WLR_ERROR, "canvas: could not open a %ux%u surface", width, height);
     return nullptr;
@@ -229,7 +232,7 @@ std::unique_ptr<CanvasSurface> CanvasRenderer::createSurface(uint32_t width,
   }
   return std::make_unique<CanvasSurface>(*this, windowId,
                                          DmabufBuffer::create(image), width,
-                                         height);
+                                         height, scale);
 }
 
 int CanvasRenderer::registerFont(const std::string &path,
@@ -400,12 +403,25 @@ void CanvasRenderer::detachVideoBuffer(uint32_t handle) {
 
 CanvasSurface::CanvasSurface(CanvasRenderer &renderer, uint32_t windowId,
                              DmabufBuffer *buffer, uint32_t width,
-                             uint32_t height)
+                             uint32_t height, float scale)
     : renderer_(renderer),
       windowId_(windowId),
       buffer_(buffer),
       width_(width),
-      height_(height) {}
+      height_(height),
+      scale_(scale > 0.f ? scale : 1.f) {}
+
+namespace {
+/// `RenderWindow::resizeTo`'s rounding. The two must agree, or the scene's
+/// source box is a pixel off the frame and the window is resampled again.
+uint32_t scaled(uint32_t layout, float scale) {
+  return std::max<uint32_t>(
+      1, static_cast<uint32_t>(std::lround(static_cast<double>(layout) * scale)));
+}
+}  // namespace
+
+uint32_t CanvasSurface::bufferWidth() const { return scaled(width_, scale_); }
+uint32_t CanvasSurface::bufferHeight() const { return scaled(height_, scale_); }
 
 CanvasSurface::~CanvasSurface() {
   // Order matters: the scene may still hold a reference to the buffer, and the
@@ -455,9 +471,25 @@ void CanvasSurface::captureFence() {
 bool CanvasSurface::resize(uint32_t width, uint32_t height) {
   if (width < 1 || height < 1) return false;
   if (width == width_ && height == height_) return false;
-  if (!renderer_.engine().resizeExportedWindow(windowId_, width, height)) {
+  if (!renderer_.engine().resizeExportedWindow(windowId_, width, height,
+                                               scale_)) {
     return false;
   }
+  return adoptImage(width, height);
+}
+
+bool CanvasSurface::setScale(float scale) {
+  if (!(scale > 0.f)) scale = 1.f;
+  if (scale == scale_) return false;
+  if (!renderer_.engine().resizeExportedWindow(windowId_, width_, height_,
+                                               scale)) {
+    return false;
+  }
+  scale_ = scale;
+  return adoptImage(width_, height_);
+}
+
+bool CanvasSurface::adoptImage(uint32_t width, uint32_t height) {
   const canvas::DmabufImage *image = renderer_.engine().exportedImage(windowId_);
   if (image == nullptr) return false;
 
