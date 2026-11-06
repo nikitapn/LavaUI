@@ -11364,7 +11364,14 @@ PointerDevice::PointerDevice(Server *server, wlr_input_device *device)
   }
 }
 
-PointerDevice::~PointerDevice() { server->pointers.remove(this); }
+PointerDevice::~PointerDevice() {
+  server->pointers.remove(this);
+  // `Listener` does not unhook itself, and this runs from inside the destroy
+  // signal. Left linked, the freed node is still in the device's destroy list
+  // when wlroots checks it is empty — an abort on every shutdown, and on
+  // every mouse unplug.
+  destroy.detach();
+}
 
 void PointerDevice::on_destroy(wl_listener *listener, void *) {
   delete owner_of<PointerDevice>(listener);
