@@ -11,6 +11,7 @@
 #include <cerrno>
 #include <cstring>
 #include <iostream>
+#include <new>
 #include <string_view>
 #include <vector>
 
@@ -347,8 +348,7 @@ bool DrawArena::Impl::mapNew(const std::string &name, ArenaCapacity cap,
     return false;
   }
 
-  auto *h = static_cast<ArenaHeader *>(base);
-  std::memset(h, 0, sizeof(ArenaHeader));
+  auto *h = ::new (base) ArenaHeader{};
   h->version            = kVersion;
   h->generation         = generation;
   h->producerPid        = static_cast<int32_t>(::getpid());
