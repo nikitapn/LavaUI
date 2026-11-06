@@ -23,6 +23,27 @@ final class DisplayScaleTests: XCTestCase {
         XCTAssertEqual(DisplayScale.pixels(0, scale: 2), 0, "0 means native and must stay 0")
     }
 
+    func testAScreenIsAskedForInLayoutPixels() {
+        // Not the mode: 2560×1600 at 1.5 is 1707×1067, rounded up the way the
+        // compositor sizes what fills an output.
+        let at15 = DisplayScale.logicalSize(width: 2560, height: 1600, scale: 1.5, transform: 0)
+        XCTAssertEqual(at15.width, 1707)
+        XCTAssertEqual(at15.height, 1067)
+        // An exact division stays exact.
+        let at125 = DisplayScale.logicalSize(width: 2560, height: 1600, scale: 1.25, transform: 0)
+        XCTAssertEqual(at125.width, 2048)
+        XCTAssertEqual(at125.height, 1280)
+        // A quarter turn swaps the axes; a half turn does not.
+        let turned = DisplayScale.logicalSize(width: 2560, height: 1600, scale: 1, transform: 1)
+        XCTAssertEqual(turned.width, 1600)
+        XCTAssertEqual(turned.height, 2560)
+        XCTAssertEqual(
+            DisplayScale.logicalSize(width: 2560, height: 1600, scale: 1, transform: 2).width, 2560)
+        // A scale nobody could mean is read as 1, not as a divide by zero.
+        XCTAssertEqual(
+            DisplayScale.logicalSize(width: 1920, height: 1080, scale: 0, transform: 0).width, 1920)
+    }
+
     func testNonsenseScalesAreRefused() {
         // Zero would turn every cap into 0, which reads as *native* — a
         // thumbnail grid decoding every photo at full size.

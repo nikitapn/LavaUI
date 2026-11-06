@@ -36,6 +36,28 @@ public enum DisplayScale {
         return UInt32(device.rounded(.up))
     }
 
+    /// The size in layout pixels of a screen running `width`×`height` device
+    /// pixels at `scale`, turned by `transform` (`wl_output_transform`; odd
+    /// values are a quarter turn, which swaps the axes).
+    ///
+    /// What a window that wants to fill a screen should ask for — not the mode,
+    /// which is device pixels: a client that asked for 2560×1600 on a 1.5
+    /// screen laid its first frame out half as large again as the screen, and
+    /// the compositor held the window back until a frame at the real size
+    /// came. Rounded up, the way the compositor sizes what fills an output, so
+    /// the request lands on the size the window is actually given.
+    public static func logicalSize(
+        width: UInt32, height: UInt32, scale: Float, transform: UInt32
+    ) -> (width: Float, height: Float) {
+        let s = scale.isFinite && scale > 0 ? Double(scale) : 1
+        let (w, h) = transform % 2 == 1 ? (height, width) : (width, height)
+        // The epsilon keeps an exact division exact: 2560 / 1.25 is 2048.
+        func logical(_ device: UInt32) -> Float {
+            Float((Double(device) / s - 1e-4).rounded(.up))
+        }
+        return (logical(w), logical(h))
+    }
+
     /// Takes a `Scale` event for `window`. Nonsense values are ignored rather
     /// than trusted: a scale is a ratio a compositor computed, and zero or a
     /// NaN would turn every decode cap into 0, which means *native*.

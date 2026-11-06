@@ -206,8 +206,16 @@ public enum LavaClient {
                         $0.width * $0.height < $1.width * $1.height
                     })
                 else { return }
-                Self.requestedWidth = Float(chosen.width)
-                Self.requestedHeight = Float(chosen.height)
+                // The mode is device pixels; a window is sized in layout
+                // pixels. Asked for as the mode, a 1.5 screen's 2560×1600
+                // laid the first frame out at 2560 wide, and the window was
+                // held back until one came at the 1707 it was given.
+                let size = DisplayScale.logicalSize(
+                    width: chosen.width, height: chosen.height,
+                    scale: chosen.scale, transform: chosen.transform
+                )
+                Self.requestedWidth = size.width
+                Self.requestedHeight = size.height
                 editor.setClientSize(
                     width: Self.requestedWidth, height: Self.requestedHeight
                 )
