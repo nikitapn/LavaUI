@@ -74,6 +74,16 @@ public:
   /// that just wants a font file at a size should use.
   int registerFont(const std::string &path, float pixelSize);
 
+  /// The same face as `fontId` at `scale` times its pixel size, registered
+  /// on first use; -1 if it will not load. `fontId` itself at scale 1.
+  ///
+  /// How text is sharp on a scaled output without the producer knowing: a
+  /// glyph laid out at 14px on a 1.5 screen covers 21 device pixels, so it is
+  /// rasterised from the 21px face and drawn at 1/1.5 of its bitmap — which
+  /// the scaled viewport then maps texel for pixel. Layout is untouched: the
+  /// producer shaped and measured the run against the face it registered.
+  int scaledFont(uint32_t fontId, float scale);
+
   /// The key `fontId` was registered under. False for an id this registry
   /// never handed out.
   bool fontKey(uint32_t fontId, canvas::FontKey &out) const;

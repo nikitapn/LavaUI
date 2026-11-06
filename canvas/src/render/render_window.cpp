@@ -2063,9 +2063,42 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       // means a drawn run cannot drift from the run measured for layout.
       uint32_t first = 0, count = 0;
       if (!sideBufferRange(cmd, list.glyphCount, 0, first, count)) break;
+      // On a scaled output every glyph comes from the same face at the
+      // device size (`TextRenderer::scaledFont`). A run is nearly always one
+      // face, so the lookup is made once per face change, not per glyph.
+      const bool scaled = scale_ != 1.f;
+      const float dsx = scaled ? static_cast<float>(extent_.width) / logical_.width : 1.f;
+      const float dsy = scaled ? static_cast<float>(extent_.height) / logical_.height : 1.f;
+      uint32_t lastFont = UINT32_MAX;
+      int      rasterFont = -1;
       for (uint32_t g = 0; g < count; ++g) {
         const auto &gi = list.glyphs[first + g];
         TextRenderer::GlyphQuad q;
+        if (scaled) {
+          if (gi.fontId != lastFont) {
+            lastFont = gi.fontId;
+            rasterFont = dev_.textRenderer().scaledFont(gi.fontId, scale_);
+          }
+          if (rasterFont >= 0 &&
+              dev_.textRenderer().glyphQuad(static_cast<uint32_t>(rasterFont),
+                                            gi.glyphId, q)) {
+            if (q.size.x <= 0.f || q.size.y <= 0.f) continue;
+            // The pen snapped to a device pixel, and the bitmap's bearing is
+            // whole device pixels already: every texel then lands on exactly
+            // one pixel, which is the whole difference between this and a
+            // 1x glyph stretched. Back to layout units for the vertices; the
+            // viewport undoes the division.
+            const float penX = std::round((gi.x + ox) * dsx);
+            const float penY = std::round((gi.y + oy) * dsy);
+            quads_.pushGlyph({(penX + q.bearing.x) / dsx,
+                              (penY - q.bearing.y) / dsy},
+                             {q.size.x / dsx, q.size.y / dsy}, q.uv0, q.uv1,
+                             faded(cmd.color));
+            continue;
+          }
+          // A face that will not load at the device size still draws, from
+          // the one the producer named — resampled, as before.
+        }
         if (!dev_.textRenderer().glyphQuad(gi.fontId, gi.glyphId, q)) {
           // Silent by design — a run naming a face this renderer does not
           // have draws nothing rather than drawing something wrong. That is

@@ -1,4 +1,5 @@
 #include <array>
+#include <cmath>
 #include <shared_mutex>
 #include <vector>
 #include <iostream>
@@ -41,6 +42,13 @@ struct TextRenderer::Impl {
   // silently draws the wrong glyph as soon as a second face or size exists.
   std::vector<canvas::Font>   fonts_;
   std::vector<canvas::FontKey> fontKeys_;
+  /// The file each id was registered from, parallel to `fontKeys_` — which is
+  /// how `scaledFont` loads the same face at another size.
+  std::vector<std::string>     fontPaths_;
+  /// (fontId, 26.6 size) → the id of that face at that size. See
+  /// `scaledFont`; -1 remembers a face that would not load, so it is not
+  /// read again every frame.
+  std::unordered_map<uint64_t, int> scaledFonts_;
   std::unordered_map<uint64_t, GlyphInfo> glyphMap_;
 
   static uint64_t glyphKey(uint32_t fontId, uint32_t glyphId) {
@@ -159,7 +167,38 @@ struct TextRenderer::Impl {
     }
     fonts_.push_back(std::move(font));
     fontKeys_.push_back(key);
+    fontPaths_.push_back(fontPath);
     return static_cast<int>(fonts_.size() - 1);
+  }
+
+  static uint64_t scaledKey(uint32_t fontId, uint32_t size26_6) {
+    return (static_cast<uint64_t>(fontId) << 32) | size26_6;
+  }
+
+  static uint32_t scaledSize(const canvas::FontKey &key, float scale) {
+    return static_cast<uint32_t>(
+      std::lround(static_cast<double>(key.pixelSize26_6) * scale));
+  }
+
+  /// Lookup only, for the shared path. 0 = not resolved yet.
+  bool findScaled(uint32_t fontId, float scale, int &out) const {
+    const canvas::FontKey *key = fontKey(fontId);
+    if (key == nullptr) { out = -1; return true; }
+    auto it = scaledFonts_.find(scaledKey(fontId, scaledSize(*key, scale)));
+    if (it == scaledFonts_.end()) return false;
+    out = it->second;
+    return true;
+  }
+
+  int scaledFont(uint32_t fontId, float scale) {
+    int found = -1;
+    if (findScaled(fontId, scale, found)) return found;
+    const canvas::FontKey key = fontKeys_[fontId];
+    const uint32_t size = scaledSize(key, scale);
+    const int id = registerFont(fontPaths_[fontId], size, key.faceIndex,
+                                key.rasterFlags);
+    scaledFonts_[scaledKey(fontId, size)] = id;
+    return id;
   }
 
   /// The key a registered id was loaded under. Null if the id is not one this
@@ -495,6 +534,19 @@ bool TextRenderer::glyphQuad(uint32_t fontId, uint32_t glyphId, GlyphQuad &out) 
   if (!g) return false;  // didn't fit; atlas grows before the next frame
   fillQuad(*g, out);
   return true;
+}
+
+int TextRenderer::scaledFont(uint32_t fontId, float scale) {
+  if (scale == 1.f) return static_cast<int>(fontId);
+  {
+    std::shared_lock lock(mutex_);
+    int id = -1;
+    if (impl_->findScaled(fontId, scale, id)) return id;
+  }
+  // First sight of this face at this scale: reads the file (or its memo) and
+  // loads a second FreeType face, once per session per size.
+  std::unique_lock lock(mutex_);
+  return impl_->scaledFont(fontId, scale);
 }
 
 int TextRenderer::registerFont(const std::string &path, float pixelSize) {
