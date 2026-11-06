@@ -285,8 +285,21 @@ picks the `dbusMenu` backend rather than degrading to an in-window bar. See
 What is left of it: an app that starts before any registrar exists keeps the
 in-window bar for its lifetime, because the backend is chosen once at startup.
 
-No monitor DPI. `ContentScale` is LavaUI's own zoom, not the display's scale
-factor, and nothing carries the latter across.
+**Fixed:** monitor DPI. A Lava surface takes the scale of the output under
+its centre and is rendered at that many device pixels per layout pixel
+(`CanvasSurface::setScale`); the client hears it as a `Scale` input event,
+before the opening `Resize` and on every change. Layout stays in layout
+pixels. The renderer rasterises text from the same face at the device size by
+itself (`TextRenderer::scaledFont`); images are the client's part, because it
+picks the decode size — `Image(path:)` scales its cap per window at emit
+(`DrawList.displayScale`), and an app that sizes its own decodes reads
+`DisplayScale.main`. `ContentScale` is still LavaUI's own zoom, on top.
+
+What is left of it: a window straddling two screens is drawn at the scale of
+the one holding its centre and resampled on the other; a windowed app gets
+no scale at all (GLFW's content scale is not read); and Wayland clients get
+integer `wl_output.scale` only — no `wp_fractional_scale_v1`, so at 1.5 they
+render at 2 and are downsampled.
 
 Window state is now three verbs and not more: `BeginMove`, `ToggleMaximize`
 and `Minimize`, which exist because a client that draws its own frame — see

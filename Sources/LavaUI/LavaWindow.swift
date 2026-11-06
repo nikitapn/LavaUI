@@ -603,6 +603,15 @@ public final class LavaWindow {
             }
         case .windowState:
             WindowBridge.isMaximized = ev.button != 0
+        case .scale:
+            if let scale = DisplayScale.note(ev.x, window: id),
+               scale != drawList.displayScale
+            {
+                drawList.displayScale = scale
+                // Images re-decode for the new scale at emit; the `Resize`
+                // that follows takes care of layout if anything moved.
+                ViewInvalidation.markNeedsRedraw()
+            }
         case .resize:
             let nw = max(1, ev.x)
             let nh = max(1, ev.y)

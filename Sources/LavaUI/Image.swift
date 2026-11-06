@@ -537,9 +537,14 @@ public struct Image: PrimitiveView {
 
     private var explicitDecodePixels: UInt32?
 
-    /// Longer edge to decode at: the box in physical pixels, so a HiDPI or
-    /// zoomed UI still gets the resolution it draws at rather than a soft
-    /// upscale of a smaller decode.
+    /// Longer edge to decode at, in layout pixels: the box, times the content
+    /// scale, so a zoomed UI still gets the resolution it draws at rather than
+    /// a soft upscale of a smaller decode.
+    ///
+    /// The output scale is applied on top at emit, per window
+    /// (`DrawList.displayScale`) — and to an explicit `decodePixels` too, so a
+    /// caller passing one gives it in layout pixels and never multiplies by
+    /// `DisplayScale` itself.
     var decodePixels: UInt32 {
         if let explicitDecodePixels { return explicitDecodePixels }
         guard case .point(let w) = width, case .point(let h) = height else { return 0 }

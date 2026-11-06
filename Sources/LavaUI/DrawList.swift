@@ -159,6 +159,11 @@ public final class DrawList {
     /// storage pointers below are that window's, and a frame is committed to
     /// the window it was built for.
     let window: WindowID
+
+    /// The output scale this list's window is drawn at — see `DisplayScale`.
+    /// Set by the window from its `Scale` events; 1 for a list that goes
+    /// anywhere else (a drag chip).
+    public internal(set) var displayScale: Float = 1
     private var commandStorage: UnsafeMutablePointer<canvas.DrawCommand>
     private var commandCapacity: Int
     /// Public so a harness outside LavaUI (`LavaBench`) can assert on the
@@ -2104,9 +2109,18 @@ public final class DrawList {
             // so viewport gating is automatic instead of the app's job.
             var resolved = leaf.image
             if resolved == nil, let path = leaf.imagePath {
+                // The cap was worked out in layout pixels; the image is drawn
+                // over that many times the scale in device pixels. Decided
+                // here rather than in `body` so a window that moves to a
+                // screen with another scale re-decodes on its next frame.
+                let cap = leaf.imageDecodePixels == 0
+                    ? 0
+                    : DisplayScale.pixels(
+                        Float(leaf.imageDecodePixels), scale: displayScale
+                    )
                 resolved = ImageStore.imageIfLoaded(
                     path: path,
-                    maxPixelSize: leaf.imageDecodePixels,
+                    maxPixelSize: cap,
                     into: editor
                 )
             }

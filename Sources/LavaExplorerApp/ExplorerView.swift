@@ -1398,9 +1398,11 @@ enum TileMetrics {
 
     /// The cache size to ask for: the "large" thumbnails once the box is
     /// more pixels across than a "normal" one has, which is any scale above
-    /// 1.28.
+    /// 1.28 — content scale and the screen's output scale together, since the
+    /// box is drawn over that many device pixels.
     static var thumbnailSize: ThumbnailCache.Size {
-        pictureWidth * FontStore.scale.multiplier > Float(ThumbnailCache.Size.normal.pixels)
+        pictureWidth * FontStore.scale.multiplier * DisplayScale.main
+            > Float(ThumbnailCache.Size.normal.pixels)
             ? .large : .normal
     }
 }

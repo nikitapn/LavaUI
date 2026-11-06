@@ -203,6 +203,10 @@ final class DockModel {
 
     @ObservationIgnored var editor: Editor?
     @ObservationIgnored private var icons: [String: UIImage?] = [:]
+    /// The scale `icons` were decoded for, and the keys to give back when it
+    /// changes — see `icon(for:)`.
+    @ObservationIgnored private var iconScale: Float = 1
+    @ObservationIgnored private var iconKeys: [String] = []
     @ObservationIgnored var pins = DockPins()
     @ObservationIgnored var catalog: [String: DesktopEntry] = [:]
     @ObservationIgnored private var lastWindows: [WindowInfo] = []
@@ -453,6 +457,15 @@ final class DockModel {
 
     /// The icon for an entry, loaded once. Nil means "draw its initial".
     func icon(for entry: DockEntry) -> UIImage? {
+        // A dock moved to a screen with another scale has every icon at the
+        // wrong resolution. Dropped and decoded again as they are asked for;
+        // the old textures go back now rather than with the process.
+        if iconScale != DisplayScale.main {
+            for key in iconKeys { editor?.resources.releaseImage(key: key) }
+            iconKeys.removeAll()
+            icons.removeAll()
+            iconScale = DisplayScale.main
+        }
         if let cached = icons[entry.appId] { return cached }
         var image: UIImage? = nil
         // The raw app id, not the synthesised `window:` key — an anonymous
@@ -464,9 +477,13 @@ final class DockModel {
             // Rendered at the size the dock magnifies *to*, not the size it
             // rests at: an SVG costs the same either way and a raster icon
             // scaled up is the thing this avoids.
-            image = editor.resources.registerImage(
-                path: path, maxPixelSize: UInt32(Dock.magnifiedSize)
-            )
+            //
+            // In device pixels: the dock is drawn at the output's scale.
+            let cap = DisplayScale.pixels(Dock.magnifiedSize)
+            image = editor.resources.registerImage(path: path, maxPixelSize: cap)
+            if image != nil {
+                iconKeys.append(ImageStore.key(path: path, maxPixelSize: cap))
+            }
         }
         icons[entry.appId] = image
         return image
