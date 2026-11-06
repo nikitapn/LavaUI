@@ -40,6 +40,7 @@
 #include "appmenu.hpp"
 #include "canvas_surface.hpp"
 #include "clipboard.hpp"
+#include "output_box.hpp"
 #include "config.hpp"
 #include "decoration.hpp"
 #include "drag.hpp"
@@ -4402,8 +4403,9 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// lived only there sits in the hole forever.
   void refreshFromLayout() {
     if (server_ == nullptr || server_->output_layout == nullptr) return;
-    wlr_box unionBox{};
-    wlr_output_layout_get_box(server_->output_layout, nullptr, &unionBox);
+    // Covering boxes, not wlroots' own: at a scale that does not divide the
+    // mode, those end a device pixel short of the edge — see `coveringBox`.
+    const wlr_box unionBox = lava::coveringUnion(server_->output_layout);
     if (unionBox.width <= 0 || unionBox.height <= 0) return;
 
     int px = unionBox.x;
@@ -4411,8 +4413,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     uint32_t pw = static_cast<uint32_t>(unionBox.width);
     uint32_t ph = static_cast<uint32_t>(unionBox.height);
     if (wlr_output *primary = resolvePrimaryOutput()) {
-      wlr_box box{};
-      wlr_output_layout_get_box(server_->output_layout, primary, &box);
+      const wlr_box box = lava::coveringBox(server_->output_layout, primary);
       if (box.width > 0 && box.height > 0) {
         px = box.x;
         py = box.y;
@@ -8019,8 +8020,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     wlr_output *output = wlr_output_layout_output_at(
         server_->output_layout, static_cast<double>(x), static_cast<double>(y));
     if (output == nullptr) return;
-    wlr_box box{};
-    wlr_output_layout_get_box(server_->output_layout, output, &box);
+    const wlr_box box = lava::coveringBox(server_->output_layout, output);
     if (box.width <= 0 || box.height <= 0) return;
     outX = box.x;
     outY = box.y;

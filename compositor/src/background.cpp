@@ -1,4 +1,5 @@
 #include "background.hpp"
+#include "output_box.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -285,8 +286,7 @@ void Background::refit() {
   // sized to the layout leaves anything outside it — the gap between two
   // monitors that are not flush, a window dragged off the edge — showing
   // whatever was in the framebuffer.
-  wlr_box extents{};
-  wlr_output_layout_get_box(layout_, nullptr, &extents);
+  const wlr_box extents = coveringUnion(layout_);
   if (rect_ != nullptr) {
     const int32_t margin = 4096;
     if (wlr_box_empty(&extents)) {
@@ -333,8 +333,9 @@ void Background::refit() {
 
 void Background::fitPanel(Panel &panel, wlr_output_layout_output *layout_output) {
   wlr_output *output = layout_output->output;
-  wlr_box box{};
-  wlr_output_layout_get_box(layout_, output, &box);
+  // To the last device pixel — see `coveringBox`. wlroots' own box stops one
+  // short at scales that do not divide the mode.
+  const wlr_box box = coveringBox(layout_, output);
   if (box.width <= 0 || box.height <= 0) return;
 
   const float scale = output->scale > 0.f ? output->scale : 1.f;
