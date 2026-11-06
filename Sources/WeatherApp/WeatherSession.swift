@@ -70,7 +70,7 @@ final class WeatherSession: @unchecked Sendable {
         generation += 1
         let token = generation
         let service = self.service
-        Thread.detachNewThread { [service] in
+        Thread.detachNewThread { [weak self, service] in
             do {
                 let result = try service.forecast(for: next)
                 MainQueue.async { [weak self] in
@@ -113,7 +113,7 @@ final class WeatherSession: @unchecked Sendable {
         generation += 1
         let token = generation
         let service = self.service
-        Thread.detachNewThread { [service] in
+        Thread.detachNewThread { [weak self, service] in
             let found = (try? service.search(term)) ?? []
             MainQueue.async { [weak self] in
                 guard let self, token == self.generation else { return }

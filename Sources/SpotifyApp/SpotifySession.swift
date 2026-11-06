@@ -146,7 +146,7 @@ final class SpotifySession: @unchecked Sendable {
             : "Loading seed catalog…"
         notice = bootstrapNotice()
 
-        Thread.detachNewThread { [client] in
+        Thread.detachNewThread { [weak self, client] in
             do {
                 let sections = try client.loadHome()
                 MainQueue.async { [weak self] in
@@ -209,7 +209,7 @@ final class SpotifySession: @unchecked Sendable {
 
     func login() {
         status = "Waiting for Spotify login in browser…"
-        Thread.detachNewThread { [client] in
+        Thread.detachNewThread { [weak self, client] in
             do {
                 try client.loginInteractive()
                 MainQueue.async { [weak self] in
@@ -253,7 +253,7 @@ final class SpotifySession: @unchecked Sendable {
             status = "Log in first (Account menu)"
             return
         }
-        Thread.detachNewThread { [client] in
+        Thread.detachNewThread { [weak self, client] in
             do {
                 let list = try client.listDevices()
                 let preferred = try? client.resolvePlaybackDevice(among: list)
@@ -481,7 +481,7 @@ final class SpotifySession: @unchecked Sendable {
         status = "Loading \(album.name)…"
         isLoading = true
         let id = album.id
-        Thread.detachNewThread { [client] in
+        Thread.detachNewThread { [weak self, client] in
             do {
                 let (full, tracks) = try client.albumDetail(id: id)
                 MainQueue.async { [weak self] in
@@ -514,7 +514,7 @@ final class SpotifySession: @unchecked Sendable {
         status = "Loading \(artist.name)…"
         isLoading = true
         let id = artist.id
-        Thread.detachNewThread { [client] in
+        Thread.detachNewThread { [weak self, client] in
             do {
                 let result = try client.artistDetail(id: id, fallbackName: artist.name)
                 MainQueue.async { [weak self] in
@@ -627,7 +627,7 @@ final class SpotifySession: @unchecked Sendable {
         }
         isLoading = true
         status = "Searching “\(q)”…"
-        Thread.detachNewThread { [client] in
+        Thread.detachNewThread { [weak self, client] in
             do {
                 let hits = try client.search(query: q)
                 MainQueue.async { [weak self] in
@@ -661,7 +661,7 @@ final class SpotifySession: @unchecked Sendable {
             return
         }
         isQuickSearching = true
-        Thread.detachNewThread { [client] in
+        Thread.detachNewThread { [weak self, client] in
             Thread.sleep(forTimeInterval: 0.22)
             do {
                 let tracks = try client.searchTracks(query: trimmed, limit: 8)
@@ -750,7 +750,7 @@ final class SpotifySession: @unchecked Sendable {
             }
             return [playTrack]
         }()
-        Thread.detachNewThread { [client] in
+        Thread.detachNewThread { [weak self, client] in
             do {
                 if deviceId == nil {
                     let list = try client.listDevices()
@@ -807,7 +807,7 @@ final class SpotifySession: @unchecked Sendable {
             status = "Log in to play"
             return
         }
-        Thread.detachNewThread { [client] in
+        Thread.detachNewThread { [weak self, client] in
             do {
                 let device = try client.resolvePlaybackDevice()
                 try client.playAlbum(album, deviceId: device.id)
@@ -839,7 +839,7 @@ final class SpotifySession: @unchecked Sendable {
             return
         }
         let shouldPause = isPlaying
-        Thread.detachNewThread { [client] in
+        Thread.detachNewThread { [weak self, client] in
             do {
                 if shouldPause {
                     try client.pause()
@@ -871,7 +871,7 @@ final class SpotifySession: @unchecked Sendable {
             localSkip(+1)
             return
         }
-        Thread.detachNewThread { [client] in
+        Thread.detachNewThread { [weak self, client] in
             do {
                 try client.skipNext()
                 MainQueue.async { [weak self] in self?.status = "Skipped →" }
@@ -894,7 +894,7 @@ final class SpotifySession: @unchecked Sendable {
             localSkip(-1)
             return
         }
-        Thread.detachNewThread { [client] in
+        Thread.detachNewThread { [weak self, client] in
             do {
                 try client.skipPrevious()
                 MainQueue.async { [weak self] in self?.status = "Skipped ←" }
