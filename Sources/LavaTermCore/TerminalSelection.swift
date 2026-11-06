@@ -2,6 +2,13 @@ import Foundation
 
 /// Where a cell is, in the grid rather than on the screen.
 ///
+/// `row` is a *line number* (`TerminalScreen.line(ofViewportRow:)`), not a
+/// viewport row: a selection has to stay on the same text while the view
+/// scrolls under it, which is what lets a drag carry on past the edge of the
+/// window. With no history and the view at the bottom the two are the same
+/// number. `TerminalGeometry` still answers in viewport rows — it only knows
+/// pixels — and the caller converts.
+///
 /// Ordered reading order — down a row beats along a column — which is what
 /// makes a selection between two cells a range rather than a rectangle.
 public struct CellPosition: Equatable, Comparable, Sendable {
@@ -82,6 +89,17 @@ public struct TerminalSelection {
     }
 
     public private(set) var granularity: Granularity = .character
+    /// `TerminalScreen.lineEpoch` when the press landed. A selection from
+    /// another epoch names lines that no longer exist as numbered — see
+    /// `isCurrent(in:)`.
+    public private(set) var epoch = 0
+
+    /// Whether this selection's line numbers still mean what they did. False
+    /// after a reflow, a cleared scrollback or a switch of screens; the owner
+    /// clears it.
+    public func isCurrent(in screen: TerminalScreen) -> Bool {
+        epoch == screen.lineEpoch
+    }
     /// The span the press itself covered. A word- or line-granularity drag is
     /// the union of this and the span under the pointer now, which is what
     /// keeps whole words whole at both ends.
@@ -115,6 +133,7 @@ public struct TerminalSelection {
         at position: CellPosition, granularity: Granularity, in screen: TerminalScreen
     ) {
         self.granularity = granularity
+        epoch = screen.lineEpoch
         pressed = position
         dragged = false
         // A character-granularity press is only a *pending* selection: a plain
@@ -161,7 +180,8 @@ public struct TerminalSelection {
         granularity = .character
     }
 
-    /// The columns of `row` that are inside the selection, or nil if none are.
+    /// The columns of line `row` that are inside the selection, or nil if none
+    /// are. A line number — see `CellPosition`.
     ///
     /// Shared by the paint pass and the copy, so a highlight can never cover
     /// something the clipboard would not get.
@@ -183,16 +203,18 @@ public struct TerminalSelection {
     public func text(from screen: TerminalScreen) -> String {
         guard let range else { return "" }
         var lines: [String] = []
-        for row in range.lowerBound.row...range.upperBound.row {
-            guard row < screen.rows,
-                  let columns = columns(inRow: row, cols: screen.cols)
+        let existing = screen.lineRange
+        let first = max(range.lowerBound.row, existing.lowerBound)
+        let last = min(range.upperBound.row, existing.upperBound)
+        guard first <= last else { return "" }
+        for row in first...last {
+            guard let columns = columns(inRow: row, cols: screen.cols)
             else { continue }
             var line = ""
             for col in columns where col < screen.cols {
-                // visibleCell: a selection made while scrolled into history
-                // must copy what was under the pointer, not the live screen
-                // underneath.
-                line.unicodeScalars.append(screen.visibleCell(row: row, col: col).scalar)
+                // By line, not by viewport row: a selection dragged past the
+                // edge of the window covers text that is no longer on it.
+                line.unicodeScalars.append(screen.cell(line: row, col: col).scalar)
             }
             while line.last == " " { line.removeLast() }
             lines.append(line)
@@ -212,15 +234,15 @@ public struct TerminalSelection {
             return (CellPosition(row: position.row, col: 0),
                     CellPosition(row: position.row, col: max(0, screen.cols - 1)))
         case .word:
-            guard position.col < screen.cols, position.row < screen.rows,
-                  isWord(screen.visibleCell(row: position.row, col: position.col).scalar)
+            guard position.col < screen.cols,
+                  isWord(screen.cell(line: position.row, col: position.col).scalar)
             else { return (position, position) }
             var first = position.col, last = position.col
             while first > 0,
-                  isWord(screen.visibleCell(row: position.row, col: first - 1).scalar)
+                  isWord(screen.cell(line: position.row, col: first - 1).scalar)
             { first -= 1 }
             while last + 1 < screen.cols,
-                  isWord(screen.visibleCell(row: position.row, col: last + 1).scalar)
+                  isWord(screen.cell(line: position.row, col: last + 1).scalar)
             { last += 1 }
             return (CellPosition(row: position.row, col: first),
                     CellPosition(row: position.row, col: last))

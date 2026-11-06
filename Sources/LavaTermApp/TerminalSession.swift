@@ -40,6 +40,14 @@ public final class TerminalSession: @unchecked Sendable {
     /// synchronisation.
     @ObservationIgnored var geometry: TerminalGeometry?
 
+    /// Where the pointer is while a left-button selection drag is under way,
+    /// in window coordinates; nil the rest of the time. Kept because the
+    /// pointer can stop moving while the view goes on scrolling under it —
+    /// see `autoscroll()`.
+    @ObservationIgnored private var dragPointer: (x: Float, y: Float)?
+    /// When the next autoscroll step is due, on `ProcessInfo.systemUptime`.
+    @ObservationIgnored private var nextAutoscroll: TimeInterval = 0
+
     private var pty: PtySession?
     @ObservationIgnored private let inbox = PtyInbox()
     private var lastCols = 80
@@ -99,23 +107,102 @@ public final class TerminalSession: @unchecked Sendable {
     /// Begins a selection under the pointer. `clicks` is 1, 2 or 3 — character,
     /// word, or the whole row.
     public func beginSelection(atX x: Float, y: Float, clicks: Int) {
-        guard let geometry else { return }
+        guard let position = position(atX: x, y: y) else { return }
         let granularity: TerminalSelection.Granularity =
             clicks >= 3 ? .line : (clicks == 2 ? .word : .character)
-        selection.begin(
-            at: geometry.cell(atX: x, y: y), granularity: granularity, in: screen)
+        selection.begin(at: position, granularity: granularity, in: screen)
+        dragPointer = (x, y)
+        // The first step waits a beat: a press that lands in the edge band
+        // to select the top row should not have the view leap away from it.
+        nextAutoscroll = ProcessInfo.processInfo.systemUptime + Self.autoscrollInterval
         ViewInvalidation.markNeedsRedraw()
     }
 
     public func extendSelection(toX x: Float, y: Float) {
-        guard let geometry else { return }
-        selection.extend(to: geometry.cell(atX: x, y: y), in: screen)
+        guard let position = position(atX: x, y: y) else { return }
+        dragPointer = (x, y)
+        selection.extend(to: position, in: screen)
         ViewInvalidation.markNeedsRedraw()
+        // Into the edge band: the tick takes it from here, and keeps going
+        // while the pointer rests there, which sends no events at all.
+        if autoscrollLines() != 0 { FrameScheduler.requestRedraw(in: 0) }
+    }
+
+    /// The cell under a window point, as a line number — what the selection
+    /// counts in, so it stays on its text while the view scrolls.
+    private func position(atX x: Float, y: Float) -> CellPosition? {
+        guard let geometry else { return nil }
+        let cell = geometry.cell(atX: x, y: y)
+        return CellPosition(row: screen.line(ofViewportRow: cell.row), col: cell.col)
+    }
+
+    // ─── Autoscroll ──────────────────────────────────────────────────────
+    //
+    // Dragging a selection to the top or bottom edge scrolls the view and
+    // carries the selection on, the way every terminal and editor does. The
+    // band is half a row inside the grid as well as everything past it,
+    // because a maximized window has nothing past its bottom edge to drag
+    // into — the pointer stops at the screen.
+
+    /// Time between steps. Speed comes from how many lines a step takes,
+    /// not from stepping faster, so the frame rate cannot change it.
+    static let autoscrollInterval: TimeInterval = 0.05
+    /// Most lines one step may take: 20 per second at the edge, 200 far
+    /// past it.
+    static let autoscrollMaxLines = 10
+
+    /// Lines the next step should move: positive into history (up), negative
+    /// toward the live screen, 0 when the pointer is not in an edge band or
+    /// nothing is being dragged.
+    func autoscrollLines() -> Int {
+        guard let pointer = dragPointer, let geometry,
+              !screen.onAlternateScreen  // there, scrolling is arrow keys to a program
+        else { return 0 }
+        let band = geometry.cellH * 0.5
+        let top = geometry.originY + band
+        let bottom = geometry.originY + Float(geometry.rows) * geometry.cellH - band
+        // One line in the band, and one more for every row's height beyond.
+        func lines(_ depth: Float) -> Int {
+            min(Self.autoscrollMaxLines, 1 + Int(depth / geometry.cellH))
+        }
+        if pointer.y < top { return lines(top - pointer.y) }
+        if pointer.y > bottom { return -lines(pointer.y - bottom) }
+        return 0
+    }
+
+    /// One frame's share of autoscroll. Called from paint, which runs every
+    /// frame the scheduler is asked for — and the scheduler is asked for the
+    /// next one here, because a pointer resting in the band sends nothing.
+    func autoscroll() {
+        let lines = autoscrollLines()
+        guard lines != 0, let pointer = dragPointer else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if now >= nextAutoscroll {
+            nextAutoscroll = now + Self.autoscrollInterval
+            if screen.scrollView(by: lines),
+               let position = position(atX: pointer.x, y: pointer.y)
+            {
+                // The pointer has not moved, but the line under it has.
+                selection.extend(to: position, in: screen)
+                ViewInvalidation.markNeedsRedraw()
+            }
+        }
+        FrameScheduler.requestRedraw(in: max(0, nextAutoscroll - now))
+    }
+
+    /// Lets go of a selection whose line numbers no longer mean anything —
+    /// after a reflow, a cleared scrollback, or a switch of screens.
+    func dropStaleSelection() {
+        guard !selection.isEmpty || dragPointer != nil,
+              !selection.isCurrent(in: screen) else { return }
+        selection.clear()
+        dragPointer = nil
     }
 
     /// A press that never moved is a click, and a click puts the selection
     /// away — the same thing clicking in a text editor does.
     public func endSelection() {
+        dragPointer = nil
         if !selection.dragged, selection.granularity == .character {
             selection.clear()
         } else {
@@ -129,6 +216,7 @@ public final class TerminalSession: @unchecked Sendable {
     /// Primary is filled too — middle-click still pastes, and `wl-paste
     /// --primary` still sees the drag.
     private func publishSelection() {
+        guard selection.isCurrent(in: screen) else { return }
         let text = selection.text(from: screen)
         guard !text.isEmpty else { return }
         ClipboardBridge.write(text)
@@ -316,7 +404,14 @@ public final class TerminalSession: @unchecked Sendable {
             return true
         }
         guard screen.scrollView(by: delta) else { return false }
-        clearSelection()
+        // The selection is counted in lines, so it stays on its text. A drag
+        // under way follows the pointer onto whatever line the wheel brought
+        // under it — wheeling while the button is held selects as it goes.
+        if let pointer = dragPointer,
+           let position = position(atX: pointer.x, y: pointer.y)
+        {
+            selection.extend(to: position, in: screen)
+        }
         ViewInvalidation.markNeedsRedraw()
         return true
     }

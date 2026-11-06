@@ -43,6 +43,17 @@ public final class TerminalScreen: @unchecked Sendable {
     /// into history. The alternate screen has no history, so this stays 0 there.
     public private(set) var viewOffset: Int = 0
 
+    /// History lines ever trimmed off the front of the scrollback — what keeps
+    /// a `line(ofViewportRow:)` number pointing at the same text while the
+    /// history it counts from loses its oldest lines.
+    private var trimmedLines = 0
+
+    /// Bumped whenever line numbers stop meaning what they meant: a reflow
+    /// re-cuts every line, clearing the scrollback empties what they counted,
+    /// and the alternate screen is another buffer altogether. Anything holding
+    /// a line number — a selection — compares this and lets go.
+    public private(set) var lineEpoch = 0
+
     /// Lines held above the live screen on the primary buffer. Capped so a
     /// long-running shell cannot grow forever.
     public private(set) var scrollbackLineCount: Int = 0
@@ -308,6 +319,8 @@ public final class TerminalScreen: @unchecked Sendable {
         // means nothing now. Clamping keeps it in range; being glued to the
         // bottom, which is where a terminal usually is, is exact.
         viewOffset = min(viewOffset, scrollback.count)
+        trimmedLines = 0
+        lineEpoch &+= 1
     }
 
     /// A row without the padding the grid gave it.
@@ -398,6 +411,54 @@ public final class TerminalScreen: @unchecked Sendable {
         let liveRow = lineIndex - history
         guard liveRow >= 0, liveRow < rows else { return .empty }
         return grid[index(liveRow, col)]
+    }
+
+    // ─── Line numbers ────────────────────────────────────────────────────
+    //
+    // A viewport row names different text every time the view scrolls or
+    // output arrives, so anything that must stay on the same text — a
+    // selection being dragged while the view moves — counts in *lines*
+    // instead: history first, then the live screen, numbered from the first
+    // line this buffer ever held. A line that scrolls off the live screen
+    // into history keeps its number, and so does every line still on it.
+
+    /// The line number of viewport row `row`. On the alternate screen, which
+    /// has no history, it is the row itself.
+    public func line(ofViewportRow row: Int) -> Int {
+        if onAlternateScreen { return row }
+        return trimmedLines + scrollback.count - viewOffset + row
+    }
+
+    /// The viewport row showing `line` — outside `0..<rows` when it is
+    /// scrolled out of view.
+    public func viewportRow(ofLine line: Int) -> Int {
+        if onAlternateScreen { return line }
+        return line - trimmedLines - scrollback.count + viewOffset
+    }
+
+    /// The cell at `col` of `line`, wherever that line is now. Empty for a line
+    /// trimmed out of history or not written yet.
+    public func cell(line: Int, col: Int) -> TerminalCell {
+        guard col >= 0, col < cols else { return .empty }
+        if onAlternateScreen {
+            guard line >= 0, line < rows else { return .empty }
+            return grid[index(line, col)]
+        }
+        let n = line - trimmedLines
+        guard n >= 0 else { return .empty }
+        if n < scrollback.count {
+            let row = scrollback[n]
+            return col < row.count ? row[col] : .empty
+        }
+        let live = n - scrollback.count
+        guard live < rows else { return .empty }
+        return grid[index(live, col)]
+    }
+
+    /// The first and last line numbers that exist.
+    public var lineRange: ClosedRange<Int> {
+        if onAlternateScreen { return 0...max(0, rows - 1) }
+        return trimmedLines...(trimmedLines + scrollback.count + rows - 1)
     }
 
     /// True when the viewport is not glued to the live bottom.
@@ -619,6 +680,7 @@ public final class TerminalScreen: @unchecked Sendable {
         scrollTop = 0
         scrollBottom = rows - 1
         onAlternateScreen = true
+        lineEpoch &+= 1
     }
 
     private func leaveAlternateScreen(restoreCursor: Bool) {
@@ -648,6 +710,7 @@ public final class TerminalScreen: @unchecked Sendable {
             cursorRow = min(rows - 1, mainCursorRow)
         }
         onAlternateScreen = false
+        lineEpoch &+= 1
     }
 
     /// `put` for a run, a row segment at a time under one exclusive access —
@@ -736,6 +799,7 @@ public final class TerminalScreen: @unchecked Sendable {
                 let drop = scrollback.count - maxScrollbackLines
                 scrollback.removeFirst(drop)
                 scrollbackWrapped.removeFirst(min(drop, scrollbackWrapped.count))
+                trimmedLines += drop
             }
             scrollbackLineCount = scrollback.count
             // Keep the viewport fixed on the same history line while new
@@ -814,6 +878,8 @@ public final class TerminalScreen: @unchecked Sendable {
                 scrollbackWrapped.removeAll(keepingCapacity: true)
                 scrollbackLineCount = 0
                 viewOffset = 0
+                trimmedLines = 0
+                lineEpoch &+= 1
             }
         }
     }

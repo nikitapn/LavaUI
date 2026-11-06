@@ -194,6 +194,7 @@ struct TerminalCanvas: View {
         let cols = max(1, Int(usableW / cellW))
         let rows = max(1, Int(usableH / cellH))
         session.ensureSize(cols: cols, rows: rows)
+        session.dropStaleSelection()
 
         let screen = session.screen
         let originX = frame.x + padX
@@ -208,6 +209,9 @@ struct TerminalCanvas: View {
             cellW: cellW, cellH: cellH,
             cols: screen.cols, rows: screen.rows
         )
+        // After the geometry, which it measures the edge band against, and
+        // before anything is painted, so a step shows in this frame.
+        session.autoscroll()
 
         list.rect(
             x: frame.x, y: frame.y, w: frame.w, h: frame.h,
@@ -286,8 +290,10 @@ struct TerminalCanvas: View {
         // which is most of a `ls` and all of a syntax-highlighted file.
         if !session.selection.isEmpty {
             for r in 0..<screen.rows {
+                // The selection counts in lines; this row shows one of them.
                 guard let columns = session.selection.columns(
-                    inRow: r, cols: screen.cols) else { continue }
+                    inRow: screen.line(ofViewportRow: r), cols: screen.cols)
+                else { continue }
                 let x = originX + Float(columns.lowerBound) * cellW
                 let w = Float(columns.count) * cellW
                 list.rect(
