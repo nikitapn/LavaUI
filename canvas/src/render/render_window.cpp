@@ -2111,7 +2111,14 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
           continue;
         }
         if (q.size.x <= 0.f || q.size.y <= 0.f) continue;  // e.g. space
-        quads_.pushGlyph({gi.x + q.bearing.x + ox, gi.y - q.bearing.y + oy},
+        // Snapped to a device pixel, as the scaled path above does. HarfBuzz
+        // advances are fractional (an `l` after "He" in 12px OpenSans lands
+        // at 15.594), and the atlas is sampled linearly — so an unsnapped pen
+        // smears a one-texel stem across two pixels at 40/60. The bitmap's
+        // bearing is whole pixels already.
+        const float penX = std::round((gi.x + ox) * dsx) / dsx;
+        const float penY = std::round((gi.y + oy) * dsy) / dsy;
+        quads_.pushGlyph({penX + q.bearing.x, penY - q.bearing.y},
                          q.size, q.uv0, q.uv1, faded(cmd.color));
       }
       break;
