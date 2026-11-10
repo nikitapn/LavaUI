@@ -3,6 +3,14 @@ import CxxCanvas
 @testable import LavaUI
 
 final class WindowControlsTests: XCTestCase {
+    func testChromeChoiceIsPerWindow() {
+        let panel = WindowScope(label: "panel")
+        let prompt = WindowScope(label: "prompt")
+        WindowScope.withCurrent(prompt) { WindowBridge.drawsOwnChrome = true }
+        WindowScope.withCurrent(panel) { XCTAssertFalse(WindowBridge.drawsOwnChrome) }
+        WindowScope.withCurrent(prompt) { XCTAssertTrue(WindowBridge.drawsOwnChrome) }
+    }
+
     private func host(_ kind: WindowControlKind, beforeClose: @escaping () -> Void) throws -> LayoutHost {
         let host = LayoutHost()
         host.setRoot(VStack(width: .pt(100), height: .pt(50), alignment: .start, spacing: 0) {
@@ -44,5 +52,14 @@ final class WindowControlsTests: XCTestCase {
         PointerCapture.move(x: 6, y: 6)
         PointerCapture.release()
         XCTAssertEqual(calls, 0)
+    }
+
+    func testCloseOnlyClusterHasNoMinimizeOrMaximizeTargets() throws {
+        let host = try host(.close) {}
+        XCTAssertNotNil(host.agentFrame(sid: "window-control-close"))
+        XCTAssertNil(host.agentFrame(sid: "window-control-minimize"))
+        XCTAssertNil(host.agentFrame(sid: "window-control-maximize"))
+        XCTAssertNil(host.hitTestClick(x: 26, y: 6))
+        XCTAssertNil(host.hitTestClick(x: 46, y: 6))
     }
 }

@@ -53,6 +53,9 @@ public final class WindowScope {
     /// is what a title strip reads and there used to be only one strip.
     var maximized = false
 
+    /// Whether this window draws its own controls instead of a server frame.
+    var drawsOwnChrome = false
+
     /// The engine window this scope drives.
     ///
     /// Here rather than only on `LavaWindow` so a view can ask which window it

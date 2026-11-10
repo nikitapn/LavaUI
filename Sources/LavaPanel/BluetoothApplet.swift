@@ -377,7 +377,9 @@ struct BluetoothPairWindow: View {
         let code: Float = prompt.text.code.isEmpty ? 0 : 52
         let entered: Float = prompt.isShown && !prompt.wantsInput ? 40 : 0
         let field: Float = prompt.wantsInput ? 44 : 0
-        return 24 * 2 + 26 + 46 + code + entered + field + 48
+        let gaps = Float(2 + (code > 0 ? 1 : 0) + (entered > 0 ? 1 : 0)
+                         + (field > 0 ? 1 : 0)) * 10
+        return 44 + 4 + 24 + 46 + code + entered + field + 48 + gaps
     }
 
     var body: some View {
@@ -387,51 +389,61 @@ struct BluetoothPairWindow: View {
         let prompt = bluetooth.prompt(id)
         let text = prompt?.text ?? PairingText(title: "", message: "", code: "")
         let id = id
-        VStack(flexGrow: 1, padding: 24, spacing: 10) {
-            Text(text.title, color: theme.textPrimary, lineLimit: 1)
-                .agentId("pair.title")
-            Text(text.message, color: theme.textSecondary, lineLimit: 2)
-                .agentId("pair.message")
-            if !text.code.isEmpty {
-                HStack(padding: 0, alignment: .center) {
-                    Spacer()
-                    Text(spaced(text.code), color: theme.textPrimary, font: codeFont, lineLimit: 1)
-                        .agentId("pair.code")
-                    Spacer()
-                }
-                .frame(height: .pt(42))
-            }
-            // A keyboard shows nothing of what is typed on it; BlueZ does
-            // say how far along it is.
-            if let entered = entered(prompt) {
-                HStack(padding: 0, alignment: .center) {
-                    Spacer()
-                    Text(entered == 0 ? "Nothing typed yet" : "\(entered) of \(text.code.count) typed",
-                         color: theme.textDim, lineLimit: 1)
-                        .agentId("pair.entered")
-                    Spacer()
-                }
-            }
-            if prompt?.wantsInput == true {
-                TextField(
-                    text: $draft.text,
-                    autoFocus: true,
-                    onSubmit: { session.answerPairing(id, accept: true) }
-                )
-                .agentId("pair.field")
-            }
-            Spacer()
-            HStack(padding: 0, alignment: .center, spacing: 10) {
+        VStack(flexGrow: 1, padding: 0, spacing: 0) {
+            HStack(padding: 0, alignment: .center, spacing: 12) {
+                WindowControls([.close])
+                Text(text.title, color: theme.textPrimary, lineLimit: 1)
+                    .agentId("pair.title")
                 Spacer()
-                Button(prompt?.isShown == true ? "Stop" : declineLabel(prompt)) {
-                    session.answerPairing(id, accept: false)
+            }
+            .padding(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+            .frame(height: .pt(44))
+            .windowDrag(doubleClickMaximizes: false)
+            VStack(flexGrow: 1, padding: 0, spacing: 10) {
+                Text(text.message, color: theme.textSecondary, lineLimit: 2)
+                    .agentId("pair.message")
+                if !text.code.isEmpty {
+                    HStack(padding: 0, alignment: .center) {
+                        Spacer()
+                        Text(spaced(text.code), color: theme.textPrimary, font: codeFont, lineLimit: 1)
+                            .agentId("pair.code")
+                        Spacer()
+                    }
+                    .frame(height: .pt(42))
                 }
-                .agentId("pair.decline")
-                if prompt?.isShown == false {
-                    Button(acceptLabel(prompt)) { session.answerPairing(id, accept: true) }
-                        .agentId("pair.accept")
+                // A keyboard shows nothing of what is typed on it; BlueZ does
+                // say how far along it is.
+                if let entered = entered(prompt) {
+                    HStack(padding: 0, alignment: .center) {
+                        Spacer()
+                        Text(entered == 0 ? "Nothing typed yet" : "\(entered) of \(text.code.count) typed",
+                             color: theme.textDim, lineLimit: 1)
+                            .agentId("pair.entered")
+                        Spacer()
+                    }
+                }
+                if prompt?.wantsInput == true {
+                    TextField(
+                        text: $draft.text,
+                        autoFocus: true,
+                        onSubmit: { session.answerPairing(id, accept: true) }
+                    )
+                    .agentId("pair.field")
+                }
+                Spacer()
+                HStack(padding: 0, alignment: .center, spacing: 10) {
+                    Spacer()
+                    Button(prompt?.isShown == true ? "Stop" : declineLabel(prompt)) {
+                        session.answerPairing(id, accept: false)
+                    }
+                    .agentId("pair.decline")
+                    if prompt?.isShown == false {
+                        Button(acceptLabel(prompt)) { session.answerPairing(id, accept: true) }
+                            .agentId("pair.accept")
+                    }
                 }
             }
+            .padding(EdgeInsets(top: 4, leading: 24, bottom: 24, trailing: 24))
         }
         .background(theme.background)
         .agentId("pair.window")

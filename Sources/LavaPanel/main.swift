@@ -944,12 +944,14 @@ final class MenuSession {
         guard authWindows[prompt.id] == nil else { return }
         let draft = AuthDraft(prompt)
         var opened: WindowID?
-        opened = LavaApp.openWindow(
+        opened = LavaClient.openWindow(
             title: prompt.title.isEmpty ? "Network" : prompt.title,
             width: NetworkAuthWindow.width,
             height: NetworkAuthWindow.height(prompt),
+            frame: .client,
+            dialogParent: 0,
             onClose: {
-                // Closed from its title bar: that is a no.
+                // Closing the prompt is a no.
                 if session.authWindows[prompt.id] != nil { session.cancelAuth(prompt.id) }
             }
         ) {
@@ -1064,12 +1066,14 @@ final class MenuSession {
         let draft = PairDraft()
         let font = codeFont
         var opened: WindowID?
-        opened = LavaApp.openWindow(
+        opened = LavaClient.openWindow(
             title: prompt.text.title,
             width: BluetoothPairWindow.width,
             height: BluetoothPairWindow.height(prompt),
+            frame: .client,
+            dialogParent: 0,
             onClose: {
-                // Closed from its title bar: that is a no.
+                // Closing the prompt is a no.
                 if session.pairWindows[prompt.id] != nil {
                     session.answerPairing(prompt.id, accept: false)
                 }

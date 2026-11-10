@@ -76,7 +76,10 @@ public enum WindowBridge {
     /// ```swift
     /// if WindowBridge.drawsOwnChrome { WindowControls() }
     /// ```
-    nonisolated(unsafe) public static var drawsOwnChrome = false
+    public static var drawsOwnChrome: Bool {
+        get { WindowScope.currentOrMain.drawsOwnChrome }
+        set { WindowScope.currentOrMain.drawsOwnChrome = newValue }
+    }
 
     /// Whether this window currently fills the work area.
     ///
@@ -309,6 +312,7 @@ public struct WindowControlButton: View {
 /// appear — and in what order — is the app's, so a window that cannot be
 /// resized simply does not list `.maximize` rather than showing a button that
 /// lies.
+/// Use `WindowControls([.close])` for a prompt without minimize or maximize.
 public struct WindowControls: View {
     /// Which controls to show, in order.
     public var kinds: [WindowControlKind]

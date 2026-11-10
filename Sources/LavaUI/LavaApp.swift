@@ -374,7 +374,7 @@ public enum LavaApp {
             editor: editor, title: title, width: width, height: height,
             anchor: nil
         ) else { return nil }
-        return adopt(
+        return adoptWindow(
             editor: editor, id: id, title: title, onClose: onClose,
             makeRoot: makeRoot
         )
@@ -433,7 +433,7 @@ public enum LavaApp {
             editor: editor, title: title, width: width, height: height,
             anchor: anchor
         ) else { return nil }
-        return adopt(
+        return adoptWindow(
             editor: editor, id: id, title: title, onClose: onClose,
             makeRoot: makeRoot
         )
@@ -469,18 +469,23 @@ public enum LavaApp {
             id = editor.openWindow(width: width, height: height, title: "Menu")
         }
         guard let id else { return nil }
-        return adopt(
+        return adoptWindow(
             editor: editor, id: id, title: "Menu", onClose: onClose,
             makeRoot: makeRoot
         )
     }
 
-    /// Puts a window the engine already opened onto the frame loop.
-    private static func adopt<V: View>(
+    /// Puts a window the host already opened onto the running frame loop.
+    /// The host owns its surface and input setup; this adopts its view tree
+    /// and closes it through `ClientSurfaceBridge.close`, like `openWindow`.
+    /// Call on the frame loop with the editor passed to `run`.
+    public static func adoptWindow<V: View>(
         editor: Editor, id: WindowID, title: String,
+        drawsOwnChrome: Bool? = nil,
         onClose: (() -> Void)?, makeRoot: @escaping () -> V
     ) -> WindowID {
         let scope = WindowScope(label: title, windowID: id)
+        scope.drawsOwnChrome = drawsOwnChrome ?? WindowScope.main.drawsOwnChrome
         WindowScope.register(scope)
         let window = LavaWindow(
             editor: editor, id: id, scope: scope,

@@ -384,39 +384,51 @@ struct NetworkAuthWindow: View {
     /// Title, message, each field as a label over its box, the buttons.
     static func height(_ prompt: NetworkSession.SecretPrompt) -> Float {
         let message: Float = prompt.message.isEmpty ? 0 : (prompt.message.count > 52 ? 46 : 24)
-        return 24 * 2 + 26 + message + Float(prompt.asked.count) * 62 + 48
+        // The header is separate from the form's padding and row spacing.
+        let gaps = Float(prompt.asked.count + (prompt.message.isEmpty ? 1 : 2)) * 10
+        return 44 + 4 + 24 + message + Float(prompt.asked.count) * 62 + 48 + gaps
     }
 
     var body: some View {
         let theme = Theme.current
         let asked = prompt.asked
-        VStack(flexGrow: 1, padding: 24, spacing: 10) {
-            Text(prompt.title, color: theme.textPrimary, lineLimit: 1)
-                .agentId("auth.title")
-            if !prompt.message.isEmpty {
-                Text(prompt.message, color: theme.textSecondary)
-                    .agentId("auth.message")
+        VStack(flexGrow: 1, padding: 0, spacing: 0) {
+            HStack(padding: 0, alignment: .center, spacing: 12) {
+                WindowControls([.close])
+                Text(prompt.title, color: theme.textPrimary, lineLimit: 1)
+                    .agentId("auth.title")
+                Spacer()
             }
-            ForEach(Array(asked.enumerated()), id: \.element.key) { index, field in
-                VStack(padding: 0, spacing: 4) {
-                    Text(field.label, color: theme.textSecondary, lineLimit: 1)
-                    TextField(
-                        text: draft.binding(field.key),
-                        autoFocus: index == 0,
-                        secure: field.secret,
-                        onSubmit: { session.submitAuth(prompt.id) }
-                    )
-                    .agentId("auth.field." + field.key)
+            .padding(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+            .frame(height: .pt(44))
+            .windowDrag(doubleClickMaximizes: false)
+            VStack(flexGrow: 1, padding: 0, spacing: 10) {
+                if !prompt.message.isEmpty {
+                    Text(prompt.message, color: theme.textSecondary)
+                        .agentId("auth.message")
+                }
+                ForEach(Array(asked.enumerated()), id: \.element.key) { index, field in
+                    VStack(padding: 0, spacing: 4) {
+                        Text(field.label, color: theme.textSecondary, lineLimit: 1)
+                        TextField(
+                            text: draft.binding(field.key),
+                            autoFocus: index == 0,
+                            secure: field.secret,
+                            onSubmit: { session.submitAuth(prompt.id) }
+                        )
+                        .agentId("auth.field." + field.key)
+                    }
+                }
+                Spacer()
+                HStack(padding: 0, alignment: .center, spacing: 10) {
+                    Spacer()
+                    Button("Cancel") { session.cancelAuth(prompt.id) }
+                        .agentId("auth.cancel")
+                    Button("Connect") { session.submitAuth(prompt.id) }
+                        .agentId("auth.connect")
                 }
             }
-            Spacer()
-            HStack(padding: 0, alignment: .center, spacing: 10) {
-                Spacer()
-                Button("Cancel") { session.cancelAuth(prompt.id) }
-                    .agentId("auth.cancel")
-                Button("Connect") { session.submitAuth(prompt.id) }
-                    .agentId("auth.connect")
-            }
+            .padding(EdgeInsets(top: 4, leading: 24, bottom: 24, trailing: 24))
         }
         .background(theme.background)
         .agentId("auth.window")

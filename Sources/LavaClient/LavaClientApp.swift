@@ -1824,6 +1824,7 @@ public enum LavaClient {
         // Before the loop, so a window opened from the first frame has a
         // surface to draw into. Nil again is unnecessary: `run` does not
         // return until the process is leaving.
+        editorForExtras = editor
         LavaApp.ClientSurfaceBridge.open = { width, height, title, anchor in
             Self.openExtraSurface(
                 editor: editor, width: width, height: height, title: title,
@@ -1952,6 +1953,36 @@ public enum LavaClient {
         }
     }
 
+    /// Opens another compositor window on this client's running frame loop.
+    /// Its frame is chosen independently of the first window, so a panel can
+    /// open a prompt with its own `WindowControls([.close])` and drag region.
+    /// `dialogParent` skips remembered placement and centres on that surface;
+    /// pass 0 for a dialog centred on the screen instead of another window.
+    /// Closing it runs `onClose` without ending the client. Returns nil before
+    /// `run` or if the compositor cannot create the surface.
+    @discardableResult
+    public static func openWindow<V: View>(
+        title: String,
+        width: Float = 800,
+        height: Float = 600,
+        frame: WindowFrame = .server,
+        dialogParent: UInt32? = nil,
+        onClose: (() -> Void)? = nil,
+        makeRoot: @escaping () -> V
+    ) -> WindowID? {
+        guard let editor = editorForExtras,
+              let window = openExtraSurface(
+                editor: editor, width: width, height: height, title: title,
+                anchor: nil, frame: frame, dialogParent: dialogParent
+              )
+        else { return nil }
+        return LavaApp.adoptWindow(
+            editor: editor, id: window, title: title,
+            drawsOwnChrome: frame == .client,
+            onClose: onClose, makeRoot: makeRoot
+        )
+    }
+
     /// A second surface. One arena, one input stream, one engine window.
     ///
     /// The stream ending closes that window and nothing else. The stream on
@@ -1959,7 +1990,8 @@ public enum LavaClient {
     /// not, or closing a mirror would quit the app.
     private static func openExtraSurface(
         editor: Editor, width: Float, height: Float, title: String,
-        anchor: LavaApp.SurfaceAnchor?, submenu: Bool = false
+        anchor: LavaApp.SurfaceAnchor?, submenu: Bool = false,
+        frame: WindowFrame? = nil, dialogParent: UInt32? = nil
     ) -> WindowID? {
         guard let compositor = Self.compositor else { return nil }
         guard let window = editor.openWindow(
@@ -2015,9 +2047,16 @@ public enum LavaClient {
                         anchorH: UInt32(max(0, anchor.h.rounded()))
                     )
                 }
+                if let dialogParent {
+                    return try await compositor.createDialogSurface(
+                        arenaId: arenaName, width: w, height: h,
+                        title: title, frame: frame ?? Self.frame, appId: Self.appId,
+                        parentId: dialogParent
+                    )
+                }
                 return try await compositor.createSurface(
                     arenaId: arenaName, width: w, height: h,
-                    title: title, frame: Self.frame, appId: Self.appId
+                    title: title, frame: frame ?? Self.frame, appId: Self.appId
                 )
             }
         } catch {
