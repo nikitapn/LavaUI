@@ -77,8 +77,8 @@ struct ReaderView: View {
         /// far enough first to make it a selection instead.
         case link(PageLink, x: Float, y: Float)
         case selecting
-        /// Holding the scrollbar thumb, `grab` pixels below its top.
-        case scrollbar(grab: Float)
+        /// Holding a scrollbar thumb, `grab` pixels past its start.
+        case scrollbar(Axis, grab: Float)
     }
 
     @DrawState private var drag: Drag?
@@ -89,13 +89,18 @@ struct ReaderView: View {
         case .began:
             guard gesture.button == PointerButton.left else { return }
             FocusManager.clear()
-            if let bar = scrollbar(in: frame), gesture.localX >= frame.w - Scrollbar.hitWidth {
+            for axis in [Axis.vertical, .horizontal] {
+                guard let bar = scrollbar(axis, in: frame) else { continue }
+                let across = axis == .vertical ? gesture.localX : gesture.localY
+                let extent = axis == .vertical ? frame.w : frame.h
+                guard across >= extent - Scrollbar.hitWidth else { continue }
                 // On the thumb: hold it where it was taken. Off it: jump so the
                 // thumb is centred on the pointer, then hold it there.
-                let grab = gesture.localY >= bar.thumbY && gesture.localY <= bar.thumbY + bar.thumbH
-                    ? gesture.localY - bar.thumbY : bar.thumbH / 2
-                drag = .scrollbar(grab: grab)
-                dragScrollbar(to: gesture.localY - grab, frame: frame)
+                let along = axis == .vertical ? gesture.localY : gesture.localX
+                let grab = along >= bar.start && along <= bar.start + bar.length
+                    ? along - bar.start : bar.length / 2
+                drag = .scrollbar(axis, grab: grab)
+                dragScrollbar(axis, to: along - grab, frame: frame)
                 return
             }
             if gesture.clickCount == 1, let link = session.link(atX: gesture.localX, y: gesture.localY) {
@@ -114,7 +119,9 @@ struct ReaderView: View {
                 session.beginSelection(x: x, y: y, clickCount: 1)
                 session.extendSelection(x: gesture.localX, y: gesture.localY)
             case .selecting: session.extendSelection(x: gesture.localX, y: gesture.localY)
-            case .scrollbar(let grab): dragScrollbar(to: gesture.localY - grab, frame: frame)
+            case .scrollbar(let axis, let grab):
+                let along = axis == .vertical ? gesture.localY : gesture.localX
+                dragScrollbar(axis, to: along - grab, frame: frame)
             case nil: break
             }
         case .ended:
@@ -129,10 +136,15 @@ struct ReaderView: View {
         }
     }
 
-    private func dragScrollbar(to thumbTop: Float, frame: CanvasFrame) {
-        guard let bar = scrollbar(in: frame) else { return }
-        let travel = frame.h - bar.thumbH
-        session.scroll(toFraction: travel > 0 ? Double(thumbTop / travel) : 0)
+    private func dragScrollbar(_ axis: Axis, to thumbStart: Float, frame: CanvasFrame) {
+        guard let bar = scrollbar(axis, in: frame) else { return }
+        let travel = bar.track - bar.length
+        let fraction = travel > 0 ? Double(thumbStart / travel) : 0
+        if axis == .vertical {
+            session.scroll(toFraction: fraction)
+        } else {
+            session.scroll(toFractionX: fraction)
+        }
     }
 
     // MARK: - Paint
@@ -259,7 +271,8 @@ struct ReaderView: View {
         }
         list.popClip()
 
-        drawScrollbar(list, frame)
+        drawScrollbar(.vertical, list, frame)
+        drawScrollbar(.horizontal, list, frame)
         tiles.want(wanted, sizes: sizes)
         let now = FrameScheduler.now()
         tiles.markDrawn(drawn, at: now)
@@ -308,24 +321,52 @@ struct ReaderView: View {
         /// Wider than it is drawn, so it can be hit without aiming.
         static let hitWidth: Float = 14
         static let minThumb: Float = 32
+        /// Space the edges keep from each other, and the corner the vertical
+        /// bar leaves the horizontal one.
+        static let inset: Float = 3
     }
 
-    private func scrollbar(in frame: CanvasFrame) -> (thumbY: Float, thumbH: Float)? {
-        let content = session.layout.height * session.viewport.zoom
-        guard content > Double(frame.h), content > 0 else { return nil }
-        let share = Float(Double(frame.h) / content)
-        let thumbH = max(Scrollbar.minThumb, frame.h * share)
-        let travel = frame.h - thumbH
-        let fraction = Float(session.viewport.scrollY / (content - Double(frame.h)))
-        return (travel * min(max(fraction, 0), 1), thumbH)
+    enum Axis { case vertical, horizontal }
+
+    /// Where a thumb is along its track, in canvas-local pixels, or nil when
+    /// that axis does not scroll. Both tracks stop short of the corner while
+    /// the other bar is showing, so the two thumbs never overlap.
+    private func scrollbar(
+        _ axis: Axis, in frame: CanvasFrame
+    ) -> (start: Float, length: Float, track: Float)? {
+        let zoom = session.viewport.zoom
+        let contentH = session.layout.height * zoom
+        let contentW = session.layout.width * zoom
+        let scrollsY = contentH > Double(frame.h)
+        let scrollsX = contentW > Double(frame.w)
+        let content = axis == .vertical ? contentH : contentW
+        let window = axis == .vertical ? frame.h : frame.w
+        let offset = axis == .vertical ? session.viewport.scrollY : session.viewport.scrollX
+        guard content > Double(window), content > 0 else { return nil }
+        let other = axis == .vertical ? scrollsX : scrollsY
+        let track = window - (other ? Scrollbar.hitWidth : 0)
+        let share = Float(Double(window) / content)
+        let length = max(Scrollbar.minThumb, track * share)
+        let fraction = Float(offset / (content - Double(window)))
+        return ((track - length) * min(max(fraction, 0), 1), length, track)
     }
 
-    private func drawScrollbar(_ list: DrawList, _ frame: CanvasFrame) {
-        guard let bar = scrollbar(in: frame) else { return }
+    /// Dark with a light rim: the thumb sits over white paper as often as
+    /// over the mat once a page is wider than the window, and a light thumb
+    /// vanished on the paper.
+    private func drawScrollbar(_ axis: Axis, _ list: DrawList, _ frame: CanvasFrame) {
+        guard let bar = scrollbar(axis, in: frame) else { return }
+        let w = Scrollbar.width, i = Scrollbar.inset
+        let rect: (x: Float, y: Float, w: Float, h: Float) = axis == .vertical
+            ? (frame.x + frame.w - w - i, frame.y + bar.start + 2, w, bar.length - 4)
+            : (frame.x + bar.start + 2, frame.y + frame.h - w - i, bar.length - 4, w)
         list.roundedRect(
-            x: frame.x + frame.w - Scrollbar.width - 3, y: frame.y + bar.thumbY + 2,
-            w: Scrollbar.width, h: bar.thumbH - 4,
-            color: Palette.scrollThumb, radius: Scrollbar.width / 2
+            x: rect.x - 1, y: rect.y - 1, w: rect.w + 2, h: rect.h + 2,
+            color: Palette.scrollRim, radius: w / 2 + 1
+        )
+        list.roundedRect(
+            x: rect.x, y: rect.y, w: rect.w, h: rect.h,
+            color: Palette.scrollThumb, radius: w / 2
         )
     }
 
@@ -354,6 +395,7 @@ enum Palette {
     static let selection = Color(r: 0.25, g: 0.5, b: 1.0, a: 0.35)
     static let match = Color(r: 1.0, g: 0.85, b: 0.1, a: 0.40)
     static let currentMatch = Color(r: 1.0, g: 0.55, b: 0.0, a: 0.55)
-    static let scrollThumb = Color(r: 1, g: 1, b: 1, a: 0.35)
+    static let scrollThumb = Color(r: 0.12, g: 0.12, b: 0.14, a: 0.6)
+    static let scrollRim = Color(r: 1, g: 1, b: 1, a: 0.45)
     static let warning = Color(r: 0.95, g: 0.55, b: 0.35)
 }

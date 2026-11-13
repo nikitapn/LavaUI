@@ -273,6 +273,14 @@ final class ReaderSession: @unchecked Sendable {
         settle()
     }
 
+    /// Sideways, for the bottom scrollbar: only once the column is wider than
+    /// the window, since until then it is centred and does not scroll.
+    func scroll(toFractionX fraction: Double) {
+        let travel = layout.width * viewport.zoom - boxWidth
+        viewport.scrollX = max(0, travel) * min(max(fraction, 0), 1)
+        settle()
+    }
+
     // MARK: - Zoom
 
     func setMode(_ next: ZoomMode) {
