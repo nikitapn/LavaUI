@@ -1316,6 +1316,24 @@ final class LeafNode: YogaBoxNode {
                 }
                 return YGSize(width: w, height: height)
             }
+            if kind == .textField {
+                // One line, whatever the width. This used to fall through to
+                // the measure for a `Text`, which wraps at the width offered —
+                // so a path with spaces in it, longer than LavaExplorer's
+                // address bar, measured two lines and the bar grew to them
+                // while still drawing one. The row is scrolled sideways under
+                // the caret instead (`emitTextField`).
+                let natural = TextLayoutCache.shared.layout(
+                    font: font, text: text, availWidth: 0, mode: 0
+                ).width + 8
+                let w: Float
+                switch widthMode {
+                case YGMeasureModeExactly: w = width
+                case YGMeasureModeAtMost: w = min(natural, width)
+                default: w = natural
+                }
+                return YGSize(width: w, height: font.lineHeight + 4)
+            }
         }
 
         if kind == .slider, let style = sliderStyle {

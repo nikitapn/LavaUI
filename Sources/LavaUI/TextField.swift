@@ -131,13 +131,16 @@ public struct TextField: PrimitiveView {
 
     public func mountPrimitive() -> any AnyViewNode {
         let leaf = LeafNode(kind: .textField, label: "TextField", width: .auto, height: .auto)
-        configure(leaf)
+        // The buffer first: `configure` copies it to `leaf.text`, which is
+        // what the first layout measures. The other way round a field was
+        // measured empty until its first rebuild.
         if isSecure {
             leaf.secureText = Array(text)
             leaf.editing = TextEditingState(LeafNode.masked(text.count))
         } else {
             leaf.editing = TextEditingState(text)
         }
+        configure(leaf)
         leaf.installTextMeasure()
         // Not over another field being typed in, but over a focused list
         // yes: a rename prompt that opens from the file list is where the

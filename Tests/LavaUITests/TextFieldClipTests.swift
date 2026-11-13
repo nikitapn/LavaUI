@@ -1,3 +1,4 @@
+import CYoga
 import CxxCanvas
 import XCTest
 
@@ -55,5 +56,47 @@ final class TextFieldClipTests: XCTestCase {
         let clipIndex = try XCTUnwrap(commands.firstIndex(where: isFieldClip))
         let textIndex = try XCTUnwrap(commands.firstIndex { $0.kind == .text })
         XCTAssertLessThan(clipIndex, textIndex, "the text is drawn inside the scissor")
+    }
+
+    /// A single-line field is one line tall however long its text. It was
+    /// measured as a text, which wraps at the width Yoga offers: in
+    /// LavaExplorer's toolbar a path with spaces in it, longer than the
+    /// address bar, measured two lines, and the bar grew to 54 px in a 44 px
+    /// row while still drawing one line. Measured directly, because whether
+    /// Yoga offers a width or leaves it undefined depends on the tree around
+    /// the field — a plain HStack in a test did not, the toolbar did.
+    func testALongTextIsMeasuredOneLineTall() throws {
+        let editor = try XCTUnwrap(
+            Editor.openClient(width: 300, height: 80),
+            "client engine failed to open"
+        )
+        let font = try XCTUnwrap(
+            FontStore.bootstrap(assetsRoot: LavaResources.root, pixelSize: 16, into: editor),
+            "default face failed to load"
+        )
+        func leaf(_ value: String) throws -> LeafNode {
+            var text = value
+            let host = LayoutHost()
+            host.setRoot(TextField(text: Binding(get: { text }, set: { text = $0 })))
+            _ = host.calculateLayout(width: 300, height: 80)
+            return try XCTUnwrap(host.rootNode as? LeafNode)
+        }
+        let path = "/home/nikita/Music/Hawkesworth - Colloquial Serbian - 2006/CD 2"
+        let field = try leaf(path)
+        let short = try leaf("/home").measureForYoga(
+            width: 200, widthMode: YGMeasureModeAtMost, height: 0, heightMode: YGMeasureModeUndefined
+        )
+        for mode in [YGMeasureModeAtMost, YGMeasureModeExactly, YGMeasureModeUndefined] {
+            let size = field.measureForYoga(
+                width: 200, widthMode: mode, height: 0, heightMode: YGMeasureModeUndefined
+            )
+            XCTAssertEqual(size.height, short.height, "mode \(mode.rawValue): one line")
+            XCTAssertLessThan(size.height, font.lineHeight * 2, "mode \(mode.rawValue): one line")
+            if mode != YGMeasureModeUndefined {
+                // Never wider than offered: a field that overflows its slot
+                // pushes the buttons beside it off the toolbar.
+                XCTAssertLessThanOrEqual(size.width, 200, "mode \(mode.rawValue): within the offer")
+            }
+        }
     }
 }
