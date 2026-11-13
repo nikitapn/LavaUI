@@ -540,6 +540,14 @@ control until the target changes again.
 
 Modifiers apply to any `View`:
 
+`.opacity(0.5)` multiplies the alpha of a view and all its descendants,
+including text, images and backgrounds. It clamps to 0…1, and nested opacity
+modifiers multiply. It preserves layout and hit testing at zero. Overlapping
+draw operations blend individually; this does not flatten a subtree into an
+offscreen compositing group. Backdrop blur and glass have no colour to fade,
+so they stay at full strength below 1 and the subtree is not drawn at all at
+0. A NaN opacity counts as 1.
+
 | Modifier | Effect |
 |---|---|
 | `.padding(Float)` | Uniform inner spacing on every edge |
@@ -1043,7 +1051,7 @@ SwiftUI. Notable current boundaries are:
   `ForEach`.
 - `Canvas` drawing uses absolute window coordinates.
 
-The full SwiftUI-shaped gap list, ordered from easy wins (opacity, lifecycle
+The full SwiftUI-shaped gap list, ordered from easy wins (offset, lifecycle
 hooks, …) through platform work, is in [swiftui-parity.md](swiftui-parity.md).
 Known bugs are in [issues.md](issues.md); product-specific gaps live in their
 own documents.

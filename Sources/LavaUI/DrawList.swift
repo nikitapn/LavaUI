@@ -499,7 +499,7 @@ public final class DrawList {
             vertex.z = point.depth
             vertex.u = point.u
             vertex.v = point.v
-            vertex.color = point.color.rgba8
+            vertex.color = fadedColor(point.color)
             vertex.textured = point.sampleMode
             vertex.w = point.w
             appendSpatialVertex(vertex)
@@ -585,16 +585,18 @@ public final class DrawList {
         cmd.h = h
         // The single choke point every primitive goes through, which is why
         // the fade lives here rather than in each of them.
-        if alphaMultiplier < 1 {
-            var faded = color
-            faded.a *= alphaMultiplier
-            cmd.color = faded.rgba8
-        } else {
-            cmd.color = color.rgba8
-        }
+        // A backdrop's alpha is its `adaptation`, not a visibility, so it is
+        // not faded; an invisible subtree is never emitted at all (`emitNode`).
+        cmd.color = kind == .beginBackdropBlur ? color.rgba8 : fadedColor(color)
         cmd.param = param
         cmd.aux = aux
         appendCommand(cmd)
+    }
+
+    private func fadedColor(_ color: Color) -> UInt32 {
+        var faded = color
+        faded.a *= alphaMultiplier
+        return faded.rgba8
     }
 
     /// Fills a rectangle. Coordinates are window pixels.
@@ -617,6 +619,7 @@ public final class DrawList {
     /// not to call this. The window's *own* rounding needs no allowance; the
     /// renderer insets for that, since it is the one that cuts the corners.
     public func opaqueBounds(x: Float, y: Float, w: Float, h: Float) {
+        guard alphaMultiplier >= 1 else { return }
         append(kind: .opaqueBounds, x: x, y: y, w: w, h: h, color: .clear)
     }
 
@@ -668,8 +671,8 @@ public final class DrawList {
         from: Color, to: Color, angle: Float = .pi / 2, radius: Float = 0
     ) {
         var desc = canvas.GradientDesc()
-        desc.color0 = from.rgba8
-        desc.color1 = to.rgba8
+        desc.color0 = fadedColor(from)
+        desc.color1 = fadedColor(to)
         desc.angle = angle
         desc.flags = 0
         guard let index = appendGradient(desc) else {
@@ -909,8 +912,8 @@ public final class DrawList {
         // on still reads as held. Both sources repaint when they begin and
         // end, which is what puts the tints back.
         let suspended = DragGestureRouter.isActive || ScrollbarDrag.isActive
-        cmd.color = suspended ? 0 : (hoverTint?.rgba8 ?? 0)
-        cmd.param = pressTint?.rgba8 ?? 0
+        cmd.color = suspended ? 0 : (hoverTint.map(fadedColor) ?? 0)
+        cmd.param = pressTint.map(fadedColor) ?? 0
         // Renderer hover/press tints honour this so a rounded row does
         // not grow a square highlight. See `EndNode.aux`.
         cmd.aux = max(0, cornerRadius)
@@ -1324,6 +1327,9 @@ public final class DrawList {
             let pending = pendingOverlays[pendingIndex]
             pendingIndex += 1
             let att = pending.attachment
+            let savedAlpha = alphaMultiplier
+            alphaMultiplier = pending.opacity
+            defer { alphaMultiplier = savedAlpha }
             att.layoutAndPlace(
                 anchorX: pending.x, anchorY: pending.y,
                 anchorW: pending.w, anchorH: pending.h,
@@ -1494,6 +1500,7 @@ public final class DrawList {
         let y: Float
         let w: Float
         let h: Float
+        let opacity: Float
     }
 
     private func emitNode(
@@ -1505,6 +1512,19 @@ public final class DrawList {
         // visible — walking in would draw the pane where it used to be. See
         // `View.hidden(_:)`.
         if let box = node as? YogaBoxNode, box.isHidden { return }
+
+        let savedAlpha = alphaMultiplier
+        if let opacity = node as? OpacityNode {
+            alphaMultiplier *= opacity.opacity
+            // Not drawn rather than drawn at zero: a frost or glass scope has
+            // no colour to fade, and would otherwise stay on screen at full
+            // strength under a view that is meant to be invisible.
+            if alphaMultiplier <= 0 {
+                alphaMultiplier = savedAlpha
+                return
+            }
+        }
+        defer { alphaMultiplier = savedAlpha }
 
         // A transitioning subtree is drawn faded and displaced. Wrapping the
         // whole walk means every primitive underneath inherits it without
@@ -1550,7 +1570,7 @@ public final class DrawList {
                     PendingOverlay(
                         attachment: presenter.attachment,
                         x: x - retainedShift.x, y: y - retainedShift.y,
-                        w: w, h: h
+                        w: w, h: h, opacity: alphaMultiplier
                     )
                 )
             }

@@ -63,13 +63,13 @@ Stack/button/overlay inits still take uniform `Float` and convert with
 
 | | |
 |---|---|
-| Status | absent (only `Color.opacity`) |
-| Today | Transition alpha exists internally; no public `.opacity` |
+| Status | implemented |
+| Today | `.opacity(Float)` multiplies subtree draw alpha and composes with transitions |
 
-**Proposed:** `.opacity(Float) -> …` on `View`, stored on `ViewStyle`, applied
-at emit (multiply subtree alpha). Composes with transition alpha.
-
-Cheap once emit has a place to multiply; no layout impact.
+`OpacityView` keeps layout and input intact. Values clamp to 0…1 and nested
+modifiers multiply. Gradients, images and renderer-owned hover tints inherit
+the multiplier. Draw operations blend individually, without an offscreen
+compositing group.
 
 ---
 
