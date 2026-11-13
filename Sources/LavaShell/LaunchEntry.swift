@@ -148,26 +148,32 @@ extension DesktopEntry {
         // otherwise `$HOME`. Desktop apps almost never set Path, and without
         // this they inherit whatever the launcher process was started in —
         // which under the Lava compositor is the canvas assets tree (shader
-        // loads), not the user's home. Temporary chdir is not thread-safe in
-        // general; this process is about to exit and has one thread doing
-        // this, which is the only reason it is acceptable here.
+        // loads), not the user's home.
+        //
+        // Set on the child alone, through a file action. This used to chdir
+        // the whole process around the spawn, which was tolerable in a
+        // launcher about to exit and is not in a file manager that launches
+        // things all day with worker threads running: any relative path one
+        // of them resolved in that window would have resolved somewhere else.
+        // A folder that is not there is skipped rather than failing the
+        // launch, as the chdir used to be.
         let launchDirectory: String = {
             if !workingDirectory.isEmpty { return workingDirectory }
             return ProcessInfo.processInfo.environment["HOME"] ?? ""
         }()
-        var previousDirectory: String?
-        if !launchDirectory.isEmpty {
-            previousDirectory = FileManager.default.currentDirectoryPath
-            _ = FileManager.default.changeCurrentDirectoryPath(launchDirectory)
-        }
-        defer {
-            if let previousDirectory {
-                _ = FileManager.default.changeCurrentDirectoryPath(previousDirectory)
-            }
+        var actions = posix_spawn_file_actions_t()
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        var isDirectory: ObjCBool = false
+        if !launchDirectory.isEmpty,
+           FileManager.default.fileExists(atPath: launchDirectory, isDirectory: &isDirectory),
+           isDirectory.boolValue
+        {
+            posix_spawn_file_actions_addchdir_np(&actions, launchDirectory)
         }
 
         var pid: pid_t = 0
-        let failure = posix_spawnp(&pid, argv[0], nil, &attributes, cArgv, environ)
+        let failure = posix_spawnp(&pid, argv[0], &actions, &attributes, cArgv, environ)
         if failure != 0 {
             FileHandle.standardError.write(
                 Data("launch \(id): \(String(cString: strerror(failure)))\n".utf8)
