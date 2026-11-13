@@ -1124,6 +1124,9 @@ final class LeafNode: YogaBoxNode {
     /// enough on a long one that the clamp lands on the end of it. A line
     /// number survives the change; an offset does not.
     var pendingTopLine: Int?
+    /// Text at the viewport's top before a font change, plus the fractional
+    /// row offset. Unlike a logical line, this survives a very long soft wrap.
+    var pendingFontAnchor: (offset: Int, fraction: Float)?
     /// False where `wrapCacheRows[i]` is that provisional row rather than a
     /// real break. See `refreshVisualRows`.
     var wrapMeasured: [Bool] = []

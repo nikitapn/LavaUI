@@ -17,7 +17,7 @@ struct LavaEditorApp {
 
         guard let editor = LavaHost.open(title: "LavaEditor") else { exit(1) }
 
-        let session = EditorSession()
+        let session = EditorSession(editor: editor)
         session.openArguments(Array(CommandLine.arguments.dropFirst()))
 
         LavaHost.run(

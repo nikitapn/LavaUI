@@ -58,6 +58,13 @@ final class EditorSession {
         didSet { AppSettings.set(showLineNumbers, forKey: "lineNumbers") }
     }
 
+    /// Local document zoom; the tab strip and toolbars keep their UI font.
+    var documentFont: UIFont?
+    @ObservationIgnored private weak var fontEditor: Editor?
+    @ObservationIgnored private var zoomBase: UIFont?
+    @ObservationIgnored private var zoomFonts: [Int: UIFont] = [:]
+    @ObservationIgnored private var zoomRemainder: Float = 0
+
     let controller = EditorController()
     private var nextID = 1
 
@@ -79,10 +86,39 @@ final class EditorSession {
     @ObservationIgnored
     private var lineCountCache: (document: Int, bytes: Int, revision: Int, lines: Int)?
 
-    init() {
+    init(editor: Editor? = nil) {
+        fontEditor = editor
         wraps = AppSettings.bool(forKey: "wraps") ?? false
         showLineNumbers = AppSettings.bool(forKey: "lineNumbers") ?? true
         documents = [EditorDocument(id: takeID(), url: nil, text: "")]
+    }
+
+    func zoom(by notches: Float) {
+        guard notches.isFinite, let editor = fontEditor,
+              let base = zoomBase ?? FontStore.default else { return }
+        zoomBase = base
+        zoomRemainder += notches
+        let steps = Int(min(40, max(-40, zoomRemainder.rounded(.towardZero))))
+        guard steps != 0 else { return }
+        zoomRemainder -= Float(steps)
+        let current = Int((documentFont ?? base).pixelSize.rounded())
+        let size = min(48, max(8, current + steps))
+        guard size != current else { zoomRemainder = 0; return }
+        if let cached = zoomFonts[size] {
+            documentFont = cached
+            return
+        }
+        guard let font = UIFont(path: base.path, pixelSize: Float(size),
+                                faceIndex: base.faceIndex, raster: base.raster),
+              font.registerWithEngine(editor) else {
+            notice = "Could not load the editor font at \(size) px."
+            return
+        }
+        font.useFallbacks(base.fallbacks.map {
+            FontFallback(path: $0.path, pixelSize: Float(size))
+        }, into: editor)
+        zoomFonts[size] = font
+        documentFont = font
     }
 
     private func takeID() -> Int {

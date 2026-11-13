@@ -765,6 +765,14 @@ let spot = controller.position()   // scroll offsets + selection, or nil if unmo
 controller.restore(spot ?? .start) // applied on the editor's next reconcile
 ```
 
+`EditorView(onZoom:)` consumes Ctrl+wheel and reports signed wheel notches,
+even for an empty document or at a scroll boundary. The callback chooses and
+registers a font, then passes it back through `font:`. A font change reflows
+wrapped rows and preserves the text at the top of the viewport. Without the
+callback, the wheel retains its normal scrolling behavior. LavaEditor uses
+this for document-only zoom from 8 to 48 pixels, one pixel per notch, caching
+registered faces by size; its tabs and toolbars keep their original size.
+
 `EditorPosition` is character offsets and scroll offsets — not `String.Index`
 — because the point of saving one is to restore it into a buffer that has
 since changed: another document in the same editor, or the same log a day

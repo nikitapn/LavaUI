@@ -66,11 +66,13 @@ struct LavaEditorView: View {
                     text: session.text,
                     rules: session.active.language.rules,
                     style: Language.codeStyle(),
+                    font: session.documentFont,
                     showLineNumbers: session.showLineNumbers,
                     wraps: session.wraps,
                     visibleLines: 24,
                     search: session.find.isOpen ? session.find.search : TextSearch(),
-                    controller: session.controller
+                    controller: session.controller,
+                    onZoom: { session.zoom(by: $0) }
                 )
                 .flexGrow(1)
                 .agentId("editor")

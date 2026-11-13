@@ -349,6 +349,7 @@ extension LeafNode {
             }
             breakWrapWindow(font: f, inner: inner, anchor: anchor)
             installWrapRows()
+            restoreFontAnchor(font: f)
             return
         }
 
@@ -365,6 +366,14 @@ extension LeafNode {
                 scrollY = max(0, Float(line) * f.lineHeight)
             }
         }
+        if let font = font ?? FontStore.default { restoreFontAnchor(font: font) }
+    }
+
+    private func restoreFontAnchor(font: UIFont) {
+        guard let anchor = pendingFontAnchor else { return }
+        pendingFontAnchor = nil
+        let row = editing.layout.rowIndex(ofOffset: anchor.offset)
+        scrollY = max(0, (Float(row) + anchor.fraction) * font.lineHeight)
     }
 
     // MARK: Soft wrap, one window at a time

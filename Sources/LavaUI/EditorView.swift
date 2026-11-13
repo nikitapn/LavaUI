@@ -342,6 +342,8 @@ public struct EditorView: PrimitiveView {
     /// Fired when the user clicks a decorated row's gutter icon, instead of
     /// the default "select the whole row" gutter click.
     public var onDecorationTap: ((EditorDecoration) -> Void)?
+    /// Ctrl+wheel notches, consumed even when the document cannot scroll.
+    public var onZoom: ((Float) -> Void)?
     /// Handle for revealing lines, restoring positions and replacing matches.
     public var controller: EditorController?
 
@@ -358,7 +360,8 @@ public struct EditorView: PrimitiveView {
         search: TextSearch = TextSearch(),
         decorations: [EditorDecoration] = [],
         onDecorationTap: ((EditorDecoration) -> Void)? = nil,
-        controller: EditorController? = nil
+        controller: EditorController? = nil,
+        onZoom: ((Float) -> Void)? = nil
     ) {
         self._text = text
         self.isReadOnly = isReadOnly
@@ -372,6 +375,7 @@ public struct EditorView: PrimitiveView {
         self.decorations = decorations
         self.onDecorationTap = onDecorationTap
         self.controller = controller
+        self.onZoom = onZoom
     }
 
     /// The font the editor draws with: `font`, or the environment's when that is `nil`.
@@ -410,16 +414,28 @@ public struct EditorView: PrimitiveView {
     private func configure(_ leaf: LeafNode) {
         let theme = Environment.current.theme
         leaf.theme = theme
+        let previousFont = leaf.font ?? FontStore.default
+        let nextFont = resolvedFont ?? FontStore.default
+        let fontChanged = previousFont?.identity != nextFont?.identity
+        if fontChanged, let previousFont, previousFont.lineHeight > 0 {
+            let rowPosition = max(0, leaf.scrollY / previousFont.lineHeight)
+            let rows = leaf.editing.layout.rows
+            let row = min(Int(rowPosition), rows.count - 1)
+            leaf.pendingFontAnchor = (rows[row].lowerBound, rowPosition - Float(row))
+            if let nextFont {
+                leaf.scrollX *= nextFont.pixelSize / previousFont.pixelSize
+            }
+        }
         leaf.font = resolvedFont
         leaf.color = style.text
         leaf.fillColor = theme.inset
         leaf.isReadOnly = isReadOnly
         leaf.isMultiline = true
-        if leaf.wraps != wraps {
+        if leaf.wraps != wraps || fontChanged {
             // Before anything is cleared: `rowLogicalLine` still describes the
             // mode being left, and it is the only thing that can say which
             // line the reader is looking at.
-            if let f = resolvedFont ?? FontStore.default, f.lineHeight > 0 {
+            if let f = previousFont, f.lineHeight > 0 {
                 leaf.pendingTopLine =
                     leaf.logicalLine(ofRow: max(0, Int(leaf.scrollY / f.lineHeight)))
             }
@@ -507,9 +523,14 @@ public struct EditorView: PrimitiveView {
         ScrollRouter.register(
             leaf.id,
             canScroll: { [weak leaf] dx, dy in
-                leaf?.editorCanScroll(dx: dx, dy: dy) ?? false
+                if ScrollRouter.controlHeld, onZoom != nil, dy != 0 { return true }
+                return leaf?.editorCanScroll(dx: dx, dy: dy) ?? false
             }
         ) { [weak leaf] dx, dy in
+            if ScrollRouter.controlHeld, let onZoom, dy != 0 {
+                onZoom(dy)
+                return
+            }
             guard let leaf, let f = leaf.font ?? FontStore.default else { return }
             // Shift+wheel scrolls horizontally, the desktop convention for a
             // mouse with no horizontal axis. A trackpad supplies dx directly.
