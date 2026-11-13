@@ -64,6 +64,11 @@ public struct TextField: PrimitiveView {
     public var focusRingWidth: Float?
     /// Colour of the focus ring, overriding the theme's.
     public var focusRingColor: Color?
+    /// Whether the field draws its edge while it is not focused, overriding
+    /// `Theme.restingOutline`. `nil` follows the theme — except that a field
+    /// whose `focusRing` is `.none` is taken to want no chrome at all, and
+    /// draws none unless this says `true`.
+    public var restingOutline: Bool?
     /// Shows a dot per character instead of the text — a password.
     public var isSecure: Bool
 
@@ -80,6 +85,8 @@ public struct TextField: PrimitiveView {
     /// - focusRing: The focus chrome; `nil` uses the theme's.
     /// - focusRingWidth: Width of the focus ring; `nil` uses the theme's.
     /// - focusRingColor: Colour of the focus ring; `nil` uses the theme's.
+    /// - restingOutline: Whether the unfocused field draws its edge; `nil`
+    ///   follows the theme.
     /// - secure: Shows a dot per character instead of the text, and refuses
     ///   copy, cut and undo. Single-line only.
     /// - onSubmit: Called when Enter is pressed in a single-line field.
@@ -95,6 +102,7 @@ public struct TextField: PrimitiveView {
         focusRing: FocusRingStyle? = nil,
         focusRingWidth: Float? = nil,
         focusRingColor: Color? = nil,
+        restingOutline: Bool? = nil,
         secure: Bool = false,
         onSubmit: (() -> Void)? = nil
     ) {
@@ -109,6 +117,7 @@ public struct TextField: PrimitiveView {
         self.focusRing = focusRing
         self.focusRingWidth = focusRingWidth
         self.focusRingColor = focusRingColor
+        self.restingOutline = restingOutline
         self.isSecure = secure && !multiline
         self.onSubmit = onSubmit
     }
@@ -190,6 +199,7 @@ public struct TextField: PrimitiveView {
         leaf.focusRingStyle = focusRing
         leaf.focusRingWidth = focusRingWidth
         leaf.focusRingColor = focusRingColor
+        leaf.restingOutline = restingOutline
         // Measure against the placeholder when empty so an empty field still
         // reserves a sensible line box.
         leaf.text = leaf.editing.text.isEmpty ? placeholder : leaf.editing.text

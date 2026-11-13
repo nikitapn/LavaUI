@@ -2304,9 +2304,44 @@ extension DrawList {
         _ leaf: LeafNode, x: Float, y: Float, w: Float, h: Float
     ) {
         let theme = leaf.theme
-        let style = leaf.focusRingStyle ?? theme.focusRingStyle
-        let bw = max(0.5, leaf.focusRingWidth ?? theme.focusRingWidth)
-        let color = leaf.focusRingColor ?? theme.focusRingColor ?? theme.accent
+        emitFieldEdge(
+            leaf, x: x, y: y, w: w, h: h,
+            style: leaf.focusRingStyle ?? theme.focusRingStyle,
+            width: max(0.5, leaf.focusRingWidth ?? theme.focusRingWidth),
+            color: leaf.focusRingColor ?? theme.focusRingColor ?? theme.accent
+        )
+    }
+
+    /// A field's edge at rest: one pixel of `theme.border`, where the focus
+    /// ring goes when it is focused. Without it a field is only its fill, and
+    /// in `Theme.dark` that fill (`inset`) is within a hundredth of
+    /// `background` — a field on the window's own surface could not be seen
+    /// until it was clicked. `Theme.restingOutline` turns it off for a whole
+    /// theme and `TextField(restingOutline:)` for one field; a field that
+    /// turned its ring off is taken to want no chrome, unless it says so.
+    fileprivate func emitRestingEdge(
+        _ leaf: LeafNode, x: Float, y: Float, w: Float, h: Float
+    ) {
+        let theme = leaf.theme
+        let ring = leaf.focusRingStyle ?? theme.focusRingStyle
+        guard leaf.restingOutline ?? (theme.restingOutline && ring != .none) else { return }
+        // The edge is a plate with the fill punched back over it, so a fill
+        // that can be seen through would show the whole plate. Such a field
+        // is drawn by whatever it sits on, and has no edge of its own.
+        guard (leaf.fillColor ?? theme.inset).a >= 1 else { return }
+        // The ring's shape, so focusing changes the colour and not the
+        // outline; a field with no ring that asked for an edge gets a rounded one.
+        emitFieldEdge(
+            leaf, x: x, y: y, w: w, h: h,
+            style: ring == .none ? .rounded : ring, width: 1, color: theme.border
+        )
+    }
+
+    fileprivate func emitFieldEdge(
+        _ leaf: LeafNode, x: Float, y: Float, w: Float, h: Float,
+        style: FocusRingStyle, width bw: Float, color: Color
+    ) {
+        let theme = leaf.theme
         let fill = leaf.fillColor ?? theme.inset
         let radius = leaf.cornerRadius
 
@@ -2361,6 +2396,8 @@ extension DrawList {
 
         if focused {
             emitFocusRing(leaf, x: x, y: y, w: w, h: h)
+        } else {
+            emitRestingEdge(leaf, x: x, y: y, w: w, h: h)
         }
 
         // Single-line is centred in its box, and stays centred in a box

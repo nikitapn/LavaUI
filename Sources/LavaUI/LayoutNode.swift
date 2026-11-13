@@ -485,6 +485,8 @@ final class LeafNode: YogaBoxNode {
     var focusRingStyle: FocusRingStyle?
     var focusRingWidth: Float?
     var focusRingColor: Color?
+    /// Per-field override of `Theme.restingOutline`.
+    var restingOutline: Bool?
     /// Button-only payload.
     var buttonStyle: ButtonStyle?
     var isPressed = false

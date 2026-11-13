@@ -71,6 +71,12 @@ public struct Theme: Equatable, Sendable {
     public var focusRingWidth: Float
     /// Focus ring colour. `nil` uses `accent`.
     public var focusRingColor: Color?
+    /// Whether a text field that is not focused draws a one-pixel `border`
+    /// round its fill. On by default: in a dark palette `inset` is close to
+    /// `background`, and without an edge a field cannot be told from the
+    /// surface it sits on. A field can say otherwise
+    /// (`TextField(restingOutline:)`).
+    public var restingOutline: Bool
 
     /// Creates a theme. Every parameter matches the property of the same name.
     public init(
@@ -83,7 +89,8 @@ public struct Theme: Equatable, Sendable {
         caretWidth: Float = 1.5,
         focusRingStyle: FocusRingStyle = .rounded,
         focusRingWidth: Float = 1.5,
-        focusRingColor: Color? = nil
+        focusRingColor: Color? = nil,
+        restingOutline: Bool = true
     ) {
         self.textPrimary = textPrimary
         self.textSecondary = textSecondary
@@ -106,6 +113,7 @@ public struct Theme: Equatable, Sendable {
         self.focusRingStyle = focusRingStyle
         self.focusRingWidth = focusRingWidth
         self.focusRingColor = focusRingColor
+        self.restingOutline = restingOutline
     }
 
     /// The palette this app shipped with, kept as-is so the theme migration
