@@ -60,29 +60,28 @@ struct ReaderBar: View {
     }
 }
 
-/// Under the bar while finding: the field, how many matches, and the steps.
+/// Floats over the document's top-right corner while finding.
 struct FindBar: View {
     @Bindable var session: ReaderSession
 
     var body: some View {
-        HStack(padding: 8, alignment: .center, spacing: 10) {
+        HStack(padding: 8, alignment: .center, spacing: 6) {
             TextField(
                 text: $session.query, placeholder: "Find in document",
                 autoFocus: true, selectionOnFocus: .all,
                 onSubmit: { session.findNext() }
             )
             // Shrinks rather than pushing the steps off a narrow window.
-            .frame(width: .pt(280))
+            .frame(width: .pt(200))
             .flexShrink(1)
             .agentId("find-field")
             Text(session.findStatus, color: Theme.current.textDim)
                 .agentId("find-status")
-            Spacer()
             step("Previous", id: "find-previous") { session.findNext(-1) }
             step("Next", id: "find-next") { session.findNext(1) }
             step("Done", id: "find-done") { session.closeFind() }
         }
-        .background(Theme.current.panel)
+        .agentId("find-bar")
     }
 
     private func step(_ label: String, id: String, action: @escaping () -> Void) -> some View {
@@ -96,8 +95,8 @@ struct FindBar: View {
 }
 
 /// Under the bar when a file asks for a password: which file, the field, and
-/// whether the last try was wrong. A bar rather than a dialog, like the find
-/// bar, so whatever was already open stays readable behind the question.
+/// whether the last try was wrong. A bar rather than a dialog, so whatever
+/// was already open stays readable behind the question.
 struct PasswordBar: View {
     @Bindable var session: ReaderSession
 

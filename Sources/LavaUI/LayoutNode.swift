@@ -368,6 +368,20 @@ class YogaBoxNode: AnyViewNode {
     /// not answer for a press the content declined (`.underlay`).
     var ignoresInput = false
 
+    /// Whether empty space in this box claims the wheel/gesture hit chain.
+    /// Layout-only overlay alignment boxes pass through to the base, while
+    /// their actual panel children still claim their own bounds.
+    var claimsScrollChainSpace: Bool { true }
+
+    /// Whether this box answers for every point inside it, in all three
+    /// walks, even where nothing in it is interactive. A floating panel's
+    /// padding and gaps are part of the panel: a press there must not reach
+    /// the canvas it floats over, start a selection under it or take the
+    /// focus from its field, and a wheel there must not scroll what is
+    /// behind it. The scroll chain already claims a box's space; the click
+    /// and hover walks look for targets, so they need telling.
+    var swallowsInput = false
+
     /// `.scrollIntoView(when:)`: whether this box last asked to be in view,
     /// and whether that ask is still waiting for a layout pass to act on it.
     /// The first is what makes the second an edge rather than a level — see
@@ -2526,6 +2540,9 @@ public final class LayoutHost {
                 // own — this is the only thing that makes it resolvable at
                 // drop time at all, on a container as much as a leaf.
                 if DropRouter.hasHandler(box.id) { return box.id }
+                // An inert answer, but an answer: hovering the panel shows its
+                // own cursor, not the link or I-beam of what is behind it.
+                if box.swallowsInput { return box.id }
             }
             return nil
         }
@@ -2578,7 +2595,8 @@ public final class LayoutHost {
             // An ancestor of a hit child belongs in the chain whether or not
             // the point is inside its own box — overflowing scroll content is
             // the whole reason a child can be hit outside its container.
-            if hit || (x >= nx && x < nx + nw && y >= ny && y < ny + nh) {
+            if hit || (box.claimsScrollChainSpace
+                && x >= nx && x < nx + nw && y >= ny && y < ny + nh) {
                 chain.append(box.id)
                 return true
             }
@@ -2662,6 +2680,11 @@ public final class LayoutHost {
                 let lx = x - nx
                 let ly = y - ny
                 return { press(lx, ly, mods) }
+            }
+            // Inert space inside a panel: swallow, as `hitTestClick` does for
+            // a presented overlay, so the press lands nowhere.
+            if box.swallowsInput, x >= nx, x < nx + nw, y >= ny, y < ny + nh {
+                return {}
             }
             return nil
         }

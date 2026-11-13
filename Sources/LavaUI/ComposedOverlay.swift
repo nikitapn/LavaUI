@@ -37,8 +37,14 @@ public struct ComposedOverlayView<Content: View, OverlayContent: View>: Primitiv
     public var overlayContent: OverlayContent
     /// Which point of the base view's box the overlay is pinned to.
     public var anchor: OverlayAnchor
-    /// Distance in points between the overlay and the anchored edges. A centred axis ignores it.
-    public var inset: Float
+    /// Distance from each edge of the base view, in points.
+    public var insets: EdgeInsets
+    /// Uniform inset shorthand. Reading returns the top inset; assigning
+    /// replaces all four edges. Use `insets` for independent edges.
+    public var inset: Float {
+        get { insets.top }
+        set { insets = .all(newValue) }
+    }
     /// Panel styling for the floating surface, or nil to draw no surface at
     /// all — a bare badge or button that is only its own content.
     ///
@@ -58,10 +64,22 @@ public struct ComposedOverlayView<Content: View, OverlayContent: View>: Primitiv
         inset: Float,
         style: OverlayStyle? = nil
     ) {
+        self.init(content: content, overlayContent: overlayContent,
+                  anchor: anchor, insets: .all(inset), style: style)
+    }
+
+    /// Creates an overlay with independent gaps from the base view's edges.
+    public init(
+        content: Content,
+        overlayContent: OverlayContent,
+        anchor: OverlayAnchor,
+        insets: EdgeInsets,
+        style: OverlayStyle? = nil
+    ) {
         self.content = content
         self.overlayContent = overlayContent
         self.anchor = anchor
-        self.inset = inset
+        self.insets = insets
         self.style = style
     }
 
@@ -84,9 +102,9 @@ public struct ComposedOverlayView<Content: View, OverlayContent: View>: Primitiv
             content: ViewGraph.mount(content),
             overlay: overlay,
             plateBox: plate,
-            alignmentBox: StyleBoxNode(content: plate)
+            alignmentBox: OverlayAlignmentBoxNode(content: plate)
         )
-        node.apply(anchor: anchor, inset: inset, style: style)
+        node.apply(anchor: anchor, insets: insets, style: style)
         return node
     }
 
@@ -96,9 +114,16 @@ public struct ComposedOverlayView<Content: View, OverlayContent: View>: Primitiv
         box.overlayBox.updateContent(
             ViewGraph.reconcile(box.overlayBox.contentNode, with: overlayContent)
         )
-        box.apply(anchor: anchor, inset: inset, style: style)
+        box.apply(anchor: anchor, insets: insets, style: style)
         return box
     }
+}
+
+/// Covers the base for Yoga alignment, but only its panel takes input.
+/// Claiming this box's empty space would hide a sibling canvas from the
+/// wheel and the other gestures resolved through the same hit chain.
+private final class OverlayAlignmentBoxNode: StyleBoxNode {
+    override var claimsScrollChainSpace: Bool { false }
 }
 
 final class ComposedOverlayNode: YogaBoxNode {
@@ -166,7 +191,7 @@ final class ComposedOverlayNode: YogaBoxNode {
         flexShrink = leaves.map(\.effectiveFlexShrink).min()
     }
 
-    func apply(anchor: OverlayAnchor, inset: Float, style: OverlayStyle?) {
+    func apply(anchor: OverlayAnchor, insets: EdgeInsets, style: OverlayStyle?) {
         guard let container = alignmentBox.yoga else { return }
 
         // Out of flow, and stretched across the base box: defining both edges
@@ -183,7 +208,7 @@ final class ComposedOverlayNode: YogaBoxNode {
         // Set through the node, not `YGNodeStyleSetPadding` directly:
         // `applyStyle` below re-asserts padding from this property and would
         // otherwise overwrite a raw call with zero.
-        alignmentBox.padding = .all(inset)
+        alignmentBox.padding = insets
         alignmentBox.flexGrow = 0
         alignmentBox.flexShrink = 0
         alignmentBox.applyStyle()
@@ -219,6 +244,15 @@ final class ComposedOverlayNode: YogaBoxNode {
             box.width = .auto
             box.height = .auto
         }
+        // Except that the plate gives way to the base: it is a row item of
+        // the alignment box, so a panel wider than the base minus its insets
+        // narrows to fit (its content is stretched to the plate, and a
+        // shrinkable field inside takes the difference) instead of spilling
+        // over whatever is beside the base.
+        plateBox.flexShrink = 1
+        // A styled panel is a surface: all of it takes input. A bare badge is
+        // only its content, and its gaps belong to the base.
+        plateBox.swallowsInput = style != nil
         overlayBox.fillColor = style?.background
         overlayBox.cornerRadius = style?.cornerRadius ?? 0
 
@@ -300,6 +334,21 @@ extension View {
             anchor: alignment,
             inset: inset,
             style: style
+        )
+    }
+
+    /// Draws content over this view with independent edge gaps.
+    /// For example, `.topTrailing` with `insets: .init(top: 12, trailing: 32)`
+    /// leaves 12 points above the overlay and 32 points on its right.
+    public func overlay<OverlayContent: View>(
+        alignment: OverlayAnchor,
+        insets: EdgeInsets,
+        style: OverlayStyle? = nil,
+        @ViewBuilder content: () -> OverlayContent
+    ) -> ComposedOverlayView<Self, OverlayContent> {
+        ComposedOverlayView(
+            content: self, overlayContent: content(), anchor: alignment,
+            insets: insets, style: style
         )
     }
 }

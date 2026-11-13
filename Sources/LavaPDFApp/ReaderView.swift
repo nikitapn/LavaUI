@@ -2,8 +2,7 @@ import Foundation
 import LavaPDFCore
 import LavaUI
 
-/// The window: a bar along the top, the find bar under it when open, and the
-/// pages.
+/// The window: a bar along the top and pages with a floating find panel.
 ///
 /// The pages are one `Canvas` rather than a `ScrollView` of page views, and
 /// that is deliberate. A page is not a view with a size of its own — it is a
@@ -27,12 +26,23 @@ struct ReaderView: View {
         return VStack(flexGrow: 1, spacing: 0) {
             ReaderBar(session: session)
             if session.locked != nil { PasswordBar(session: session) }
-            if session.findOpen { FindBar(session: session) }
             HStack(flexGrow: 1, spacing: 0) {
                 if session.sidebarOpen, !session.outline.isEmpty {
                     OutlineSidebar(session: session)
                 }
                 pages
+                    // Search belongs over the document: changing its viewport
+                    // would refit the pages and move the reader's place.
+                    .overlay(
+                        alignment: .topTrailing, insets: EdgeInsets(top: 12, trailing: 32),
+                        style: session.findOpen ? OverlayStyle(cornerRadius: 8, padding: 0) : nil
+                    ) {
+                        if session.findOpen {
+                            // As wide as its contents; on a narrow window the
+                            // panel shrinks to the pages and the field gives.
+                            FindBar(session: session)
+                        }
+                    }
             }
         }
         .background(Theme.current.background)

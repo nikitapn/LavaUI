@@ -11,6 +11,79 @@ import XCTest
 /// A node carrying the right radius and an emit that opens the scope in the
 /// wrong place look identical from the tree.
 final class ComposedOverlayStyleTests: XCTestCase {
+    func testIndependentInsetsPlacePanelAwayFromRightEdge() throws {
+        let commands = try emit(
+            Canvas(width: .pt(400), height: .pt(300)) { _, _ in }
+                .overlay(alignment: .topTrailing,
+                         insets: EdgeInsets(top: 12, trailing: 32)) {
+                    Canvas(width: .pt(80), height: .pt(40)) { list, frame in
+                        list.rect(x: frame.x, y: frame.y, w: frame.w, h: frame.h,
+                                  color: .white)
+                    }
+                }
+        )
+        let panel = try XCTUnwrap(commands.first { $0.kind == .rect })
+        XCTAssertEqual(panel.x, 288, accuracy: 0.01)
+        XCTAssertEqual(panel.y, 12, accuracy: 0.01)
+        XCTAssertEqual(panel.w, 80, accuracy: 0.01)
+        XCTAssertEqual(panel.h, 40, accuracy: 0.01)
+    }
+
+    func testChangingTrailingInsetPreservesTopAndBaseGeometry() throws {
+        func tree(_ trailing: Float) -> some View {
+            Canvas(label: "base", width: .pt(400), height: .pt(300)) { _, _ in }
+                .overlay(alignment: .topTrailing,
+                         insets: EdgeInsets(top: 12, trailing: trailing)) {
+                    Canvas(label: "floating", width: .pt(80), height: .pt(40)) { _, _ in }
+                }
+        }
+        let host = LayoutHost()
+        for trailing: Float in [12, 48] {
+            host.setRoot(tree(trailing))
+            let frames = host.calculateLayout(width: 400, height: 300)
+            let base = try XCTUnwrap(frames.first { $0.label == "base" })
+            let panel = try XCTUnwrap(frames.first { $0.label == "floating" })
+            XCTAssertEqual(base.w, 400, accuracy: 0.01)
+            XCTAssertEqual(base.h, 300, accuracy: 0.01)
+            XCTAssertEqual(panel.x, 400 - trailing - 80, accuracy: 0.01)
+            XCTAssertEqual(panel.y, 12, accuracy: 0.01)
+        }
+    }
+
+    /// A panel wider than the base narrows to it, and a shrinkable field in
+    /// it takes the difference, instead of spilling past the base's edge.
+    func testPanelWiderThanBaseShrinksToFit() throws {
+        func frames(width: Float) throws -> (panel: LayoutFrame, field: LayoutFrame) {
+            let host = LayoutHost()
+            host.setRoot(
+                Canvas(label: "base", width: .pct(100), height: .pt(300)) { _, _ in }
+                    .overlay(alignment: .topTrailing,
+                             insets: EdgeInsets(top: 12, trailing: 32),
+                             style: OverlayStyle(cornerRadius: 8, padding: 0)) {
+                        HStack(spacing: 0) {
+                            Canvas(label: "field", width: .pt(200), height: .pt(20)) { _, _ in }
+                                .flexShrink(1)
+                            Canvas(label: "steps", width: .pt(100), height: .pt(20)) { _, _ in }
+                        }
+                    }
+            )
+            let all = host.calculateLayout(width: width, height: 300)
+            let field = try XCTUnwrap(all.first { $0.label == "field" })
+            let steps = try XCTUnwrap(all.first { $0.label == "steps" })
+            let panel = LayoutFrame(label: "panel", x: field.x, y: field.y,
+                                    w: steps.x + steps.w - field.x, h: field.h)
+            return (panel, field)
+        }
+        let wide = try frames(width: 800)
+        XCTAssertEqual(wide.field.w, 200, accuracy: 0.01)
+        XCTAssertEqual(wide.panel.x + wide.panel.w, 768, accuracy: 1.01)
+
+        let narrow = try frames(width: 250)
+        XCTAssertGreaterThanOrEqual(narrow.panel.x, -0.01)
+        XCTAssertEqual(narrow.panel.x + narrow.panel.w, 218, accuracy: 1.01)
+        XCTAssertLessThan(narrow.field.w, 200)
+    }
+
     private struct Base: View {
         let style: OverlayStyle?
 

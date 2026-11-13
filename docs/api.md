@@ -779,6 +779,16 @@ content.overlay(alignment: .bottomTrailing, inset: 16) {
 `OverlayAnchor` provides all nine combinations of top/center/bottom and
 leading/center/trailing.
 
+`inset:` uses the same gap on all edges. Use `insets:` to control them
+independently; `trailing` is the right edge in the current left-to-right layout:
+
+```swift
+pages.overlay(alignment: .topTrailing,
+              insets: EdgeInsets(top: 12, trailing: 32)) {
+    FindBar(session: session)
+}
+```
+
 ### Presented overlay
 
 Use `overlay(isPresented:...)` for a popup, dropdown, menu, or modal surface.
