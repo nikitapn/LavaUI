@@ -280,7 +280,7 @@ public struct TextField: PrimitiveView {
 
 /// What a wrap pass should do with the scroll offset it inherits.
 enum WrapAnchor {
-    /// Leave it. An edit has already moved the box to follow the caret.
+    /// Leave it. Caret-follow will place the box after the edited rows are rebuilt.
     case none
     /// Keep whichever logical line is at the top there. Rows above the
     /// viewport multiply as they are broken, and this is what stops the text
@@ -339,9 +339,8 @@ extension LeafNode {
                 anchor = .line(line)
                 pendingTopLine = nil
             } else {
-                // An edit moves the caret, and `followCaret` has already put
-                // the box where it belongs — holding the old top line would
-                // undo that. A refinement moves nothing the reader asked to
+                // An edit follows the caret once the new wrapped rows are
+                // installed. A refinement moves nothing the reader asked to
                 // move, so it holds.
                 anchor = replanned ? .none : .hold
             }
@@ -937,6 +936,13 @@ extension LeafNode {
     /// Called after any key: an offscreen caret reads as a frozen editor.
     func followCaret() {
         guard let f = font ?? FontStore.default else { return }
+        // afterEdit seeds one row per logical line. Scrolling against that
+        // temporary table treats a wrapped-row offset as a line offset and
+        // jumps far up the document. Reuse the wrap plan at the current width
+        // before locating the caret; unchanged navigation keeps its fast path.
+        if wraps, lastWrappedText != editing.text {
+            refreshVisualRows(availableWidth: lastMeasuredWidth)
+        }
         scrollToCaret(lineHeight: f.lineHeight)
         scrollToCaretX(font: f)
     }

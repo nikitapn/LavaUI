@@ -221,6 +221,50 @@ final class WrappedWindowTests: XCTestCase {
         XCTAssertEqual(leaf.wrapUnmeasured, 0)
     }
 
+    /// Caret-follow must use wrapped rows immediately after Enter, not the
+    /// temporary one-row-per-line table installed by the edit.
+    func testNewlineInTheMiddleKeepsTheViewportStill() throws {
+        let leaf = try settleWrap()
+        try insertNewlineWithoutJump(leaf)
+    }
+
+    func testNewlineInAHalfWrappedDocumentKeepsTheViewportStill() throws {
+        LeafNode.wrapBudget = 0
+        let leaf = try pass()
+        let font = try XCTUnwrap(leaf.font ?? FontStore.default)
+        leaf.scrollY = Float(leaf.editing.layout.count / 2) * font.lineHeight
+        _ = try pass()
+        XCTAssertGreaterThan(leaf.wrapUnmeasured, 0)
+        try insertNewlineWithoutJump(leaf)
+    }
+
+    private func insertNewlineWithoutJump(_ leaf: LeafNode) throws {
+        let font = try XCTUnwrap(leaf.font ?? FontStore.default)
+        let line = leaf.wrapUnmeasured == 0 ? 600
+            : leaf.logicalLine(ofRow: Int(leaf.scrollY / font.lineHeight)) + 1
+        let row = leaf.firstRow(ofLine: line)
+        leaf.scrollY = Float(row - 2) * font.lineHeight + 0.25 * font.lineHeight
+        leaf.editing.setCursor(leaf.editing.index(line: line, column: 0))
+        leaf.focusSelf(binding: binding, onSubmit: nil)
+        defer { FocusManager.resignFocus(leaf.id) }
+        let before = leaf.scrollY
+        let top = topLine(leaf, font: font)
+        let wrapsBefore = PerfCounters.lineWraps
+
+        XCTAssertTrue(FocusManager.handle(KeyEvent(key: KeyCode.enter, mods: 0)))
+        XCTAssertEqual(leaf.scrollY, before, accuracy: 0.01,
+                       "Enter followed a logical line instead of a wrapped row")
+        _ = try pass()
+        XCTAssertEqual(leaf.scrollY, before, accuracy: 0.01)
+        XCTAssertEqual(topLine(leaf, font: font), top)
+        XCTAssertLessThanOrEqual(PerfCounters.lineWraps - wrapsBefore, 4,
+                                "the edit should only wrap the changed lines")
+        let caret = leaf.editing.layout.rowIndex(ofOffset: leaf.editing.offset(of: leaf.editing.focus))
+        XCTAssertGreaterThanOrEqual(Float(caret) * font.lineHeight, leaf.scrollY)
+        XCTAssertLessThanOrEqual(Float(caret + 1) * font.lineHeight,
+                                leaf.scrollY + leaf.viewportHeight - leaf.textInset * 2)
+    }
+
     // MARK: Edits on top of a half-wrapped plan
 
     /// An edit re-plans, and the plan has to carry over what was already
