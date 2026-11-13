@@ -1511,7 +1511,7 @@ struct PanelView: View {
                 .cornerRadius(6)
                 .agentId("applet.power")
             }
-            // .padding(.horizontal, 4)
+            .padding(.horizontal, 2)
             .background(Theme.current.background)
 
             // Fills the expanded surface so the strip stays top-aligned. Never

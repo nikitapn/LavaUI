@@ -22,6 +22,11 @@ struct LavaEditorView: View {
             statusBar
         }
         .background(Environment.current.theme.background)
+        .overlayLayer {
+            Canvas(label: "session-checkpoint", width: .pct(100), height: .pct(100)) { _, _ in
+                session.checkpointSession()
+            }
+        }
         // Dropping files on the window is how most people open the second one.
         .onDrop { urls in session.open(urls) }
     }

@@ -36,6 +36,10 @@ final class EditorSession {
     var documents: [EditorDocument] = []
     var activeIndex = 0
 
+    private(set) var recentFiles: [String] = Array(
+        (AppSettings.value(forKey: "recentFiles", as: [String].self) ?? []).prefix(10)
+    )
+
     var find = FindState()
     /// Open, and what the user has typed into it, for `Go to Line`.
     var gotoOpen = false
@@ -91,6 +95,40 @@ final class EditorSession {
         wraps = AppSettings.bool(forKey: "wraps") ?? false
         showLineNumbers = AppSettings.bool(forKey: "lineNumbers") ?? true
         documents = [EditorDocument(id: takeID(), url: nil, text: "")]
+    }
+
+    /// Restore before command-line files are opened, so an explicit file wins
+    /// selection while reusing an existing tab from the previous session.
+    func restoreSession() {
+        guard let saved = AppSettings.value(forKey: "session", as: SavedEditorSession.self) else { return }
+        var seen = Set<String>()
+        let files = saved.files.filter { $0.path.hasPrefix("/") && seen.insert($0.path).inserted }
+        guard !files.isEmpty else { return }
+        documents = files.map {
+            EditorDocument(id: takeID(), url: URL(fileURLWithPath: $0.path), text: "",
+                           position: $0.position, isLoaded: false)
+        }
+        activeIndex = files.firstIndex { $0.path == saved.activePath } ?? 0
+        if let size = saved.fontSize, let base = FontStore.default {
+            zoom(by: Float(min(48, max(8, size))) - base.pixelSize.rounded())
+        }
+        controller.restore(active.position ?? .start)
+        loadIfNeeded(activeIndex)
+    }
+
+    /// Called after the editor emits, including scroll-only redraws. Reading
+    /// the controller here avoids polling or observed writes on every frame.
+    func checkpointSession() {
+        let live = active.isLoaded ? controller.position() : nil
+        let files = documents.compactMap { document -> SavedEditorSession.File? in
+            guard let url = document.url else { return nil }
+            return .init(path: url.standardizedFileURL.path,
+                         position: (document.id == active.id ? live : nil) ?? document.position ?? .start)
+        }
+        SessionPersistence.shared.checkpoint(.init(
+            files: files, activePath: active.url?.standardizedFileURL.path,
+            fontSize: (documentFont ?? FontStore.default).map { Int($0.pixelSize.rounded()) }
+        ))
     }
 
     func zoom(by notches: Float) {
@@ -239,10 +277,28 @@ final class EditorSession {
         else { return }
         if !documents[index].load() {
             notice = "\(documents[index].name): \(documents[index].loadError ?? "could not be read")"
+        } else if let url = documents[index].url {
+            rememberFile(url)
         }
     }
 
     // MARK: - File actions
+
+    func clearRecentFiles() {
+        recentFiles = []
+        AppSettings.set(recentFiles, forKey: "recentFiles")
+    }
+
+    private func rememberFile(_ url: URL) {
+        // Match open()'s identity so reopening a recent path finds its tab.
+        let path = url.standardizedFileURL.path
+        var updated: [String] = []
+        AppSettings.update([String].self, forKey: "recentFiles") { stored in
+            updated = Array(([path] + (stored ?? []).filter { $0 != path }).prefix(10))
+            return updated
+        }
+        recentFiles = updated
+    }
 
     func newDocument() {
         stashPosition()
@@ -270,6 +326,13 @@ final class EditorSession {
             let resolved = url.standardizedFileURL
             if let existing = documents.firstIndex(where: { $0.url?.standardizedFileURL == resolved }) {
                 target = existing
+                if documents[existing].isLoaded {
+                    rememberFile(resolved)
+                } else {
+                    // Retry a previously failed open: a recent file may have
+                    // been restored or its permissions fixed since then.
+                    documents[existing].loadError = nil
+                }
                 continue
             }
             documents.append(
@@ -306,6 +369,7 @@ final class EditorSession {
             notice = "Could not save \(documents[activeIndex].name): \(error)"
             return false
         }
+        if let url = documents[activeIndex].url { rememberFile(url) }
         notice = "Saved \(documents[activeIndex].name)"
         return true
     }
@@ -320,6 +384,7 @@ final class EditorSession {
             notice = "Could not save \(target.lastPathComponent): \(error)"
             return false
         }
+        if let url = documents[activeIndex].url { rememberFile(url) }
         notice = "Saved \(documents[activeIndex].name)"
         return true
     }

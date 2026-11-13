@@ -158,12 +158,21 @@ public struct EditorPosition: Equatable, Sendable, Codable {
     /// The end of the selection the caret is at. See `anchor`.
     public var focus: Int
 
+    /// Text at the top of the viewport, retained across wrapping or font changes.
+    /// Optional so positions saved by older versions still decode.
+    public var topOffset: Int?
+    /// How far through the top visual row the viewport begins (0..<1).
+    public var topFraction: Float?
+
     /// Creates a position. The default is the top of the buffer with the caret at 0.
-    public init(scrollX: Float = 0, scrollY: Float = 0, anchor: Int = 0, focus: Int = 0) {
+    public init(scrollX: Float = 0, scrollY: Float = 0, anchor: Int = 0, focus: Int = 0,
+                topOffset: Int? = nil, topFraction: Float? = nil) {
         self.scrollX = scrollX
         self.scrollY = scrollY
         self.anchor = anchor
         self.focus = focus
+        self.topOffset = topOffset
+        self.topFraction = topFraction
     }
 
     /// The top of the buffer, caret at the first character, nothing selected.
@@ -604,11 +613,17 @@ extension LeafNode {
     func editorPosition() -> EditorPosition {
         // `charOffset` is anchored, so the second call walks only the distance
         // between the two ends rather than back to the start of the buffer.
-        EditorPosition(
+        let height = (font ?? FontStore.default)?.lineHeight ?? 1
+        let rowPosition = max(0, scrollY / max(1, height))
+        let rows = editing.layout.rows
+        let row = min(Int(rowPosition), max(0, rows.count - 1))
+        return EditorPosition(
             scrollX: scrollX,
             scrollY: scrollY,
             anchor: charOffset(of: editing.anchor),
-            focus: charOffset(of: editing.focus)
+            focus: charOffset(of: editing.focus),
+            topOffset: rows.isEmpty ? 0 : rows[row].lowerBound,
+            topFraction: rowPosition - rowPosition.rounded(.down)
         )
     }
 
@@ -629,12 +644,16 @@ extension LeafNode {
             editing.setCursor(textIndex(atOffset: focus), extending: true)
         }
 
-        if let font = font ?? FontStore.default {
-            scrollY = min(max(0, position.scrollY), maxScrollY(lineHeight: font.lineHeight))
-            scrollX = min(max(0, position.scrollX), maxScrollX(font: font))
-        } else {
-            scrollY = max(0, position.scrollY)
-            scrollX = max(0, position.scrollX)
+        // The new buffer has not been laid out yet. Clamping against the old
+        // row table here loses positions below its bottom; emit clamps later.
+        scrollY = position.scrollY.isFinite ? max(0, position.scrollY) : 0
+        scrollX = position.scrollX.isFinite ? max(0, position.scrollX) : 0
+        pendingTopLine = nil
+        pendingFontAnchor = nil
+        if let offset = position.topOffset {
+            let fraction = position.topFraction ?? 0
+            pendingFontAnchor = (min(max(0, offset), total),
+                                 fraction.isFinite ? min(0.999, max(0, fraction)) : 0)
         }
         ViewInvalidation.markNeedsRedraw()
     }

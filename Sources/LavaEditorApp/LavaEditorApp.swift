@@ -18,6 +18,7 @@ struct LavaEditorApp {
         guard let editor = LavaHost.open(title: "LavaEditor") else { exit(1) }
 
         let session = EditorSession(editor: editor)
+        session.restoreSession()
         session.openArguments(Array(CommandLine.arguments.dropFirst()))
 
         LavaHost.run(
@@ -47,6 +48,22 @@ struct LavaEditorApp {
                             "Open…", id: "file.open",
                             shortcut: KeyShortcut(KeyCode.o, .primary)
                         ) { session.openFileDialog() }
+                        Menu("Recent Files", id: "file.recent") {
+                            if session.recentFiles.isEmpty {
+                                MenuItem("No Recent Files", id: "file.recent.empty",
+                                         isEnabled: false) {}
+                            }
+                            for (index, path) in session.recentFiles.enumerated() {
+                                MenuItem(path, id: "file.recent.\(index)") {
+                                    session.open([URL(fileURLWithPath: path)])
+                                }
+                            }
+                            MenuSeparator()
+                            MenuItem("Clear Recent Files", id: "file.recent.clear",
+                                     isEnabled: !session.recentFiles.isEmpty) {
+                                session.clearRecentFiles()
+                            }
+                        }
                         MenuSeparator()
                         MenuItem(
                             "Save", id: "file.save",

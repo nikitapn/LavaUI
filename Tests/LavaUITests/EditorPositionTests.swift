@@ -33,8 +33,8 @@ final class EditorPositionTests: XCTestCase {
         super.tearDown()
     }
 
-    private func settle(text: Binding<String>, controller: EditorController, isReadOnly: Bool = false) {
-        host.setRoot(EditorView(text: text, isReadOnly: isReadOnly, visibleLines: 10, controller: controller))
+    private func settle(text: Binding<String>, controller: EditorController, isReadOnly: Bool = false, wraps: Bool = false) {
+        host.setRoot(EditorView(text: text, isReadOnly: isReadOnly, wraps: wraps, visibleLines: 10, controller: controller))
         _ = host.calculateLayout(width: Self.viewport.w, height: Self.viewport.h)
         guard let root = host.rootNode else { return }
         let list = DrawList(editor: editor)
@@ -122,6 +122,42 @@ final class EditorPositionTests: XCTestCase {
         XCTAssertEqual(position.scrollY, 120, accuracy: 0.5)
         XCTAssertEqual(position.focus, 30)
     }
+    func testWrappedPositionRestoresIntoFreshEditor() throws {
+        let oldBudget = LeafNode.wrapBudget
+        LeafNode.wrapBudget = 0 // The destination must work before background wrapping finishes.
+        defer { LeafNode.wrapBudget = oldBudget }
+        var text = (0..<1000).map { "Line \($0) " + String(repeating: "wrapped text ", count: 30) }
+            .joined(separator: "\n")
+        let binding = Binding(get: { text }, set: { text = $0 })
+        let original = EditorController()
+        settle(text: binding, controller: original, wraps: true)
+        original.reveal(line: 700)
+        settle(text: binding, controller: original, wraps: true)
+        let node = try leaf()
+        node.scrollY += (FontStore.default?.lineHeight ?? 20) * 2.25
+        settle(text: binding, controller: original, wraps: true)
+        let saved = try XCTUnwrap(original.position())
+        XCTAssertGreaterThan(saved.topOffset ?? 0, 100_000)
+
+        // A different process starts without a wrap cache or a previous viewport.
+        host = LayoutHost()
+        let restored = EditorController()
+        restored.restore(try JSONDecoder().decode(EditorPosition.self, from: JSONEncoder().encode(saved)))
+        settle(text: binding, controller: restored, wraps: true)
+        let position = try XCTUnwrap(restored.position())
+        XCTAssertEqual(position.topOffset, saved.topOffset)
+        XCTAssertEqual(position.topFraction ?? 0, saved.topFraction ?? 0, accuracy: 0.01)
+        XCTAssertEqual(position.anchor, saved.anchor)
+        XCTAssertEqual(position.focus, saved.focus)
+    }
+
+    func testOldSavedPositionsStillDecode() throws {
+        let data = Data(#"{"scrollX":0,"scrollY":120,"anchor":30,"focus":30}"#.utf8)
+        let position = try JSONDecoder().decode(EditorPosition.self, from: data)
+        XCTAssertNil(position.topOffset)
+        XCTAssertEqual(position.scrollY, 120)
+    }
+
     func testReadOnlyBlocksEditsButAllowsSelectionAndCopy() throws {
         var text = Self.shortText
         let binding = Binding(get: { text }, set: { text = $0 })

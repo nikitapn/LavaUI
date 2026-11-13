@@ -321,7 +321,7 @@ extension LeafNode {
             // A pass still owes work even when nothing moved: the plan below
             // leaves most of the file unbroken and finishes it over the next
             // few frames.
-            guard replanned || wrapUnmeasured > 0 else { return }
+            guard replanned || wrapUnmeasured > 0 || pendingFontAnchor != nil else { return }
             lastMeasuredWidth = availableWidth
             lastWrappedText = textNow
 
@@ -334,7 +334,7 @@ extension LeafNode {
             if widthMoved, pendingTopLine == nil {
                 pendingTopLine = logicalLine(ofRow: max(0, Int(scrollY / f.lineHeight)))
             }
-            let anchor: WrapAnchor
+            var anchor: WrapAnchor
             if let line = pendingTopLine {
                 anchor = .line(line)
                 pendingTopLine = nil
@@ -347,6 +347,19 @@ extension LeafNode {
             if replanned {
                 planWrap(text: textNow, previous: wrapPlanText, widthMoved: widthMoved)
             }
+            if let position = pendingFontAnchor {
+                // Break the destination before mapping its character offset
+                // into visual rows, even deep inside one long logical line.
+                let lines = logicalLineIndex.rows
+                var low = 0
+                var high = lines.count
+                while low < high {
+                    let mid = (low + high) / 2
+                    if lines[mid].lowerBound <= position.offset { low = mid + 1 }
+                    else { high = mid }
+                }
+                anchor = .line(max(0, low - 1))
+            }
             breakWrapWindow(font: f, inner: inner, anchor: anchor)
             installWrapRows()
             restoreFontAnchor(font: f)
@@ -354,7 +367,7 @@ extension LeafNode {
         }
 
         // No wrapping: one row per logical line, cached the same way.
-        guard editing.text != lastLogicalRowsText || pendingTopLine != nil else { return }
+        guard editing.text != lastLogicalRowsText || pendingTopLine != nil || pendingFontAnchor != nil else { return }
         seedLogicalRows()
         // Row *is* line here, so bringing a line back to the top is a
         // multiplication. Without it, turning wrapping off left an offset
