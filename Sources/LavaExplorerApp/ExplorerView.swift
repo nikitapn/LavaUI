@@ -819,7 +819,7 @@ private struct Toolbar: View {
                 }
             )
             .focused(session.pathFocus(in: paneID))
-            .padding(6)
+            .padding(2)
             .background(Theme.current.background)
             .cornerRadius(4)
             .flexGrow(1)
