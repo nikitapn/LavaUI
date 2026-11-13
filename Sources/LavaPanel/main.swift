@@ -106,9 +106,8 @@ enum WindowMenuID {
     static let close = MenuID("window.close")
 }
 
-/// The application menu the panel makes up for a window that exports none:
-/// the application's name over a Quit, so the bar reads the way it does for
-/// an app with a menu of its own rather than going quiet after the icon.
+/// The application menu supplied when an exported bar has no name menu:
+/// the application's name over a Quit, also used when it exports nothing.
 enum AppMenuID {
     static let root = MenuID("app")
     static let quit = MenuID("app.quit")
@@ -357,8 +356,8 @@ final class MenuSession {
         case WindowMenuID.close:
             closeMenu()
             if focusedSurface != 0 { LavaClient.closeWindow(focusedSurface) }
-        // A window that exports no menu is, as far as the panel can tell, the
-        // application: closing it is what Quit can honestly promise.
+        // The panel's fallback can close this window; it has no application-
+        // wide quit action to dispatch to a foreign client.
         case AppMenuID.quit:
             closeMenu()
             if focusedSurface != 0 { LavaClient.closeWindow(focusedSurface) }
@@ -369,8 +368,8 @@ final class MenuSession {
     }
 
     /// The system menu (Lava icon) always stays first. A focused window's
-    /// titles follow it; a focused window with nothing to export gets an
-    /// application menu made up here — its name, over a Quit.
+    /// application name follows it, supplying an application menu when the
+    /// exported bar has none — its name, over a Quit.
     func refreshModel() {
         let desktop = Self.desktopMenu(icon: brandIcon)
         if focusedSurface == 0 {
@@ -386,9 +385,7 @@ final class MenuSession {
                 Data("LavaPanel: imported [\(titles)]\n".utf8)
             )
         }
-        if !hasAppMenu {
-            imported = MenuModel(menus: [Self.appMenu(name: appName())])
-        }
+        imported = imported.adding(applicationMenu: Self.appMenu(name: appName()))
         var menus = desktop.menus
         menus.append(
             contentsOf: imported.adding(shellMenu: Self.windowMenu(onTop: focusedOnTop)).menus
@@ -411,7 +408,7 @@ final class MenuSession {
         let appId = focusedAppId
         if appId.isEmpty { return title.isEmpty ? "Application" : title }
         if catalog == nil {
-            // Once, on the first window with no menu: a scan of every
+            // Once, on the first focused application: a scan of every
             // applications directory is not something to do per focus.
             var map: [String: String] = [:]
             for entry in DesktopEntry.installed() where !entry.name.isEmpty {
@@ -451,8 +448,7 @@ final class MenuSession {
         )
     }
 
-    /// Whether the focused window exported titles of its own, rather than
-    /// being given `appMenu`.
+    /// Whether the focused window exported titles of its own.
     var hasAppMenu = false
 
     /// macOS-style: the brand mark is the system menu, always present.

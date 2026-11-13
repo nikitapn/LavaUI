@@ -253,6 +253,29 @@ final class MenuTests: XCTestCase {
         )
     }
 
+    func testApplicationMenuPrecedesForeignMenusWithoutChangingTheirActions() {
+        let bar = MenuModel(menus: [node("_File", ["open", "quit"]), node("Edit")])
+        let app = node("Google Chrome", ["shell.quit"])
+        let out = bar.adding(applicationMenu: app)
+        XCTAssertEqual(out.menus, [app] + bar.menus)
+        XCTAssertEqual(out.adding(applicationMenu: app), out)
+    }
+
+    func testApplicationMenuKeepsAnExportedShortNameAndActions() {
+        let bar = MenuModel(menus: [node("Explorer", ["About LavaExplorer", "Quit"]), node("File")])
+        XCTAssertEqual(bar.adding(applicationMenu: node("LavaExplorer", ["shell.quit"])), bar)
+    }
+
+    func testApplicationMenuRecognizesMnemonicName() {
+        let bar = MenuModel(menus: [node("&Code", ["settings"]), node("File")])
+        XCTAssertEqual(bar.adding(applicationMenu: node("Code", ["shell.quit"])), bar)
+    }
+
+    func testApplicationMenuSuppliesAnEmptyBar() {
+        let app = node("ChatGPT", ["shell.quit"])
+        XCTAssertEqual(MenuModel().adding(applicationMenu: app).menus, [app])
+    }
+
     func testShellMenuGoesBeforeHelp() {
         let bar = MenuModel(menus: [node("File"), node("Edit"), node("_Help")])
         let out = bar.adding(shellMenu: node("Window", ["top"]))

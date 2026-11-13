@@ -157,6 +157,29 @@ public struct MenuModel: Equatable, Sendable {
         menus.flatMap { $0.allItems }
     }
 
+    /// Supplies the application-name slot when an imported bar starts with
+    /// File/Edit instead. Keep an existing application menu and its actions;
+    /// its short name ("Explorer") can differ from the desktop entry's name.
+    public func adding(applicationMenu menu: MenuNode) -> MenuModel {
+        func plain(_ title: String) -> String {
+            title.replacingOccurrences(of: "_", with: "")
+                .replacingOccurrences(of: "&", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+        }
+        if let first = menus.first {
+            let title = plain(first.title)
+            let names = [title, plain(menu.title)].flatMap { ["about \($0)", "quit \($0)"] }
+            if title == plain(menu.title) || first.items.contains(where: {
+                guard case .item(let item) = $0 else { return false }
+                return names.contains(plain(item.title))
+            }) {
+                return self
+            }
+        }
+        return MenuModel(menus: [menu] + menus)
+    }
+
     /// `menu` added where a menubar convention puts it, for a menu the
     /// *shell* contributes to every application's bar — the panel's Window
     /// menu.

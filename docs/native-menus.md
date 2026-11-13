@@ -56,8 +56,8 @@ LavaApp.run(
     menu: {
         MenuBar {
             // First top-level menu = application menu (Chrome: "Google Chrome").
-            // Global panels put it beside the window icon; omit it and that
-            // slot looks empty/invisible.
+            // LavaPanel preserves this menu; omitting it gives the app a
+            // panel-supplied name menu with a fallback Quit action.
             Menu("MyApp") {
                 MenuItem("New", shortcut: KeyShortcut(KeyCode.n, .primary)) { newDoc() }
                 MenuSeparator()
@@ -338,6 +338,12 @@ one window with nothing in any log.
 `registrar-id` / `registrar-pid` / `none`), pid resolutions, names leaving the
 bus, and imported top-level titles. The panel and the compositor read the same
 switch.
+
+The panel always puts the application name after the Lava menu, including for
+foreign bars that start with File/Edit. It supplies a name-over-Quit menu from
+the focused app's desktop entry when needed. An exported application menu is
+kept with its original actions and short title (for example, Explorer), matched
+by its name or its About/Quit item. Imported command menus stay in their order.
 
 ### Chromium's empty stubs
 
