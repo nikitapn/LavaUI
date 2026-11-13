@@ -12,6 +12,7 @@ enum SettingsSection: String, CaseIterable, Sendable {
     case keyboard
     case pointer
     case display
+    case workspaces
     case network
     case bluetooth
     case lock
@@ -24,6 +25,7 @@ enum SettingsSection: String, CaseIterable, Sendable {
         case .keyboard: return "Keyboard"
         case .pointer: return "Mouse & Touchpad"
         case .display: return "Display"
+        case .workspaces: return "Workspaces"
         case .network: return "Network"
         case .bluetooth: return "Bluetooth"
         case .lock: return "Lock & Screen"
@@ -40,6 +42,7 @@ enum SettingsSection: String, CaseIterable, Sendable {
         case .keyboard: return "Layout, repeat, shortcuts"
         case .pointer: return "Speed, tapping, scrolling"
         case .display: return "Screens, arrangement, primary"
+        case .workspaces: return "Names, for app profiles"
         case .network: return "Wi-Fi, wired, VPN"
         case .bluetooth: return "Devices, pairing, visibility"
         case .lock: return "Lock, screens off, suspend"
@@ -153,6 +156,13 @@ final class SettingsStore {
     var screenOffLocked: UInt32 = 60
     var lockOnSuspend = true
 
+    // MARK: Workspaces
+
+    /// `[workspaces]`: one per workspace, from 0; empty for one with no name.
+    var workspaceNames: [String] = Array(repeating: "", count: 9)
+    /// The one on screen, from 0 — this window's, since Settings is on it.
+    var currentWorkspace = 0
+
     // MARK: Display
 
     var outputs: [OutputInfo] = []
@@ -202,6 +212,9 @@ final class SettingsStore {
             // Absent from a compositor older than the call; the page then
             // shows the defaults and a push reports the failure.
             if let pointer = try? DesktopSettings.pointer() { self.pointer = pointer }
+            // Absent from a compositor older than the call: the page shows
+            // nine empty names, and a push reports the failure.
+            if let names = try? DesktopSettings.workspaceNames() { apply(names) }
             if let mode = try? DesktopSettings.arrangement() {
                 arrangement = mode
             }
@@ -275,6 +288,31 @@ final class SettingsStore {
             report(error)
         }
         if let taken = try? DesktopSettings.pointer() { pointer = taken }
+    }
+
+    // MARK: - Writing workspaces
+
+    /// One name changed, as typed. Pushed straight away — every app asking
+    /// from now on sees it — but not read back: the compositor trims what it
+    /// keeps, and reading that into the field mid-word would eat the space
+    /// before the next one. `finishWorkspaceNames` reads it back.
+    func setWorkspaceName(_ index: Int, _ name: String) {
+        guard workspaceNames.indices.contains(index), workspaceNames[index] != name else { return }
+        workspaceNames[index] = name
+        guard connected else { return }
+        do {
+            try DesktopSettings.setWorkspaceNames(workspaceNames)
+            clearStatus()
+        } catch {
+            report(error)
+        }
+    }
+
+    /// Return in a name: show what the compositor kept — trimmed, without a
+    /// `#` the config file could not hold.
+    func finishWorkspaceNames() {
+        guard connected, let names = try? DesktopSettings.workspaceNames() else { return }
+        apply(names)
     }
 
     // MARK: - Writing lock & screen
@@ -690,6 +728,13 @@ final class SettingsStore {
         shadowBlur = appearance.shadowBlur
         shadowOpacity = appearance.shadowOpacity
         shadowOffsetY = appearance.shadowOffsetY
+    }
+
+    private func apply(_ names: WorkspaceNames) {
+        var padded = names.names
+        if padded.count < 9 { padded += Array(repeating: "", count: 9 - padded.count) }
+        workspaceNames = padded
+        currentWorkspace = Int(names.current)
     }
 
     private func apply(_ idle: IdleSettings) {

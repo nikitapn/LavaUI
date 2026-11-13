@@ -143,18 +143,27 @@ public enum LavaClient {
         }
 
         let compositor: Compositor
-        do {
-            let (proxy, rpc) = try connectToCompositor()
-            compositor = proxy
-            // Capture (and CreateSurface) can exceed the 1s default: a PNG of
-            // a window is the one call that does real GPU work. The switcher
-            // fires one per open window.
-            compositor.timeout = 10_000
-            // Held for the process's lifetime: the `Rpc` owns the transport,
-            // and ARC releases a local at its last use, not at end of scope.
-            runtime = rpc
-        } catch {
-            fail("no compositor (\(error)) — is the renderer running?")
+        if let connected = Self.compositor {
+            // `connectControlPlane` ran first — an app asking which workspace
+            // it is on before it opens. One connection per process: NPRPC
+            // refuses to start a second runtime, and the window would never
+            // open.
+            compositor = connected
+        } else {
+            do {
+                let (proxy, rpc) = try connectToCompositor()
+                compositor = proxy
+                // Capture (and CreateSurface) can exceed the 1s default: a PNG
+                // of a window is the one call that does real GPU work. The
+                // switcher fires one per open window.
+                compositor.timeout = 10_000
+                // Held for the process's lifetime: the `Rpc` owns the
+                // transport, and ARC releases a local at its last use, not at
+                // end of scope.
+                runtime = rpc
+            } catch {
+                fail("no compositor (\(error)) — is the renderer running?")
+            }
         }
 
         // What the desktop looks like, before the first body runs — a view
@@ -952,6 +961,23 @@ public enum LavaClient {
         guard let compositor = Self.compositor else { return }
         report("ToggleShowDesktop") {
             try blockingCall { try await compositor.toggleShowDesktop() }
+        }
+    }
+
+    /// Which workspace is on screen and what each one is called, from
+    /// `[workspaces]` in `lava.conf`. A new window opens on the current one,
+    /// so an app can ask before `open` — this connects if nothing has yet —
+    /// and pick a profile before its first frame.
+    ///
+    /// Nil without a compositor, and against one older than the call: an
+    /// app falls back to whatever it did before workspaces had names.
+    public static func workspaceNames() -> WorkspaceNames? {
+        guard connectControlPlane(), let compositor = Self.compositor else { return nil }
+        do {
+            return try blockingCall { try await compositor.getWorkspaces() }
+        } catch {
+            FileHandle.standardError.write(Data("GetWorkspaces failed: \(error)\n".utf8))
+            return nil
         }
     }
 

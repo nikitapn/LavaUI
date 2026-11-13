@@ -22,9 +22,16 @@ struct LavaExplorerApp {
         AppSettings.configure(appName: "LavaExplorer")
         let chooser = ChooserRequest.parse(Array(CommandLine.arguments.dropFirst()))
         let paths = Array(CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") })
+        // The workspace this window will open on, and so its profile: the
+        // one named like the workspace in `lava.conf` (`2 = Work`), else the
+        // one last picked. Asked before anything else, because the hand-off
+        // below is to the explorer showing *that* profile. Not for a picker,
+        // which is somebody else's dialog and keeps the profile last picked.
+        let workspaceName = chooser == nil ? LavaHost.workspace()?.name : nil
+        let profile = ExplorerSession.launchProfile(workspaceName: workspaceName)
         // A folder for the explorer already open: it becomes a tab there, and
         // this process has nothing left to do. See `ExplorerInstance`.
-        if chooser == nil, ExplorerInstance.handOff(paths) { exit(0) }
+        if chooser == nil, ExplorerInstance.handOff(paths, profile: profile.id) { exit(0) }
 
         // A picker is a dialog: a little smaller, named for what it asks, and
         // opened as a dialog of the window that asked — so the compositor
@@ -44,12 +51,13 @@ struct LavaExplorerApp {
 
         let session = ExplorerSession(
             paths: paths,
-            chooser: chooser
+            chooser: chooser,
+            workspaceName: workspaceName
         )
         // Not for a picker: it is a dialog of somebody else's, and gone the
         // moment it is answered.
         if chooser == nil {
-            ExplorerInstance.listen { handed in
+            ExplorerInstance.listen(profile: session.profiles.selectedID) { handed in
                 session.showHandedOver(handed)
                 LavaHost.raise()
             }

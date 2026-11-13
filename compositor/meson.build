@@ -225,6 +225,7 @@ compositor = executable(
   'src/png_file.cpp',
   'src/pointer_config.cpp',
   'src/pointer_settings.cpp',
+  'src/workspace_names.cpp',
   lava_idl_sources,
   protocol_headers,
   protocol_sources,
@@ -332,3 +333,12 @@ pointer_settings_test = executable(
   build_by_default: false,
 )
 test('pointer settings', pointer_settings_test)
+
+# Headless: `[workspaces]` parsing and the cleaning `SetWorkspaceNames` does.
+workspace_names_test = executable(
+  'workspace_names_test',
+  ['tests/workspace_names_test.cpp', 'src/workspace_names.cpp'],
+  include_directories: include_directories('src'),
+  build_by_default: false,
+)
+test('workspace names', workspace_names_test)

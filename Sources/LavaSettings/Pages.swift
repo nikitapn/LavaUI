@@ -846,6 +846,57 @@ private struct ModeList: View {
 /// seven minutes forty, and a list says "never" as plainly as it says "ten
 /// minutes". A value `lava.conf` holds that is not on the list is listed too,
 /// so the page never shows a selection the desktop does not have.
+/// What the workspaces are called — `[workspaces]` in `lava.conf`.
+///
+/// The desktop never shows these names itself. They are for applications
+/// that keep profiles: one started on the workspace called "Work" opens its
+/// "Work" profile. So the page says that, rather than leaving a list of nine
+/// fields to explain itself.
+struct WorkspacesPage: View {
+    let store: SettingsStore
+
+    var body: some View {
+        let names = store.workspaceNames
+        let current = store.currentWorkspace
+        let mod = store.modKey == "super" ? "Super" : "Alt"
+        return VStack(spacing: 18) {
+            SettingGroup("Names") {
+                SettingRow(
+                    "What each workspace is called",
+                    "An app with profiles opens the one of the same name on "
+                    + "that workspace: LavaExplorer started on \"Work\" opens "
+                    + "its Work profile. Other workspaces open the profile last "
+                    + "picked. Apps already open keep theirs."
+                ) {
+                    VStack(spacing: 6) {
+                        ForEach(Array(names.indices), id: \.self) { index in
+                            HStack(padding: 0, alignment: .center, spacing: 12) {
+                                Text("\(mod)+\(index + 1)", color: Theme.current.textSecondary)
+                                    .frame(width: .pt(72))
+                                TextField(
+                                    text: Binding(
+                                        get: { store.workspaceNames[index] },
+                                        set: { store.setWorkspaceName(index, $0) }
+                                    ),
+                                    placeholder: "No name",
+                                    onSubmit: { store.finishWorkspaceNames() }
+                                )
+                                .flexGrow(1)
+                                .agentId("workspace-name-\(index + 1)")
+                                // Reserved whether shown or not, so the
+                                // fields line up down the column.
+                                Text(index == current ? "on screen" : "",
+                                     color: Theme.current.textDim, lineLimit: 1)
+                                    .frame(width: .pt(90))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 struct LockPage: View {
     let store: SettingsStore
 

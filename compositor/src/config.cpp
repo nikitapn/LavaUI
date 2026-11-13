@@ -421,6 +421,10 @@ Config Config::load(const std::string &path) {
       } else {
         known = false;
       }
+    } else if (section == "workspaces") {
+      // `2 = Work`. A key that is not a number from 1 to 9 is reported like
+      // any other unknown key, rather than naming a workspace nobody has.
+      known = parseWorkspaceKey(config.workspaceNames, key, value);
     } else if (section == "mouse") {
       known = parsePointerKey(config.mouse, key, value);
     } else if (section == "touchpad") {

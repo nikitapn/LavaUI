@@ -655,6 +655,15 @@ struct CompositorHost {
   /// The workspace keys and Mod+D, for the panel's desktop menus.
   virtual void switchWorkspace(uint32_t index) = 0;
   virtual void toggleShowDesktop() = 0;
+
+  /// The workspace on screen, and `[workspaces]` from the config: one name
+  /// per workspace, empty for one with none. See `WorkspaceNames`.
+  virtual void workspaceNames(uint32_t &outCurrent,
+                              std::vector<std::string> &outNames) const = 0;
+  /// Applies `names` (cleaned — `cleanWorkspaceName`), then saves the ones
+  /// that changed to `[workspaces]`. `outError` is a failed save.
+  virtual void setWorkspaceNames(const std::vector<std::string> &names,
+                                 std::string &outError) = 0;
 };
 
 /// What the lock screen is told. `LockState` in the IDL; `status` is a

@@ -82,7 +82,45 @@ final class ExplorerSession: @unchecked Sendable {
         profile.folderViews = viewMemory
         guard profile != profiles.selected else { return }
         profiles.update(profile)
-        AppSettings.set(profiles, forKey: "profiles")
+        persistProfiles(select: false)
+    }
+
+    /// Writes this window's profile into the saved ones, leaving every other
+    /// profile as the file has it: another window — the Work explorer on
+    /// another workspace — may be showing one of them and have saved since.
+    /// Takes back what the file has, so a profile made in that window shows
+    /// in this one's menu too. `select` is the user picking this profile,
+    /// which makes it the one a workspace with no name opens with.
+    private func persistProfiles(select: Bool) {
+        let own = profiles.selected
+        let mine = profiles
+        var merged: ExplorerProfiles?
+        AppSettings.update(ExplorerProfiles.self, forKey: "profiles") { disk in
+            let next = mine.saving(own, select: select, over: disk)
+            merged = next
+            return next
+        }
+        // The list as saved; the choice stays this window's own.
+        if var merged, merged.select(id: own.id) { profiles = merged }
+    }
+
+    /// Takes in the saved profiles as they are on disk now, keeping this
+    /// window's own — shown and not yet saved — as it has them.
+    private func refreshProfiles() {
+        AppSettings.reload()
+        guard let disk = AppSettings.value(forKey: "profiles", as: ExplorerProfiles.self) else { return }
+        let own = profiles.selected
+        var merged = profiles.saving(own, select: false, over: disk)
+        if merged.select(id: own.id) { profiles = merged }
+    }
+
+    /// The profile a window opened on `workspace` uses: the one named for it
+    /// (`[workspaces]` in `lava.conf`), else the one last picked. Static, for
+    /// `main`, which needs it before there is a session — the hand-off to a
+    /// running explorer is per profile.
+    static func launchProfile(workspaceName: String?) -> ExplorerProfile {
+        let profiles = loadProfiles()
+        return workspaceName.flatMap { profiles.named($0) } ?? profiles.selected
     }
 
     private func applyProfileControls() {
@@ -122,6 +160,9 @@ final class ExplorerSession: @unchecked Sendable {
             return
         }
         saveProfile()
+        // The profile as it is saved now, not as this window loaded it:
+        // another window may have been showing it and added tabs since.
+        refreshProfiles()
         guard profiles.select(id: id) else { return }
         loadingProfile = true
         dismissContext()
@@ -144,7 +185,9 @@ final class ExplorerSession: @unchecked Sendable {
             ?? PaneLayout(tabs: ExplorerTabs(tab: ExplorerTab.open(id: 1, path: NSHomeDirectory(), source: source)))
         loadingProfile = false
         saveProfile()
-        AppSettings.set(profiles, forKey: "profiles")
+        persistProfiles(select: true)
+        // Paths handed to "the Work explorer" come here only while this is it.
+        if chooser == nil { ExplorerInstance.follow(profile: profiles.selectedID) }
         ViewInvalidation.markDirty()
     }
 
@@ -213,11 +256,18 @@ final class ExplorerSession: @unchecked Sendable {
         places: [Place]? = nil,
         trash: TrashCan = TrashCan(),
         chooser: ChooserRequest? = nil,
+        workspaceName: String? = nil,
         watchFolders: Bool = true,
         connections: RemoteConnections = .standard(),
         logins: RemoteLogins = RemoteLogins()
     ) {
-        let initialProfiles = Self.loadProfiles()
+        var initialProfiles = Self.loadProfiles()
+        // Started on the workspace called "Work": the Work profile, for this
+        // window. Not saved as the user's choice — `persistProfiles` — so a
+        // workspace with no name still opens the profile last picked.
+        if chooser == nil, let named = workspaceName.flatMap({ initialProfiles.named($0) }) {
+            _ = initialProfiles.select(id: named.id)
+        }
         self.profiles = initialProfiles
         let filter = FilteredSource.Filter(
             chooser?.mode == .folder ? .folders : chooser?.filters.first
@@ -275,7 +325,7 @@ final class ExplorerSession: @unchecked Sendable {
         applyRememberedViews()
         loadingProfile = false
         saveProfile()
-        if chooser == nil { AppSettings.set(profiles, forKey: "profiles") }
+        if chooser == nil { persistProfiles(select: false) }
         // Last: the callback needs `self`, and a fetch started by the tabs
         // above can land before it is set — which `remoteFolderChanged`
         // makes up for by reloading whatever is showing that folder then.

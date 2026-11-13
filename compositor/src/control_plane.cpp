@@ -2050,6 +2050,23 @@ class CompositorImpl final : public ICompositor_Servant {
 
   void ToggleShowDesktop() override { host_.toggleShowDesktop(); }
 
+  WorkspaceNames GetWorkspaces() override {
+    WorkspaceNames out{};
+    host_.workspaceNames(out.current, out.names);
+    return out;
+  }
+
+  void SetWorkspaceNames(
+      nprpc::flat::Span_ref<nprpc::flat::String, nprpc::flat::String_Direct1>
+          names) override {
+    std::vector<std::string> wanted;
+    wanted.reserve(names.size());
+    for (auto name : names) wanted.emplace_back(std::string_view(name()));
+    std::string error;
+    host_.setWorkspaceNames(wanted, error);
+    if (!error.empty()) throw SettingsWriteFailed(host_.configPath(), error);
+  }
+
   uint32_t CreateWindow(nprpc::flat::Span<char> arenaId, uint32_t width,
                         uint32_t height, nprpc::flat::Span<char> title,
                         WindowFrame frame, nprpc::flat::Span<char> appId,

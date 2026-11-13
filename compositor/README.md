@@ -252,6 +252,13 @@ shadow-inactive = 0.45
 [output DP-3]
 mode = 2560x1440@144
 position = 0,0
+
+# What the workspaces are called, numbered as Mod+1…9 counts them. The
+# compositor never shows these; an app with profiles opens the one of the
+# same name on the workspace it starts on (LavaExplorer's "Work" here).
+[workspaces]
+2 = Work
+3 = Games
 ```
 
 `msaa` costs about 16 MiB per surface per step at 1920x1080, and there is one
@@ -273,6 +280,17 @@ panel is disabled, unplugged — the compositor turns one back on (a built-in
 `eDP`/`LVDS`/`DSI` panel first), and turns it off again as soon as a screen
 the config does want comes back. Nothing is written to the file; the log says
 which screen is on as a stand-in.
+
+`[workspaces]` is read again on `SIGHUP`, and an app asks for it with
+`GetWorkspaces` — the workspace on screen and every name, empty for one
+without — before it opens, since a new window opens on the workspace on screen.
+`lavactl workspaces` prints the same list. Settings → Workspaces names them
+through `SetWorkspaceNames`, which applies at once and writes only the lines
+that changed; a cleared name is written as `3 =`. The compositor cleans what
+it keeps: no spaces round it, no `#` (it would start a comment), no line
+breaks, at most 64 bytes (`workspace_names.cpp`, tested). A name only matters to an app that
+looks for it: today that is LavaExplorer, whose profile of the same name (case
+ignored) opens there, and every other workspace keeps the profile last picked.
 
 `corner-radius` applies to what the compositor draws — LavaUI clients and the
 title bars above them — and takes effect on `SIGHUP` without restarting

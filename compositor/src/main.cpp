@@ -428,6 +428,7 @@ struct Workspaces {
 };
 
 static_assert(Workspaces::kCount == lava::FocusHistory::kWorkspaces);
+static_assert(Workspaces::kCount == lava::kWorkspaceCount);
 
 // ─── Output ────────────────────────────────────────────────────────────────
 
@@ -5978,6 +5979,38 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   void toggleShowDesktop() override {
     if (server_ != nullptr) server_->toggleShowDesktop();
+  }
+
+  void workspaceNames(uint32_t &outCurrent,
+                      std::vector<std::string> &outNames) const override {
+    outCurrent = workspaces_ != nullptr ? workspaces_->current : 0;
+    // Every workspace, named or not, so an index always has an entry: a
+    // client asking about workspace 9 should not have to know the config
+    // only went up to 2.
+    outNames.assign(Workspaces::kCount, std::string{});
+    if (server_ == nullptr) return;
+    const auto &names = server_->config.workspaceNames;
+    for (size_t i = 0; i < names.size() && i < outNames.size(); ++i)
+      outNames[i] = names[i];
+  }
+
+  void setWorkspaceNames(const std::vector<std::string> &names,
+                         std::string &outError) override {
+    outError.clear();
+    if (server_ == nullptr) return;
+    std::vector<std::string> &kept = server_->config.workspaceNames;
+    kept.resize(Workspaces::kCount);
+    // Only the lines that change. A name cleared is written empty, which the
+    // parser reads as no name; the line stays, as a setting turned off does.
+    std::vector<lava::Setting> changed;
+    for (size_t i = 0; i < Workspaces::kCount; ++i) {
+      const std::string name =
+          i < names.size() ? lava::cleanWorkspaceName(names[i]) : std::string{};
+      if (name == kept[i]) continue;
+      kept[i] = name;
+      changed.push_back({"workspaces", std::to_string(i + 1), name});
+    }
+    if (!changed.empty()) save(std::move(changed), outError);
   }
 
   void pointerSettings(PointerState &out) const override {

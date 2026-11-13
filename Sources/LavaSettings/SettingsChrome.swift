@@ -175,6 +175,8 @@ struct SettingsContent: View {
                     PointerPage(store: store)
                 case .display:
                     DisplayPage(store: store)
+                case .workspaces:
+                    WorkspacesPage(store: store)
                 case .network, .bluetooth:
                     EmptyView()
                 case .lock:

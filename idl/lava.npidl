@@ -602,6 +602,20 @@ message WindowList {
   windows: vector<WindowInfo>;
 }
 
+/// Which workspace is on screen, and what each one is called.
+///
+/// The names are the user's, from `[workspaces]` in `lava.conf` (`2 = Work`),
+/// and the compositor never shows them itself. They are for applications that
+/// keep profiles: one started on the workspace called "Work" opens its "Work"
+/// profile. A new window opens on `current`, so an application can ask this
+/// before it has a window and pick its profile before its first frame.
+message WorkspaceNames {
+  /// 0-based, as `WindowInfo.workspace` is.
+  current: u32;
+  /// One per workspace, 0-based; an empty string is a workspace with no name.
+  names: vector<string>;
+}
+
 /// Shell → compositor: "I have drawn this list."
 message WindowListAck {
   serial: u32;
@@ -2582,6 +2596,29 @@ interface Compositor {
                    appId: in string, parentId: in u32,
                    traits: in WindowTraits)
       raises(ArenaNotFound, AlreadyRunning);
+
+  /// The workspace on screen and every workspace's name — see
+  /// `WorkspaceNames`. Answered on the loop, from the config as it stands
+  /// after the last SIGHUP.
+  ///
+  /// Last in the interface, because method indices are positional:
+  /// appending is what keeps clients built against older stubs working.
+  WorkspaceNames GetWorkspaces();
+
+  /// Names the workspaces, for a settings app: `names[i]` for workspace `i`
+  /// (0-based), every one of them — a missing entry or an empty string is a
+  /// workspace with no name. Applied at once, so the next app to ask
+  /// `GetWorkspaces` sees them, then saved to `[workspaces]`.
+  ///
+  /// The compositor cleans each name before keeping it: spaces round it go,
+  /// and so does anything the config file could not hold — a `#` starts a
+  /// comment there and a line break ends the line. Read the names back with
+  /// `GetWorkspaces` to see what was kept. Applications already running are
+  /// not told; a name decides which profile an app *opens* with.
+  ///
+  /// Last in the interface, because method indices are positional:
+  /// appending is what keeps clients built against older stubs working.
+  void SetWorkspaceNames(names: in vector<string>) raises(SettingsWriteFailed);
 }
 
 /// Image registration that does not stop the desktop.

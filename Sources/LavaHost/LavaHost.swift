@@ -126,6 +126,38 @@ public enum LavaHost {
         #endif
     }
 
+    /// A workspace of the desktop's, and what the user called it.
+    public struct Workspace: Equatable, Sendable {
+        /// 0-based; Mod+1 is 0.
+        public var index: Int
+        /// From `[workspaces]` in `lava.conf` (`2 = Work`). Empty when the
+        /// user gave this one no name.
+        public var name: String
+
+        public init(index: Int, name: String) {
+            self.index = index
+            self.name = name
+        }
+    }
+
+    /// The workspace this app's window will open on — the one on screen —
+    /// with its name. For an app that keeps profiles: started on the
+    /// workspace called "Work", open the "Work" profile.
+    ///
+    /// Ask before `open`, so the profile is chosen before the first frame.
+    /// Nil in a windowed app, which has no desktop of ours to be on, and
+    /// against a compositor too old to say.
+    public static func workspace() -> Workspace? {
+        #if LAVA_HAS_CLIENT
+        guard isClient, let answer = LavaClient.workspaceNames() else { return nil }
+        let index = Int(answer.current)
+        let name = index < answer.names.count ? answer.names[index] : ""
+        return Workspace(index: index, name: name)
+        #else
+        return nil
+        #endif
+    }
+
     /// Brings the window to the front and focuses it, as a click on its
     /// dock entry would. Client mode only: a windowed app is the toolkit's.
     public static func raise() {

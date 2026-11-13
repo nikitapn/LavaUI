@@ -20,6 +20,8 @@ usage: lavactl <command>
 
   windows                  every window: id, workspace, focused, app id, title
   workspace [n]            the workspace on screen right now, or show n (from 0)
+  workspaces               every workspace and its name from [workspaces] in
+                           lava.conf; * marks the one on screen
   desktop                  hide every window, or bring them back (Mod+D)
   activate <id>            restore, raise and focus a window by surface id
   minimize <id>            put one window away by surface id
@@ -72,6 +74,14 @@ case "workspace":
         LavaClient.switchWorkspace(n)
     } else {
         print(snapshot().workspace)
+    }
+
+case "workspaces":
+    // From 0, as `windows` and `workspace` count, with the name the user
+    // gave it — what an app with profiles opens on that workspace.
+    guard let answer = LavaClient.workspaceNames() else { die("no answer from the compositor", 3) }
+    for (index, name) in answer.names.enumerated() {
+        print("\(index == answer.current ? "*" : " ")\(index)\t\(name)")
     }
 
 case "desktop":

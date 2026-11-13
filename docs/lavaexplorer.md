@@ -43,6 +43,17 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   Home; a new profile starts at the home folder with empty favorites and servers.
   The selected profile is remembered across launches. Passwords stay in the
   keyring. Finish ongoing file operations before switching profiles.
+- **A profile per workspace.** Name a workspace in Settings → Workspaces
+  (or `[workspaces]` in `lava.conf`, `2 = Work`) and an explorer started on it opens the profile
+  of that name, case ignored; any other workspace opens the profile last
+  picked from the menu, which a workspace choosing one does not change. So the
+  Home explorer can be on one workspace and the Work explorer on another, both
+  open: each saves only its own profile into `settings.json` (`AppSettings`
+  re-reads the file under a lock before every write, and
+  `ExplorerProfiles.saving` merges), and `LavaExplorer <path>` hands the folder
+  to the explorer showing the profile *that* workspace opens — the hand-off
+  socket is per profile, and a window that switches profile moves to the new
+  one's. A window keeps its profile if it is moved to another workspace.
 - Remembers expanded sidebar sections and sidebar width. Launching without a
   path restores open tabs, their order and selection, and pane splits, including
   remote folders. Explicit paths take precedence. File-picker dialogs do not

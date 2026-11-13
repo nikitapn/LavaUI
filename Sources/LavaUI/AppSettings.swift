@@ -133,6 +133,12 @@ public enum AppSettings {
         let raw = cache[key]
         lock.unlock()
         guard let raw else { return nil }
+        return decodeStored(raw, as: type)
+    }
+
+    /// A stored JSON value as `T`: itself when it already is one, through
+    /// `JSONDecoder` otherwise.
+    private static func decodeStored<T: Decodable>(_ raw: Any, as type: T.Type) -> T? {
         if let already = raw as? T { return already }
         guard JSONSerialization.isValidJSONObject(boxed(raw)),
               let data = try? JSONSerialization.data(withJSONObject: boxed(raw))
@@ -180,10 +186,12 @@ public enum AppSettings {
     /// Deletes `key` and writes the file. Does nothing if the key is not there.
     public static func remove(_ key: String) {
         lock.lock()
-        ensureLoadedLocked()
-        cache.removeValue(forKey: key)
-        persistLocked()
-        lock.unlock()
+        defer { lock.unlock() }
+        withFileLock {
+            reloadLocked()
+            cache.removeValue(forKey: key)
+            persistLocked()
+        }
     }
 
     /// Deletes every key and writes an empty settings file.
@@ -216,10 +224,83 @@ public enum AppSettings {
 
     private static func setValue(_ value: Any, forKey key: String) {
         lock.lock()
-        ensureLoadedLocked()
-        cache[key] = value
-        persistLocked()
-        lock.unlock()
+        defer { lock.unlock() }
+        withFileLock {
+            reloadLocked()
+            cache[key] = value
+            persistLocked()
+        }
+    }
+
+    /// Takes the file as it is on disk now, for an app with more than one
+    /// process: reads are served from what was loaded, and only writes look
+    /// at the file again — so a value another process saved since is not
+    /// seen until this is called, or this process writes something itself.
+    public static func reload() {
+        lock.lock()
+        defer { lock.unlock() }
+        withFileLock { reloadLocked() }
+    }
+
+    /// Reads `key` as it is on disk *now*, hands it to `body`, and writes back
+    /// what `body` returns — with the file locked against every other process
+    /// doing the same, so nothing can be written in between.
+    ///
+    /// For a value that two processes of one app both change: two explorer
+    /// windows each with a profile of its own, both saved under `profiles`.
+    /// `set` would have the last one to save throw away what the other
+    /// saved; here each one changes only its own part of what is there.
+    /// `nil` is passed when the key is missing or does not decode.
+    public static func update<T: Codable>(
+        _ type: T.Type, forKey key: String, _ body: (T?) -> T
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        withFileLock {
+            reloadLocked()
+            let current = cache[key].flatMap { decodeStored($0, as: type) }
+            let next = body(current)
+            guard let data = try? JSONEncoder().encode(next),
+                  let obj = try? JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed)
+            else { return }
+            cache[key] = obj
+            persistLocked()
+        }
+    }
+
+    /// Takes the file as it is on disk into the cache. Every write does this
+    /// first: an app can run more than one process — two explorer windows —
+    /// and writing a cache loaded at start-up put back every key as it was
+    /// then, undoing whatever the other one had saved since. A file that is
+    /// not there or does not parse leaves the cache alone; writes are an
+    /// atomic rename, so a half-written one is never seen.
+    private static func reloadLocked() {
+        loaded = true
+        let url = configRoot(for: appName).appendingPathComponent("settings.json")
+        guard let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data),
+              let dict = obj as? [String: Any]
+        else { return }
+        cache = dict
+    }
+
+    /// Runs `body` holding an exclusive `flock` on `settings.json.lock`, so
+    /// the read-then-write in `setValue` and `update` is one step as far as
+    /// any other process of this app is concerned. Without the lock file —
+    /// a directory that cannot be written — `body` runs anyway, as before.
+    private static func withFileLock(_ body: () -> Void) {
+        let directory = configRoot(for: appName)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let path = directory.appendingPathComponent("settings.json.lock").path
+        let fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        guard fd >= 0 else {
+            body()
+            return
+        }
+        defer { close(fd) }
+        _ = flock(fd, LOCK_EX)
+        defer { _ = flock(fd, LOCK_UN) }
+        body()
     }
 
     private static func ensureLoadedLocked() {

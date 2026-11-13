@@ -80,4 +80,47 @@ public struct ExplorerProfiles: Codable, Equatable, Sendable {
         guard let index = profiles.firstIndex(where: { $0.id == profile.id }) else { return }
         profiles[index] = profile
     }
+
+    /// The profile called `name` — a workspace's name, from `[workspaces]` in
+    /// `lava.conf` — ignoring case and the spaces round it, the way `create`
+    /// refuses a second "work" beside "Work". Nil for an empty name.
+    public func named(_ name: String) -> ExplorerProfile? {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
+        return profiles.first {
+            $0.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                .caseInsensitiveCompare(name) == .orderedSame
+        }
+    }
+
+    /// These profiles as one window saves them over what is on disk: the
+    /// file's own list, with `own` — the profile this window shows — written
+    /// over the entry with its id. Every other profile the file has stays as
+    /// the file has it, because another window may be showing it and have
+    /// saved since; one only this window has — made here, not saved yet — is
+    /// added. There is no deleting a profile, so nothing can come back that
+    /// somebody removed.
+    ///
+    /// `select` makes `own` the one a window opens with when its workspace
+    /// names no profile: true when the user picked it, false when a save is
+    /// only tabs moving — or when the workspace picked it, which is not the
+    /// user changing their default.
+    public func saving(_ own: ExplorerProfile, select: Bool, over disk: ExplorerProfiles?) -> ExplorerProfiles {
+        var result = disk.flatMap { $0.isValid ? $0 : nil } ?? self
+        // By id, and by name too: names are unique, and two explorers started
+        // for the first time — no profiles saved yet — each make a "Home" of
+        // their own with a different id.
+        for profile in profiles where profile.id != own.id && !result.profiles.contains(where: {
+            $0.id == profile.id || $0.name.caseInsensitiveCompare(profile.name) == .orderedSame
+        }) {
+            result.profiles.append(profile)
+        }
+        if let index = result.profiles.firstIndex(where: { $0.id == own.id }) {
+            result.profiles[index] = own
+        } else {
+            result.profiles.append(own)
+        }
+        if select { result.selectedID = own.id }
+        return result
+    }
 }

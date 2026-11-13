@@ -2,7 +2,7 @@ import Foundation
 import Glibc
 import LavaUI
 
-/// One explorer per session for folders asked for by path.
+/// One explorer per profile per session for folders asked for by path.
 ///
 /// The panel's Go menu, and anything else that runs `LavaExplorer <path>`,
 /// wants that folder *in the explorer* — a new tab in the window already
@@ -16,18 +16,31 @@ import LavaUI
 /// answers, the paths are its now and this process exits; if none does, this
 /// one becomes the explorer that answers. A launch with no paths — a second
 /// window on purpose — never asks.
+///
+/// **Per profile, too.** A workspace named in `lava.conf` opens the profile
+/// of that name, so the Home explorer can be on one workspace and the Work
+/// one on another — and a folder opened from the Work workspace belongs in
+/// the Work explorer's tabs, not in whichever started first. The socket is
+/// named for the profile's id, and a window that switches profile moves to
+/// the new one's (`follow`).
 enum ExplorerInstance {
-    static var socketPath: String? {
+    static func socketPath(profile: String) -> String? {
         guard let runtime = ProcessInfo.processInfo.environment["XDG_RUNTIME_DIR"],
               !runtime.isEmpty else { return nil }
         let session = ProcessInfo.processInfo.environment["WAYLAND_DISPLAY"] ?? "default"
         let name = session.isEmpty ? "default" : session.replacingOccurrences(of: "/", with: "_")
-        return (runtime as NSString).appendingPathComponent("lava-explorer-\(name).sock")
+        let tag = profile.replacingOccurrences(of: "/", with: "_")
+        return (runtime as NSString).appendingPathComponent("lava-explorer-\(name)-\(tag).sock")
     }
 
+    /// The socket this process answers on, and what it does with a request.
+    /// Set on the main thread only.
+    nonisolated(unsafe) private static var listening: (fd: Int32, path: String)?
+    nonisolated(unsafe) private static var onOpen: (@Sendable ([String]) -> Void)?
+
     /// Hands `paths` to a running explorer. True when one took them.
-    static func handOff(_ paths: [String]) -> Bool {
-        guard !paths.isEmpty, let path = socketPath else { return false }
+    static func handOff(_ paths: [String], profile: String) -> Bool {
+        guard !paths.isEmpty, let path = socketPath(profile: profile) else { return false }
         let fd = socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
         guard fd >= 0 else { return false }
         defer { close(fd) }
@@ -49,8 +62,9 @@ enum ExplorerInstance {
     /// Starts answering. `open` runs on the main queue with each request's
     /// paths. Quietly does nothing when the socket cannot be made: the
     /// explorer works, and later launches open windows of their own.
-    static func listen(_ open: @escaping @Sendable ([String]) -> Void) {
-        guard let path = socketPath else { return }
+    static func listen(profile: String, _ open: @escaping @Sendable ([String]) -> Void) {
+        onOpen = open
+        guard let path = socketPath(profile: profile) else { return }
         // An explorer still answering keeps the job: this is a second window
         // opened on purpose, and taking the socket would leave the first one
         // deaf. Only a file nothing listens on — left by an explorer that
@@ -68,8 +82,9 @@ enum ExplorerInstance {
             close(fd)
             return
         }
+        listening = (fd, path)
         // The file goes with the process, however it ends politely.
-        atexit { if let path = ExplorerInstance.socketPath { unlink(path) } }
+        atexit { if let path = ExplorerInstance.listening?.path { unlink(path) } }
         Thread.detachNewThread {
             while true {
                 let client = accept(fd, nil, nil)
@@ -85,6 +100,21 @@ enum ExplorerInstance {
                 close(client)
             }
         }
+    }
+
+    /// This window now shows `profile`: answer for it instead. Its old
+    /// socket goes, so a path for that profile starts a window of its own
+    /// rather than landing in one that has become something else.
+    static func follow(profile: String) {
+        guard let open = onOpen, socketPath(profile: profile) != listening?.path else { return }
+        if let old = listening {
+            listening = nil
+            // Closing ends the accept loop on its thread.
+            shutdown(old.fd, Int32(SHUT_RDWR))
+            close(old.fd)
+            unlink(old.path)
+        }
+        listen(profile: profile, open)
     }
 
     // MARK: - Sockets

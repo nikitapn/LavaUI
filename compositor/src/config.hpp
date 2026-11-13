@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "pointer_settings.hpp"
+#include "workspace_names.hpp"
 
 /// The compositor's configuration file.
 ///
@@ -255,6 +256,7 @@ struct IdleConfig {
   bool lockOnSuspend = true;
 };
 
+
 struct Config {
   /// `WLR_RENDERER`: "vulkan", "gles2", "pixman". Empty lets wlroots choose.
   std::string renderer;
@@ -283,6 +285,13 @@ struct Config {
   ThemeConfig theme;
   ShellConfig shell;
   IdleConfig idle;
+  /// `[workspaces]`: what each workspace is called, `2 = Work`. Numbered
+  /// from 1, as Mod+1…9 counts them, and stored from 0, as everything else
+  /// does; an empty name is no name. For applications rather than for the
+  /// compositor itself, which never shows them: an app with profiles opens
+  /// the one named for the workspace it was started on (`GetWorkspaces`).
+  /// Read again on SIGHUP, like the rest.
+  std::vector<std::string> workspaceNames;
   /// `[mouse]` and `[touchpad]`: see `PointerConfig`.
   PointerConfig mouse;
   PointerConfig touchpad = PointerConfig::touchpadDefaults();

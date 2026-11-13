@@ -72,6 +72,21 @@ public enum DesktopSettings {
         try call { try await $0.setPointer(settings: settings) }
     }
 
+    // MARK: - Workspaces
+
+    /// Which workspace is on screen, and every workspace's name — empty for
+    /// one with none. See `WorkspaceNames`.
+    public static func workspaceNames() throws -> WorkspaceNames {
+        try call { try await $0.getWorkspaces() }
+    }
+
+    /// Names every workspace at once: `names[i]` for workspace `i`, from 0.
+    /// Applied immediately and saved to `[workspaces]` in `lava.conf`. The
+    /// compositor cleans what it keeps — read `workspaceNames()` back.
+    public static func setWorkspaceNames(_ names: [String]) throws {
+        try call { try await $0.setWorkspaceNames(names: names) }
+    }
+
     /// Locks the session now, as Mod+L does.
     public static func lockSession() throws {
         try call { try await $0.lockSession() }

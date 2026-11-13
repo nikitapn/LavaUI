@@ -389,6 +389,15 @@ Consequences that surprise people:
   dropdown). A client registers under its **surface id**, not an X11 id — so
   client-mode apps no longer fall back to an in-window menubar. See
   `docs/native-menus.md`.
+- **Workspaces have names** (`[workspaces]` in `lava.conf`, `2 = Work`, or
+  Settings → Workspaces through `SetWorkspaceNames`), for apps that keep
+  profiles: `LavaHost.workspace()` before `open` says
+  which workspace the window will open on and what it is called, and
+  LavaExplorer opens the profile of that name. `LavaClient.open` reuses a
+  connection `connectControlPlane` already made — NPRPC refuses a second
+  runtime in one process, and the window never opened. Two processes of one
+  app share `settings.json`, which `AppSettings` re-reads under a `flock`
+  before every write; a key both change wants `AppSettings.update`.
 - A window can be a **dialog** of another surface, any client's:
   `CreateDialogSurface` (`LavaClient.open(dialogParent:)`, `LavaHost.open`
   the same). The compositor marks it transient, so it neither reads nor
