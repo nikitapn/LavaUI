@@ -74,6 +74,15 @@ reading autostart files — these are as much part of this desktop as the window
 frames are, and a session that came up without them would be a bug rather than
 a configuration.
 
+The panel's **Lava → Session** menu offers Lock Screen, Log Out, Sleep,
+Hibernate and Power Off. The **Power** button beside the clock opens the same
+power-off confirmation; Cancel leaves the session running. Sleep and Hibernate
+request systemd's suspend and hibernate operations, with the existing
+lock-before-sleep policy. Power requests respect inhibitors and run off the
+panel's input thread. Unsupported hibernation, insufficient swap, authorization
+failures and other system errors appear in a popup. These are machine-wide
+operations, including when the panel is running in a nested session.
+
 Two failures, handled separately because they look nothing alike. A component
 that **ends** is seen through `SIGCHLD`, which the compositor gets because it
 is the parent. A component that is **still running and has stopped drawing** is

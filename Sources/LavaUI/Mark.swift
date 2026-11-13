@@ -33,6 +33,8 @@ public struct Mark: View {
         case minus
         /// A sidebar or menu: three horizontals.
         case lines
+        /// Power: an open ring with a vertical stem.
+        case power
         /// Fit to width: a double-headed arrow between two uprights.
         case fitWidth
         /// Fit the whole page: a page inside four corner brackets.
@@ -100,6 +102,22 @@ public struct Mark: View {
                 for dy in [-arm * 0.7, 0, arm * 0.7] {
                     stroke(-arm, dy, arm, dy)
                 }
+            case .power:
+                let radius = arm * 0.85
+                let ringY = cy + arm * 0.12
+                var inner: [(x: Float, y: Float)] = []
+                var outer: [(x: Float, y: Float)] = []
+                // Leave the top quarter open around the stem.
+                for step in 0...32 {
+                    let angle = -Float.pi * 0.25 + Float(step) / 32 * Float.pi * 1.5
+                    let (c, s) = (cos(angle), sin(angle))
+                    inner.append((cx + c * (radius - lineWidth * 0.5),
+                                  ringY + s * (radius - lineWidth * 0.5)))
+                    outer.append((cx + c * (radius + lineWidth * 0.5),
+                                  ringY + s * (radius + lineWidth * 0.5)))
+                }
+                list.ring(inner: inner, outer: outer, color: color)
+                stroke(0, -arm, 0, 0)
             case .fitWidth:
                 // Uprights at the edges, the arrow's heads a stroke clear of
                 // them so the two do not merge into one blob at ten points.

@@ -15,7 +15,7 @@ struct CalendarApplet: View {
             color: theme.textPrimary,
             onClick: { session.toggleCalendar() }
         )
-        .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
+        .padding(EdgeInsets(top: 6, leading: 4, bottom: 6, trailing: 4))
         .hoverBackground(PanelChrome.style.titleHover)
         .cornerRadius(6)
         .agentId("applet.calendar")

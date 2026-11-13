@@ -90,6 +90,9 @@ enum DesktopMenuID {
     static let session = MenuID("desktop.session")
     static let lock = MenuID("desktop.session.lock")
     static let logout = MenuID("desktop.logout")
+    static let sleep = MenuID("desktop.session.sleep")
+    static let hibernate = MenuID("desktop.session.hibernate")
+    static let powerOff = MenuID("desktop.session.power-off")
 }
 
 /// The Window menu every focused window gets, whatever it exports itself.
@@ -113,11 +116,12 @@ enum AppMenuID {
     static let quit = MenuID("app.quit")
 }
 
-/// A confirm drawn on the panel itself. About is a window of its own —
-/// a card this tall does not belong in the strip's surface.
+/// Session confirmations and failures, in a popup of their own.
 enum SystemDialog: Equatable {
     case none
     case logout
+    case powerOff
+    case powerError
 }
 
 /// `LAVA_MENU_DEBUG=1`, the same switch the importer reads. Global menus fail
@@ -164,8 +168,8 @@ final class MenuSession {
         }
     }
 
-    /// Log-out confirm. A popup, not a row of the menu that opened it:
-    /// confirming and choosing are different gestures.
+    /// Session confirmation in a separate popup: choosing an action and
+    /// confirming it are different gestures.
     var dialog: SystemDialog = .none
 
     /// The About window, if it is up. A second click does not open another.
@@ -199,8 +203,11 @@ final class MenuSession {
     @ObservationIgnored let calendarModel = CalendarModel()
     /// The player window, if it is up.
     @ObservationIgnored var playerWindow: WindowID?
-    /// The log-out confirm, if it is up.
-    @ObservationIgnored var logoutWindow: WindowID?
+    /// The session confirmation or error popup, if it is up.
+    @ObservationIgnored var sessionWindow: WindowID?
+    var powerBusy = false
+    var powerError = ""
+    var powerErrorTitle = ""
     /// The menu the compositor is drawing for us, if one is.
     @ObservationIgnored var hosted: HostedMenu?
     /// Rows that had not arrived yet. Filled from the pump.
@@ -343,6 +350,12 @@ final class MenuSession {
             try? DesktopSettings.lockSession()
         case DesktopMenuID.logout:
             setDialog(.logout)
+        case DesktopMenuID.sleep:
+            requestPower(.sleep)
+        case DesktopMenuID.hibernate:
+            requestPower(.hibernate)
+        case DesktopMenuID.powerOff:
+            setDialog(.powerOff)
         // On the window that was focused when the menu opened — which is
         // still the focused one: the panel takes no focus to draw a menu.
         case WindowMenuID.alwaysOnTop:
@@ -474,8 +487,7 @@ final class MenuSession {
                         id: DesktopMenuID.terminal, title: "Terminal"
                     )),
                     .separator,
-                    // Last, where leaving belongs: both end what the user is
-                    // doing, one until the password and one for good.
+                    // Session and machine power controls stay together.
                     .submenu(MenuNode(
                         id: DesktopMenuID.session,
                         title: "Session",
@@ -485,6 +497,16 @@ final class MenuSession {
                             )),
                             .item(MenuItemModel(
                                 id: DesktopMenuID.logout, title: "Log Out…"
+                            )),
+                            .separator,
+                            .item(MenuItemModel(
+                                id: DesktopMenuID.sleep, title: "Sleep"
+                            )),
+                            .item(MenuItemModel(
+                                id: DesktopMenuID.hibernate, title: "Hibernate"
+                            )),
+                            .item(MenuItemModel(
+                                id: DesktopMenuID.powerOff, title: "Power Off…"
                             )),
                         ]
                     )),
@@ -741,10 +763,10 @@ final class MenuSession {
         return (0, Self.stripHeight)
     }
 
-    private func openLogout() {
-        if let id = logoutWindow, LavaApp.isWindowOpen(id) { return }
+    private func openSessionDialog() {
+        if let id = sessionWindow, LavaApp.isWindowOpen(id) { return }
         let panelW = editor?.framebufferSize().w ?? 1280
-        let width = LogoutWindow.width
+        let width = SessionWindow.width
         let anchor = LavaApp.SurfaceAnchor(
             x: max(8, (panelW - width) / 2),
             y: 0,
@@ -753,24 +775,24 @@ final class MenuSession {
         )
         var opened: WindowID?
         opened = LavaApp.openPopup(
-            title: "Log Out",
+            title: "Session",
             width: width,
-            height: LogoutWindow.height,
+            height: SessionWindow.height,
             anchor: anchor,
             onClose: {
-                if let id = opened, session.logoutWindow == id {
-                    session.logoutWindow = nil
+                if let id = opened, session.sessionWindow == id {
+                    session.sessionWindow = nil
                     if session.dialog != .none { session.dialog = .none }
                 }
             }
         ) {
-            LogoutWindow()
+            SessionWindow()
                 // The plate's bend, which the open call used to give it. The
                 // rim is the plate's (lit where it bends); this fill has none.
                 .backdropBlur(radius: PanelChrome.popupBlurRadius)
                 .glassEffect(magnification: PanelChrome.popupMagnification)
         }
-        logoutWindow = opened
+        sessionWindow = opened
     }
 
     /// "About Lava" as a window of this process. Already up means leave it:
@@ -1218,11 +1240,29 @@ final class MenuSession {
         LavaApp.closeWindow(id)
     }
 
+    func requestPower(_ action: PowerAction) {
+        guard !powerBusy else { return }
+        closeMenu()
+        setDialog(.none)
+        powerBusy = true
+        DispatchQueue.global().async {
+            let error = action.perform()
+            MainQueue.async {
+                session.powerBusy = false
+                if let error {
+                    session.powerErrorTitle = "Could not \(action.title.lowercased())"
+                    session.powerError = error
+                    session.setDialog(.powerError)
+                }
+            }
+        }
+    }
+
     func setDialog(_ next: SystemDialog) {
         guard dialog != next else { return }
         dialog = next
         if next == .none {
-            if let id = logoutWindow, LavaApp.isWindowOpen(id) {
+            if let id = sessionWindow, LavaApp.isWindowOpen(id) {
                 LavaApp.closeWindow(id)
             }
             return
@@ -1230,7 +1270,7 @@ final class MenuSession {
         openMenu = nil
         closePlayer()
         tray?.closeMenu()
-        openLogout()
+        openSessionDialog()
     }
 
     /// The strip, plus the notification stack when there is one.
@@ -1414,7 +1454,7 @@ struct PanelView: View {
         // that 8px is either empty desktop or a black band over them.
         return VStack(flexGrow: 1, padding: 0, spacing: 0) {
             HStack(height: .pt(MenuSession.stripHeight), padding: 0,
-                   alignment: .center, spacing: 10) {
+                   alignment: .center, spacing: 4) {
                 // The flame is a top-level menu title, not a separate
                 // picture: click it for Settings, the way a panel logo
                 // always is the system menu. Window titles follow it.
@@ -1459,8 +1499,19 @@ struct PanelView: View {
                 }
 
                 CalendarApplet(clockText: clock.text)
+                HStack(padding: 0, alignment: .center, onClick: {
+                    guard !session.powerBusy else { return }
+                    session.setDialog(.powerOff)
+                }) {
+                    Mark(.power, size: 16, color: session.powerBusy
+                         ? Theme.current.textDim : Theme.current.textPrimary)
+                }
+                .padding(6)
+                .hoverBackground(session.powerBusy ? .clear : chrome.titleHover)
+                .cornerRadius(6)
+                .agentId("applet.power")
             }
-            .padding(.horizontal, 10)
+            // .padding(.horizontal, 4)
             .background(Theme.current.background)
 
             // Fills the expanded surface so the strip stays top-aligned. Never
@@ -1578,41 +1629,55 @@ struct AboutWindow: View {
     }
 }
 
-/// Log out, as a popup. Confirming is not a menu row: the menu that offered
-/// it has already closed, and the card is the question.
-struct LogoutWindow: View {
-    static let width: Float = 360
-    static let height: Float = 150
+/// Destructive actions require a separate click after the menu closes.
+struct SessionWindow: View {
+    static let width: Float = 400
+    static let height: Float = 210
 
     var body: some View {
         let theme = Theme.current
+        let isError = session.dialog == .powerError
+        let powerOff = session.dialog == .powerOff
         VStack(padding: 0, spacing: 12) {
-            Text("Log out?", color: theme.textPrimary)
-            Text(
-                "This ends the session and closes every window.",
-                color: theme.textSecondary,
-                lineLimit: 3
-            )
+            Text(isError ? session.powerErrorTitle : (powerOff ? "Power off?" : "Log out?"),
+                 color: theme.textPrimary)
+            ScrollView {
+                Text(
+                    isError ? session.powerError : (powerOff
+                        ? "This turns off the computer and closes every window. Save your work before continuing."
+                        : "This ends the session and closes every window."),
+                    color: theme.textSecondary
+                )
+            }
             HStack(padding: 0, spacing: 8) {
                 Spacer()
-                Button("Cancel") { session.setDialog(.none) }
-                Button(
-                    "Log Out",
-                    style: ButtonStyle(
-                        background: theme.accent.opacity(0.22),
-                        hover: theme.accent.opacity(0.38),
-                        foreground: theme.accent
-                    )
-                ) {
-                    session.setDialog(.none)
-                    LavaClient.endSession()
+                Button(isError ? "Close" : "Cancel") { session.setDialog(.none) }
+                    .agentId("dialog.session.cancel")
+                if !isError {
+                    Button(
+                        powerOff ? "Power Off" : "Log Out",
+                        style: ButtonStyle(
+                            background: theme.accent.opacity(0.22),
+                            hover: theme.accent.opacity(0.38),
+                            foreground: theme.accent
+                        ),
+                        isEnabled: !session.powerBusy
+                    ) {
+                        if powerOff {
+                            session.requestPower(.powerOff)
+                        } else {
+                            session.setDialog(.none)
+                            LavaClient.endSession()
+                        }
+                    }
+                    .agentId("dialog.session.confirm")
                 }
             }
         }
         .padding(16)
         .frame(width: .pt(Self.width), height: .pt(Self.height))
         .background(PanelChrome.popupWash)
-        .agentId("dialog.logout")
+        .agentId(powerOff ? "dialog.power-off" : (isError ? "dialog.power-error" : "dialog.logout"))
     }
 }
 
