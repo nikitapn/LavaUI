@@ -1,6 +1,7 @@
 import Foundation
 
-/// A small stroked symbol — a close cross, a plus, an arrow — drawn as lines.
+/// A small stroked symbol — a close cross, a plus, an arrow, a toolbar
+/// glyph — drawn as lines.
 ///
 /// Not a character: a `Text("×")` is a box the height of the font's line
 /// with the mark sat on the baseline, so it is never centred in anything and
@@ -28,6 +29,14 @@ public struct Mark: View {
         case arrowUp
         /// Down, or next.
         case arrowDown
+        /// Remove, or zoom out: a horizontal.
+        case minus
+        /// A sidebar or menu: three horizontals.
+        case lines
+        /// Fit to width: a double-headed arrow between two uprights.
+        case fitWidth
+        /// Fit the whole page: a page inside four corner brackets.
+        case fitPage
     }
 
     /// Which symbol is drawn.
@@ -56,6 +65,11 @@ public struct Mark: View {
             let arm = min(frame.w, frame.h) * 0.5 - lineWidth * 0.5
             let cx = frame.x + frame.w * 0.5
             let cy = frame.y + frame.h * 0.5
+            // A stroke in offsets from the centre.
+            func stroke(_ x1: Float, _ y1: Float, _ x2: Float, _ y2: Float) {
+                list.line(x1: cx + x1, y1: cy + y1, x2: cx + x2, y2: cy + y2,
+                          color: color, width: lineWidth)
+            }
             switch kind {
             case .cross:
                 list.line(x1: cx - arm, y1: cy - arm, x2: cx + arm, y2: cy + arm,
@@ -80,6 +94,36 @@ public struct Mark: View {
                           color: color, width: lineWidth)
                 list.line(x1: cx + head, y1: headY, x2: cx, y2: tip,
                           color: color, width: lineWidth)
+            case .minus:
+                stroke(-arm, 0, arm, 0)
+            case .lines:
+                for dy in [-arm * 0.7, 0, arm * 0.7] {
+                    stroke(-arm, dy, arm, dy)
+                }
+            case .fitWidth:
+                // Uprights at the edges, the arrow's heads a stroke clear of
+                // them so the two do not merge into one blob at ten points.
+                stroke(-arm, -arm * 0.8, -arm, arm * 0.8)
+                stroke(arm, -arm * 0.8, arm, arm * 0.8)
+                let end = arm * 0.55
+                let head = arm * 0.4
+                stroke(-end, 0, end, 0)
+                stroke(-end + head, -head, -end, 0)
+                stroke(-end + head, head, -end, 0)
+                stroke(end - head, -head, end, 0)
+                stroke(end - head, head, end, 0)
+            case .fitPage:
+                let corner = arm * 0.4
+                for (sx, sy) in [(Float(-1), Float(-1)), (1, -1), (1, 1), (-1, 1)] {
+                    stroke(sx * arm, sy * arm, sx * (arm - corner), sy * arm)
+                    stroke(sx * arm, sy * arm, sx * arm, sy * (arm - corner))
+                }
+                let pw = arm * 0.38
+                let ph = arm * 0.55
+                stroke(-pw, -ph, pw, -ph)
+                stroke(pw, -ph, pw, ph)
+                stroke(pw, ph, -pw, ph)
+                stroke(-pw, ph, -pw, -ph)
             }
         }
     }

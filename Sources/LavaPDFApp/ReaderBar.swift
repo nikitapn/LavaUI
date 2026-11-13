@@ -15,13 +15,16 @@ struct ReaderBar: View {
                 WindowControls().windowChrome()
             }
             if !session.outline.isEmpty {
-                button("☰", id: "sidebar", on: session.sidebarOpen) { session.toggleSidebar() }
+                button(.lines, tip: "Outline", id: "sidebar", on: session.sidebarOpen) {
+                    session.toggleSidebar()
+                }
             }
             // The one thing on the bar whose length nobody chose for it, so the
             // one thing that gives way: truncated, before any control moves.
             Text(session.hasDocument ? session.fileName : "LavaPDF", color: Theme.current.textPrimary,
                  lineLimit: 1)
                 .flexShrink(1)
+                .windowDrag()
                 .agentId("title")
             // Room to grab the window by even when the title has taken the
             // rest — enough for a pointer, not so much the title shows nothing.
@@ -31,14 +34,14 @@ struct ReaderBar: View {
             if session.hasDocument {
                 Text("\(session.currentPage + 1) / \(session.pageCount)", color: Theme.current.textDim)
                     .agentId("page")
-                button("−", id: "zoom-out") { session.stepZoom(-1) }
+                button(.minus, tip: "Zoom Out", id: "zoom-out") { session.stepZoom(-1) }
                 Text("\(session.zoomPercent)%", color: Theme.current.textSecondary)
                     .agentId("zoom")
-                button("+", id: "zoom-in") { session.stepZoom(1) }
-                button("Width", id: "fit-width", on: session.mode == .fitWidth) {
+                button(.plus, tip: "Zoom In", id: "zoom-in") { session.stepZoom(1) }
+                button(.fitWidth, tip: "Fit Width", id: "fit-width", on: session.mode == .fitWidth) {
                     session.setMode(.fitWidth)
                 }
-                button("Page", id: "fit-page", on: session.mode == .fitPage) {
+                button(.fitPage, tip: "Fit Page", id: "fit-page", on: session.mode == .fitPage) {
                     session.setMode(.fitPage)
                 }
             }
@@ -46,17 +49,29 @@ struct ReaderBar: View {
         .background(Theme.current.panel)
     }
 
-    /// Padding before the hover, so the fill and the click target are one
-    /// box — see the `.padding()` trap in AGENTS.md.
+    /// A square around a `Mark`; the click and the hover are the stack's, so
+    /// the target and the fill are one box. A mode that is on sits on the
+    /// selection fill, as the Explorer's toolbar does.
     private func button(
-        _ label: String, id: String, on: Bool = false, action: @escaping () -> Void
+        _ mark: Mark.Kind, tip: String, id: String, on: Bool = false,
+        action: @escaping () -> Void
     ) -> some View {
-        Text(label, color: on ? .accent : Theme.current.textPrimary, align: .center, onClick: action)
-            .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
-            .hoverBackground(Theme.current.hover)
-            .cornerRadius(4)
-            .cursor(.pointer)
-            .agentId(id)
+        let theme = Theme.current
+        return HStack(
+            width: .pt(28), height: .pt(28), padding: 0,
+            alignment: .center, spacing: 0, onClick: action
+        ) {
+            Spacer()
+            Mark(mark, size: 14, color: theme.textPrimary)
+            Spacer()
+        }
+        .background(on ? theme.selectionFill : Color.clear)
+        .hoverBackground(on ? theme.selectionFill : theme.hover)
+        .cornerRadius(4)
+        .cursor(.pointer)
+        .flexShrink(0)
+        .tooltip(tip)
+        .agentId(id)
     }
 }
 
