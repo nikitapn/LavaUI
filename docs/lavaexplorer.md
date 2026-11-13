@@ -69,6 +69,21 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   it as it was. A name something else already has is refused, never
   replaced. Ctrl+Z renames it back, unless something has since taken the
   old name. Not in the Trash: restore it first.
+- **Bulk rename.** F2 with several rows selected (or Rename N Items… on the
+  right-click menu, or Edit → Bulk Rename…, which takes the whole folder
+  when one row or none is selected) turns the pane into an editor of the
+  names, one a line: line n is the new name of item n, in the order the list
+  showed them. Replace (plain or regex, `$1` for a group), lowercase /
+  UPPERCASE / Title Case and Number (`{name}`, `{n}`, `{n:3}`) rewrite that
+  text, so they compose with typing; "Keep extensions" makes them leave
+  everything from the last dot alone. The list beside it shows only what
+  changes, and why a line cannot — the wrong number of lines, a name the
+  filesystem refuses, two lines with one name, or a name something outside
+  the list already has. Ctrl+Enter renames all of them or, if any step
+  fails, none: names may trade places or go round in a cycle (through a
+  hidden temporary name), and nothing is ever replaced. One Ctrl+Z puts
+  them all back. Planned and applied by `BulkRename`, transformed by
+  `RenameTransform`, both in `LavaExplorerCore`. Not on a server yet.
 - **Thumbnails.** A picture's row shows the picture. Thumbnails come from
   the freedesktop cache (`~/.cache/thumbnails`) shared with every other file
   manager — so a folder GNOME already browsed has them at once — and what is

@@ -101,14 +101,14 @@ final class ExplorerSession: @unchecked Sendable {
         !copying && !erasing && !archiveWorkRunning && !transferRunning
             && pendingCopy == nil && pendingTransfer == nil && pendingErase == nil
             && pendingOverwrite == nil && newFolderDraft == nil && renameDraft == nil
-            && compressDraft == nil && passwordRequest == nil
+            && bulkRenameDraft == nil && compressDraft == nil && passwordRequest == nil
     }
 
     var canSelectProfile: Bool {
         chooser == nil && deviceBusy == nil && !copying && !erasing && !archiveWorkRunning && !transferRunning
             && pendingCopy == nil && pendingTransfer == nil && pendingErase == nil
             && pendingOverwrite == nil && newFolderDraft == nil && renameDraft == nil
-            && compressDraft == nil && passwordRequest == nil && remoteLogin == nil
+            && bulkRenameDraft == nil && compressDraft == nil && passwordRequest == nil && remoteLogin == nil
             && connectDraft == nil && tabDrag == nil && remoteDrag == nil
     }
 
@@ -732,6 +732,7 @@ final class ExplorerSession: @unchecked Sendable {
         // Leaving the folder leaves the name that was being typed for it.
         if newFolderDraft?.tabID == tabSet.currentID { cancelNewFolder() }
         if renameDraft?.tabID == tabSet.currentID { cancelRename() }
+        if bulkRenameDraft?.tabID == tabSet.currentID { cancelBulkRename() }
         let tabID = tabSet.currentID
         let position = scrollPosition(for: tabID)
         let source = self.source
@@ -1162,7 +1163,8 @@ final class ExplorerSession: @unchecked Sendable {
         case "ctx.paste": stub("Paste")
         case "ctx.rename":
             dismissContext()
-            startRename(entry)
+            let targets = targets(for: entry)
+            if targets.count > 1 { startBulkRename(targets) } else { startRename(entry) }
         case "ctx.trash":
             dismissContext()
             moveToTrash(targets(for: entry).map(\.path))
@@ -1377,6 +1379,11 @@ final class ExplorerSession: @unchecked Sendable {
     /// F2 or Rename: the lead row, or `entry` when a menu names one.
     func startRename(_ entry: FileEntry? = nil) {
         dismissContext()
+        // F2 on a selection of many is the bulk rename, as in Dolphin.
+        if entry == nil, selectedEntries.count > 1 {
+            startBulkRename()
+            return
+        }
         guard let entry = entry ?? selectedEntry else { return }
         guard !inTrash else {
             notice = "Restore it first to rename it"
@@ -1445,6 +1452,178 @@ final class ExplorerSession: @unchecked Sendable {
         ViewInvalidation.markDirty()
     }
 
+    // MARK: - Bulk rename
+
+    /// Many names at once, edited as text: line n is item n. The pane shows
+    /// this instead of its list while it is open — see `BulkRenamePane`.
+    struct BulkRenameDraft {
+        var tabID: Int
+        var directory: String
+        /// The items, in the order the list showed them when this opened.
+        var names: [String]
+        var isDirectory: [Bool]
+        var text: String
+        /// Recomputed on every change to `text`, against the disk.
+        var plan: BulkRename.Plan
+        var find = ""
+        var replacement = ""
+        var regex = false
+        var template = "{name} {n:2}"
+        var keepExtensions = true
+        /// What the last transform could not do — a broken regex, a template
+        /// with a field nobody knows.
+        var transformError: String?
+    }
+
+    var bulkRenameDraft: BulkRenameDraft?
+    /// The editor's share of the pane, against the list of changes beside it.
+    var bulkRenameFraction: Float = 0.5
+    @ObservationIgnored let bulkRenameEditor = EditorController()
+
+    /// The selection when there is more than one, and otherwise everything
+    /// in the folder — in the order the list shows them, which is the order
+    /// the buffer is in.
+    func startBulkRename(_ entries: [FileEntry]? = nil) {
+        dismissContext()
+        let selection = selectedEntries
+        let entries = entries ?? (selection.count > 1 ? selection : listing.entries)
+        guard !entries.isEmpty else {
+            notice = "Nothing here to rename"
+            ViewInvalidation.markDirty()
+            return
+        }
+        if let entry = entries.first(where: { RemoteURL.isRemote($0.path) }),
+           refuseOnServer(entry.path, "Renaming many at once")
+        {
+            return
+        }
+        guard !inTrash else {
+            notice = "Restore them first to rename them"
+            ViewInvalidation.markDirty()
+            return
+        }
+        cancelNewFolder()
+        cancelRename()
+        FocusManager.clear()
+        let directory = (entries[0].path as NSString).deletingLastPathComponent
+        let names = entries.map(\.name)
+        let text = BulkRename.text(of: names)
+        bulkRenameDraft = BulkRenameDraft(
+            tabID: tabSet.currentID, directory: directory, names: names,
+            isDirectory: entries.map(\.isDirectory), text: text,
+            plan: BulkRename.plan(directory: directory, names: names, text: text)
+        )
+        notice = nil
+        ViewInvalidation.markDirty()
+    }
+
+    var bulkRenameText: Binding<String> {
+        Binding(
+            get: { [unowned self] in bulkRenameDraft?.text ?? "" },
+            set: { [unowned self] text in
+                guard var draft = bulkRenameDraft, draft.text != text else { return }
+                draft.text = text
+                draft.plan = BulkRename.plan(directory: draft.directory, names: draft.names, text: text)
+                bulkRenameDraft = draft
+            }
+        )
+    }
+
+    /// A binding into the draft's toolbar fields.
+    func bulkRenameField<Value>(_ key: WritableKeyPath<BulkRenameDraft, Value>, empty: Value) -> Binding<Value> {
+        Binding(
+            get: { [unowned self] in bulkRenameDraft?[keyPath: key] ?? empty },
+            set: { [unowned self] in
+                bulkRenameDraft?[keyPath: key] = $0
+                ViewInvalidation.markDirty()
+            }
+        )
+    }
+
+    func applyBulkTransform(_ transform: RenameTransform) {
+        guard var draft = bulkRenameDraft else { return }
+        do {
+            let lines = try transform.apply(
+                to: BulkRename.lines(of: draft.text),
+                keepExtensions: draft.keepExtensions, isDirectory: draft.isDirectory
+            )
+            draft.transformError = nil
+            bulkRenameDraft = draft
+            bulkRenameText.wrappedValue = lines.joined(separator: "\n")
+        } catch let invalid as RenameTransform.Invalid {
+            bulkRenameDraft?.transformError = invalid.message
+        } catch {
+            bulkRenameDraft?.transformError = error.localizedDescription
+        }
+        ViewInvalidation.markDirty()
+    }
+
+    func replaceInBulkRename() {
+        guard let draft = bulkRenameDraft else { return }
+        applyBulkTransform(.replace(
+            find: draft.find, with: draft.replacement, regex: draft.regex, ignoreCase: false
+        ))
+    }
+
+    func numberBulkRename() {
+        guard let draft = bulkRenameDraft else { return }
+        applyBulkTransform(.number(template: draft.template))
+    }
+
+    /// Back to the names as they are on disk.
+    func resetBulkRename() {
+        guard let draft = bulkRenameDraft else { return }
+        bulkRenameDraft?.transformError = nil
+        bulkRenameText.wrappedValue = BulkRename.text(of: draft.names)
+        ViewInvalidation.markDirty()
+    }
+
+    func commitBulkRename() {
+        guard let draft = bulkRenameDraft else { return }
+        // Planned again: the folder may have changed since the last keystroke.
+        let plan = BulkRename.plan(directory: draft.directory, names: draft.names, text: draft.text)
+        bulkRenameDraft?.plan = plan
+        guard plan.canApply else {
+            notice = plan.moves.isEmpty && plan.problem == nil
+                ? "No name has changed"
+                : "Fix the marked lines first"
+            ViewInvalidation.markDirty()
+            return
+        }
+        do {
+            let moves = try BulkRename.apply(plan.moves)
+            let change = FileChange.renamedAll(moves)
+            bulkRenameDraft = nil
+            FocusManager.clear()
+            for step in change.relocations {
+                layout.rebaseTabs(from: step.from, to: step.to, source: source)
+                rebaseRememberedViews(from: step.from, to: step.to)
+            }
+            reloadAfterChange(in: [draft.directory])
+            undoHistory.record(change)
+            // What was renamed stays selected, under its new names.
+            if let paneID = layout.paneID(containingTab: draft.tabID) {
+                layout.updatePane(id: paneID) { pane in
+                    pane.tabs.updateTab(id: draft.tabID) { tab in
+                        tab.selection.selectAll(moves.map(\.to))
+                    }
+                }
+            }
+            notice = "Renamed \(Self.items(moves.count))"
+        } catch {
+            // The pane stays open with the buffer as it was, to be fixed.
+            notice = (error as? FileAccessError)?.message ?? error.localizedDescription
+        }
+        ViewInvalidation.markDirty()
+    }
+
+    func cancelBulkRename() {
+        guard bulkRenameDraft != nil else { return }
+        bulkRenameDraft = nil
+        FocusManager.clear()
+        ViewInvalidation.markDirty()
+    }
+
     // MARK: - Undo
 
     /// Trash, restore and copy, each reversible through the Trash — see
@@ -1495,6 +1674,7 @@ final class ExplorerSession: @unchecked Sendable {
         case .archived: count == 1 ? "moved the new archive to the Trash" : "moved \(count) new archives to the Trash"
         case .renamed(let from, _): "renamed back to \u{201C}\((from as NSString).lastPathComponent)\u{201D}"
         case .moved: "moved \(items(count)) back"
+        case .renamedAll: "renamed \(items(count)) back"
         case .combined: "reversed \(items(count))"
         }
     }

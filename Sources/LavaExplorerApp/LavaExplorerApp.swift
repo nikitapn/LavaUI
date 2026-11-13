@@ -125,6 +125,10 @@ struct LavaExplorerApp {
                 }
                 // F2 in `keys`, for the reason Delete is there.
                 MenuItem("Rename", id: "edit.rename") { session.startRename() }
+                // The selection when there are several, else the whole folder.
+                MenuItem("Bulk Rename\u{2026}", id: "edit.bulk-rename") {
+                    session.startBulkRename()
+                }
                 MenuSeparator()
                 // Delete itself is handled in `keys`: a menu shortcut would
                 // take it from the address bar while a path is being edited.
@@ -209,6 +213,15 @@ struct LavaExplorerApp {
         }
         if event.button == KeyCode.escape, session.renameDraft != nil {
             session.cancelRename()
+            return true
+        }
+        if event.button == KeyCode.escape, session.bulkRenameDraft != nil {
+            session.cancelBulkRename()
+            return true
+        }
+        // Enter alone is a new line in the names; with Ctrl it is Rename.
+        if event.button == KeyCode.enter, control, session.bulkRenameDraft != nil {
+            session.commitBulkRename()
             return true
         }
         if event.button == KeyCode.escape, session.pendingOverwrite != nil {

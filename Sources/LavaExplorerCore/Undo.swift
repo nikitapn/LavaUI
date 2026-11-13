@@ -36,6 +36,9 @@ public enum FileChange: Equatable, Sendable {
     case archived([String])
     /// Given another name in the same folder.
     case renamed(from: String, to: String)
+    /// Many renamed at once (`BulkRename`), undone as one: names can have
+    /// traded places, which renaming each back in turn would get wrong.
+    case renamedAll([FileMove])
     /// Moved by a drop, within one filesystem.
     case moved([FileMove])
     /// One drop that moved some things and copied others: one step to undo.
@@ -47,7 +50,7 @@ public enum FileChange: Equatable, Sendable {
         case .restored(let paths), .copied(let paths), .created(let paths),
              .extracted(let paths), .archived(let paths): paths.count
         case .renamed: 1
-        case .moved(let moves): moves.count
+        case .moved(let moves), .renamedAll(let moves): moves.count
         case .combined(let changes): changes.reduce(0) { $0 + $1.count }
         }
     }
@@ -70,6 +73,7 @@ extension FileChange {
         switch self {
         case .renamed(let from, let to): [FileMove(from: from, to: to)]
         case .moved(let moves): moves
+        case .renamedAll(let moves): BulkRename.relocationSteps(moves)
         case .combined(let changes): changes.flatMap(\.relocations)
         default: []
         }
@@ -149,6 +153,20 @@ extension FileChange {
             } catch {
                 let failure = (error as? FileAccessError)
                     ?? FileAccessError(path: to, message: error.localizedDescription)
+                return FileChangeReversal(inverse: nil, failures: [failure], folders: [])
+            }
+        case .renamedAll(let moves):
+            // All back or none, like the rename itself.
+            let back = moves.map { FileMove(from: $0.to, to: $0.from) }
+            do {
+                try BulkRename.apply(back)
+                return FileChangeReversal(
+                    inverse: .renamedAll(back), failures: [],
+                    folders: Array(Set(back.map { ($0.to as NSString).deletingLastPathComponent }))
+                )
+            } catch {
+                let failure = (error as? FileAccessError)
+                    ?? FileAccessError(path: moves.first?.to ?? "", message: error.localizedDescription)
                 return FileChangeReversal(inverse: nil, failures: [failure], folders: [])
             }
         case .restored(let paths), .copied(let paths), .created(let paths),

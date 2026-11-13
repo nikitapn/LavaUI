@@ -114,7 +114,11 @@ private struct PaneView: View {
             if let pane {
                 TabStrip(session: session, pane: pane, active: active)
                 Toolbar(session: session, paneID: paneID, tab: pane.tabs.current)
-                FilePane(session: session, paneID: paneID, tab: pane.tabs.current)
+                if let draft = session.bulkRenameDraft, draft.tabID == pane.tabs.current.id {
+                    BulkRenamePane(session: session, draft: draft)
+                } else {
+                    FilePane(session: session, paneID: paneID, tab: pane.tabs.current)
+                }
             }
         }
         // Before anything in the pane handles the press, so the row, button
@@ -1775,7 +1779,9 @@ private struct FileContextMenu: View {
         items.append(.item(MenuItemModel(id: MenuID("ctx.cut"), title: "Cut")))
         items.append(.item(MenuItemModel(id: MenuID("ctx.paste"), title: "Paste")))
         items.append(.separator)
-        items.append(.item(MenuItemModel(id: MenuID("ctx.rename"), title: "Rename")))
+        items.append(.item(MenuItemModel(
+            id: MenuID("ctx.rename"), title: many > 1 ? "Rename\(what)\u{2026}" : "Rename"
+        )))
         items.append(.item(MenuItemModel(id: MenuID("ctx.trash"), title: "Move\(what) to Trash")))
         items.append(.item(MenuItemModel(
             id: MenuID("ctx.delete"), title: "Delete\(what) Permanently"
