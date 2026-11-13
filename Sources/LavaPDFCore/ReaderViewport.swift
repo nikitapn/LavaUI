@@ -121,12 +121,20 @@ public struct ReaderViewport: Equatable, Sendable {
     }
 
     /// The next step of the ladder above or below the current zoom.
+    ///
+    /// Compared on the tile grid, not as doubles: a viewport's zoom is always
+    /// `quantized`, and a rung lands up to half a key either side of itself
+    /// there — 200% is 2.6667 and becomes 2.66699. Compared exactly, the zoom
+    /// a rung became is still "above" that rung, so `-` picked 200% again and
+    /// the button stuck there (and `+` stuck wherever a rung rounds down).
     public static func stepped(_ zoom: Double, by direction: Int) -> Double {
         let rungs = ladder.map { $0 * actualSize }
+        let key = TileGrid.scaleKey(forScale: zoom)
+        func rungKey(_ rung: Double) -> Int { TileGrid.scaleKey(forScale: rung) }
         if direction > 0 {
-            return rungs.first(where: { $0 > zoom * (1 + 1e-6) }) ?? rungs.last!
+            return rungs.first(where: { rungKey($0) > key }) ?? rungs.last!
         }
-        return rungs.last(where: { $0 < zoom * (1 - 1e-6) }) ?? rungs.first!
+        return rungs.last(where: { rungKey($0) < key }) ?? rungs.first!
     }
 
     /// Scrolled so `page`'s top is a gap's width below the window's top.

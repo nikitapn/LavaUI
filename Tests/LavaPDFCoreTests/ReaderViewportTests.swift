@@ -104,4 +104,29 @@ final class ReaderViewportTests: XCTestCase {
         let near = Box(x: 50, y: 100, width: 40, height: 10)
         XCTAssertEqual(start.revealing(near, layout, boxWidth: 640, boxHeight: 500), start)
     }
+
+    /// The buttons step from a zoom the viewport has already put on the tile
+    /// grid, so the walk has to survive that rounding at every rung, both ways.
+    func testSteppingWalksTheWholeLadderThroughQuantizedZooms() {
+        let rungs = ReaderViewport.ladder.map { ReaderViewport.quantized($0 * ReaderViewport.actualSize) }
+        var zoom = rungs[0]
+        var up: [Double] = [zoom]
+        while zoom != rungs.last! {
+            let next = ReaderViewport.quantized(ReaderViewport.stepped(zoom, by: 1))
+            XCTAssertGreaterThan(next, zoom, "stuck going up at \(zoom)")
+            guard next > zoom else { return }
+            zoom = next
+            up.append(zoom)
+        }
+        XCTAssertEqual(up, rungs)
+        var down: [Double] = [zoom]
+        while zoom != rungs.first! {
+            let next = ReaderViewport.quantized(ReaderViewport.stepped(zoom, by: -1))
+            XCTAssertLessThan(next, zoom, "stuck going down at \(zoom)")
+            guard next < zoom else { return }
+            zoom = next
+            down.append(zoom)
+        }
+        XCTAssertEqual(down, rungs.reversed())
+    }
 }
