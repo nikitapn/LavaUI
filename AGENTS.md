@@ -1345,6 +1345,7 @@ so headless test runs skip it too.
 | Mouse and touchpad settings (speed, acceleration, natural scrolling, tapping, scroll and click method, smooth scrolling) | `[mouse]` / `[touchpad]` parsed in `compositor/src/pointer_settings.*` (tested), applied per libinput device in `pointer_config.cpp` as it is plugged in, on SIGHUP and on `SetPointer`; `Sources/LavaSettings/PointerPage.swift`. Headless and nested sessions have no libinput devices, so the page says none is connected there |
 | Panel global menu (import side) | `canvas/src/menu/menu_import.*`, `Sources/LavaUI/PanelMenu.swift` |
 | Window list / dock | `SubscribeWindows` in the IDL, `Sources/LavaDock/` |
+| Dock pins (per workspace, `~/.config/lava/dock-pins`) | `DockPins` in `Sources/LavaShell` (tested): `[N]` is workspace N's, an empty one is none; a workspace with no section shows `[*]`, else `DockPins.builtInDefaults`, minus any this install cannot start |
 | Dock window preview (hover a stack) | `Sources/LavaDock/WindowPreview.swift`; live thumbnails are `ImageSurface`, room comes from `SetPanelThickness`, freshness from `ForgetWindowPoster` |
 | 3D app switcher | `LavaSwitcher`, launched by Ctrl+Tab / Alt+Tab; live posters via `ImageSurface` (the poster cache is dropped when its overlay opens) |
 | Switching windows with no overlay | `SurfaceRegistry::cycleTarget` + `BindingAction::StackCycle`/`WindowCycle` — Mod+Tab walks the focused app's own windows, Mod+Left/Right the workspace; the ring is creation order, because the stacking order moves under the keys pressing it |

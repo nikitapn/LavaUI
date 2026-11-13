@@ -289,6 +289,16 @@ final class DockModel {
         catalog[appId] ?? catalog[appId.lowercased()]
     }
 
+    /// Defaults that this install cannot start leave the dock's fallback —
+    /// see `DockPins.unavailable`. After `loadCatalog`, which it reads.
+    func markUnavailableDefaults() {
+        pins.unavailable = Set(
+            (pins.defaults ?? DockPins.builtInDefaults).filter {
+                entryInfo(for: $0) == nil && !siblingExists($0)
+            }
+        )
+    }
+
     /// The compositor's snapshot, filtered to this workspace and grouped,
     /// then prefixed with whatever the user pinned.
     func apply(workspace: UInt32, windows: [WindowInfo]) {
@@ -1892,22 +1902,35 @@ struct DockView: View {
 
 // ─── Desktop actions ─────────────────────────────────────────────────────────
 
+/// Where `launchSibling` looks for `name`: beside this binary, in the other
+/// build of this checkout, then on `PATH`.
+func siblingCandidates(_ name: String) -> [String] {
+    var paths: [String] = []
+    if let selfPath = CommandLine.arguments.first {
+        let dir = URL(fileURLWithPath: selfPath).deletingLastPathComponent()
+        paths.append(dir.appendingPathComponent(name).path)
+        paths.append(dir.appendingPathComponent("../debug/\(name)").path)
+        paths.append(dir.appendingPathComponent("../release/\(name)").path)
+    }
+    paths.append(name)
+    return paths
+}
+
+/// Whether `launchSibling` would find `name` to run.
+func siblingExists(_ name: String) -> Bool {
+    let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+    return siblingCandidates(name).contains { candidate in
+        if candidate.contains("/") { return FileManager.default.isExecutableFile(atPath: candidate) }
+        return path.split(separator: ":").contains {
+            FileManager.default.isExecutableFile(atPath: "\($0)/\(candidate)")
+        }
+    }
+}
+
 /// Starts a sibling desktop program when there is no `.desktop` file —
 /// LavaTerm, LavaSettings — the same lookup the panel uses.
 func launchSibling(_ name: String, arguments: [String] = []) {
-    let candidates: [String] = {
-        var paths: [String] = []
-        if let selfPath = CommandLine.arguments.first {
-            let dir = URL(fileURLWithPath: selfPath).deletingLastPathComponent()
-            paths.append(dir.appendingPathComponent(name).path)
-            paths.append(dir.appendingPathComponent("../debug/\(name)").path)
-            paths.append(dir.appendingPathComponent("../release/\(name)").path)
-        }
-        paths.append(name)
-        return paths
-    }()
-
-    for path in candidates {
+    for path in siblingCandidates(name) {
         let process = Process()
         if path.contains("/") {
             let url = URL(fileURLWithPath: path)
@@ -1948,6 +1971,7 @@ guard let editor = LavaClient.openPanel(
 model.editor = editor
 model.loadCatalog()
 model.pins = DockPins.load()
+model.markUnavailableDefaults()
 model.rebuildEntries()
 
 LavaClient.onWindowList { workspace, windows in
