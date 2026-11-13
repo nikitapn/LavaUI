@@ -99,6 +99,10 @@ struct LavaExplorerApp {
                 ) { session.closeTab(id: session.tabSet.currentID) }
                 // Ctrl+Shift+N in `keys`, for the reason Delete is there.
                 MenuItem("New Folder", id: "file.new-folder") { session.startNewFolder() }
+                // Shift+F4 in `keys`, as Dolphin has it.
+                MenuItem("Open Terminal Here", id: "file.terminal") {
+                    session.openTerminal()
+                }
                 MenuItem("Connect to Server\u{2026}", id: "file.connect") {
                     session.startConnect()
                 }
@@ -290,6 +294,8 @@ struct LavaExplorerApp {
             session.selectAll()
         case KeyCode.f2 where !typing:
             session.startRename()
+        case KeyCode.f4 where shift && !typing:
+            session.openTerminal()
         case KeyCode.n where control && shift:
             session.startNewFolder()
         case KeyCode.z where control && !typing:

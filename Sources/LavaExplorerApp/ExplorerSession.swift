@@ -1150,6 +1150,8 @@ final class ExplorerSession: @unchecked Sendable {
         case "ctx.open-tab":
             dismissContext()
             if entry.isDirectory { newTab(path: entry.path) }
+        case "ctx.terminal":
+            openTerminal(in: entry.isDirectory ? entry.path : listing.path)
         case "ctx.favorite":
             if entry.isDirectory { addFavorite(entry.path) }
             dismissContext()
@@ -1449,6 +1451,25 @@ final class ExplorerSession: @unchecked Sendable {
         guard renameDraft != nil else { return }
         renameDraft = nil
         FocusManager.clear()
+        ViewInvalidation.markDirty()
+    }
+
+    // MARK: - Terminal
+
+    /// A terminal whose shell starts in `folder`, or in the folder this tab
+    /// shows. Which terminal is `TerminalChoice`'s question.
+    func openTerminal(in folder: String? = nil) {
+        dismissContext()
+        let folder = folder ?? listing.path
+        if refuseOnServer(folder, "A terminal") { return }
+        guard !TrashPath.isTrash(folder) else {
+            notice = "The Trash is not a folder a terminal can open in"
+            ViewInvalidation.markDirty()
+            return
+        }
+        notice = TerminalChoice.open(in: folder)
+            ? nil
+            : "No terminal to open — install one, or set $TERMINAL"
         ViewInvalidation.markDirty()
     }
 

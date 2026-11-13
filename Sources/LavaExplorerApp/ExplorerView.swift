@@ -1792,6 +1792,7 @@ private struct FileContextMenu: View {
         )))
         if entry.isDirectory {
             items.append(.item(MenuItemModel(id: MenuID("ctx.favorite"), title: "Add to Favorites")))
+            items.append(.item(MenuItemModel(id: MenuID("ctx.terminal"), title: "Open Terminal Here")))
         }
         return items
     }

@@ -69,6 +69,12 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   it as it was. A name something else already has is refused, never
   replaced. Ctrl+Z renames it back, unless something has since taken the
   old name. Not in the Trash: restore it first.
+- **Open Terminal Here** (File menu, Shift+F4, or a folder's right-click
+  menu) starts a terminal whose shell is in the current folder — or in the
+  folder right-clicked. `$TERMINAL` if set, else LavaTerm, else the first
+  installed `TerminalEmulator` (`TerminalChoice` in LavaShell). The folder is
+  the terminal's working directory, set on the child alone, so any terminal
+  works without a flag of its own. Not on a server or in the Trash.
 - **Bulk rename.** F2 with several rows selected (or Rename N Items… on the
   right-click menu, or Edit → Bulk Rename…, which takes the whole folder
   when one row or none is selected) turns the pane into an editor of the
