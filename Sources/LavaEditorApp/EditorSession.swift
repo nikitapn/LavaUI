@@ -61,19 +61,17 @@ final class EditorSession {
     let controller = EditorController()
     private var nextID = 1
 
-    /// True while neighbour tabs are still catching up to a hole.
-    /// Drives `continuousRedraw` for the few hundred milliseconds a
-    /// slide lasts — not while the strip is merely sitting there.
-    var tabSliding = false
+    struct TabDrag {
+        var documentID: Int
+        var destination: Int
+        var caretX: Float
+    }
     var tabDrag: TabDrag?
-    /// Document id whose close button was pressed; committed on release
-    /// only if the pointer is still on it, so a drag off × cancels.
-    var tabClosePress: Int?
-    /// Per-tab X, so a dest change eases rather than jumps.
-    @ObservationIgnored var tabSlide: [Int: Animated<Float>] = [:]
-    /// Tab the strip should scroll into view on the next paint (a just-opened
-    /// document sitting past the right edge).
-    var tabRevealID: Int?
+    @ObservationIgnored var tabFrames: [Int: CanvasFrame] = [:]
+    @ObservationIgnored var tabStripFrame = CanvasFrame(x: 0, y: 0, w: 0, h: 0)
+    @ObservationIgnored var tabViewportFrame = CanvasFrame(x: 0, y: 0, w: 0, h: 0)
+    @ObservationIgnored var tabPanTime: Double = 0
+    @ObservationIgnored let tabScroll = ScrollPosition()
 
     /// Memo behind `activeLineCount`. Ignored by observation on purpose: it is
     /// derived from state that is already observed, and registering a write
@@ -216,7 +214,6 @@ final class EditorSession {
         activeIndex = documents.count - 1
         controller.restore(.start)
         notice = nil
-        tabRevealID = documents[activeIndex].id
     }
 
     func openFileDialog() {
@@ -263,7 +260,6 @@ final class EditorSession {
             documents.remove(at: scratch)
             if scratch < activeIndex { activeIndex -= 1 }
         }
-        tabRevealID = documents[activeIndex].id
     }
 
     @discardableResult
@@ -338,8 +334,6 @@ final class EditorSession {
         } else if let i = documents.firstIndex(where: { $0.id == activeID }) {
             activeIndex = i
         }
-        // Remaining tabs have a new rest X; the canvas eases them there.
-        tabSliding = true
     }
 
     /// Drops `id` at `dest` and keeps `activeIndex` on the same document.
@@ -347,16 +341,63 @@ final class EditorSession {
         guard let from = documents.firstIndex(where: { $0.id == id }) else {
             return
         }
-        let preview = TabChrome.preview(
-            documents: documents, from: from, dest: dest
-        )
-        guard preview.items.map(\.id) != documents.map(\.id) else { return }
+        let destination = min(max(0, dest), documents.count - 1)
+        guard from != destination else { return }
         let activeID = active.id
-        documents = preview.items
+        let document = documents.remove(at: from)
+        documents.insert(document, at: destination)
         if let index = documents.firstIndex(where: { $0.id == activeID }) {
             activeIndex = index
         }
-        tabSliding = true
+    }
+
+    func dragTab(_ id: Int, _ value: DragGestureValue) {
+        if value.phase == .ended {
+            defer { tabDrag = nil }
+            guard let drag = tabDrag, drag.documentID == id,
+                  value.y >= tabStripFrame.y, value.y <= tabStripFrame.y + tabStripFrame.h else { return }
+            reorderTab(id: id, to: drag.destination)
+            return
+        }
+        // A renderer-side scroll moves tabs without a layout pass. Refresh
+        // their frames before the next drag event resolves a destination.
+        ViewInvalidation.markNeedsLayout()
+        updateTabDrag(id, x: value.x)
+    }
+
+    func advanceTabDrag() {
+        guard let drag = tabDrag else { return }
+        let now = FrameScheduler.now()
+        let dt = min(0.05, max(0, now - tabPanTime))
+        tabPanTime = now
+        let pointer = PointerState.window
+        guard pointer.y >= tabViewportFrame.y,
+              pointer.y <= tabViewportFrame.y + tabViewportFrame.h else { return }
+        let direction: Float = pointer.x < tabViewportFrame.x + 24 ? -1
+            : (pointer.x > tabViewportFrame.x + tabViewportFrame.w - 24 ? 1 : 0)
+        if direction != 0 {
+            tabScroll.scroll(to: tabScroll.offset + direction * 480 * Float(dt))
+        }
+        updateTabDrag(drag.documentID, x: pointer.x)
+    }
+
+    private func updateTabDrag(_ id: Int, x: Float) {
+        let remaining = documents.filter { $0.id != id }
+        let destination = remaining.firstIndex { document in
+            guard let frame = tabFrames[document.id] else { return false }
+            return x < frame.x + frame.w * 0.5
+        } ?? remaining.count
+        let caretX: Float
+        if destination < remaining.count, let frame = tabFrames[remaining[destination].id] {
+            caretX = frame.x - 2
+        } else if let last = remaining.last, let frame = tabFrames[last.id] {
+            caretX = frame.x + frame.w + 2
+        } else {
+            caretX = tabStripFrame.x + 4
+        }
+        if tabDrag?.documentID != id || tabDrag?.destination != destination || tabDrag?.caretX != caretX {
+            tabDrag = TabDrag(documentID: id, destination: destination, caretX: caretX)
+        }
     }
 
     /// Resolves the pending question. `save` writes first and keeps the

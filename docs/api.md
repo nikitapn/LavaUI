@@ -622,6 +622,28 @@ trailing: 8))`. For a close cross or a plus, use `Mark(.cross)` /
 `Mark(.plus)` inside the button's stack — a `"×"` character sits on the
 baseline of a full line box and is never centred.
 
+`TabStrip` lays out a horizontally scrolling row, a new-tab mark beside the
+last tab, and a remaining window-drag area. Both LavaEditor and LavaExplorer
+use it. Supply keyed `TabStripItem`s with selection and close callbacks:
+
+```swift
+TabStrip(showsBaseline: false, onNew: newDocument) {
+    ForEach(documents) { document in
+        TabStripItem(document.name, selected: document.id == activeID,
+                     modified: document.isModified, outlined: false,
+                     onSelect: { select(document.id) },
+                     onClose: { close(document.id) })
+    }
+}
+```
+
+Titles are capped and ellipsized, close buttons use `Mark(.cross)`, middle
+click closes a tab, and selection reveals an offscreen tab. `showsBaseline`
+and `outlined` default to true for tabs joining a toolbar; turn both off for
+borderless editor tabs. Attach `.onFrame`, `.onDragGesture`, and `.onDrop` to
+each item for application-specific reordering or cross-pane drops. An optional
+`ScrollPosition` and `onViewport` callback support panning during a drag.
+
 `TextField` supports single- and multiline editing, selection, clipboard,
 undo, search-related text infrastructure, and optional soft wrapping.
 `ButtonStyle`, `ToggleStyle`, and `SliderStyle` expose the colors, geometry,

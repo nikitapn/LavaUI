@@ -112,7 +112,7 @@ private struct PaneView: View {
         let active = session.layout.activePaneID == paneID
         return VStack(flexGrow: 1, padding: 0, spacing: 0) {
             if let pane {
-                TabStrip(session: session, pane: pane, active: active)
+                ExplorerTabs(session: session, pane: pane, active: active)
                 Toolbar(session: session, paneID: paneID, tab: pane.tabs.current)
                 if let draft = session.bulkRenameDraft, draft.tabID == pane.tabs.current.id {
                     BulkRenamePane(session: session, draft: draft)
@@ -594,187 +594,28 @@ private struct ConnectBar: View {
 
 /// One pane's folder names, the way Explorer and every browser do it. Drag a
 /// tab to move it; leftover space after the plus is the window drag handle.
-private struct TabStrip: View {
+private struct ExplorerTabs: View {
     @Bindable var session: ExplorerSession
     let pane: ExplorerPane
-    /// Whether this is the pane commands act on. Its tab titles read brighter.
     let active: Bool
 
     var body: some View {
-        // Bottom-aligned, so every tab stands on the strip's lower edge — the
-        // rule the active one opens into the toolbar through.
-        HStack(
-            height: .pt(PaneChrome.stripHeight), padding: 0, alignment: .end, spacing: 4
-        ) {
-            // As wide as its tabs and no wider, so the plus sits right after
-            // the last one; it shrinks — and scrolls — only once they do not
-            // fit. A scroll view fills its parent by default, which would park
-            // the plus at the far edge of an almost empty strip.
-            ScrollView(.horizontal, showsIndicator: false) {
-                HStack(
-                    height: .pt(PaneChrome.stripHeight), padding: 0,
-                    alignment: .end, spacing: 4
-                ) {
-                    // Not a bare `Spacer`: a spacer grows, and one on each
-                    // side of the tabs is how they ended up centred.
-                    Spacer(flexGrow: 0).frame(width: .pt(4), height: .pt(PaneChrome.stripHeight))
-                    ForEach(pane.tabs.tabs) { tab in
-                        tabChip(tab)
-                    }
-                }
+        TabStrip(onNew: { session.newTab() }) {
+            ForEach(pane.tabs.tabs) { tab in
+                TabStripItem(tab.title, selected: tab.id == pane.tabs.currentID,
+                             emphasized: active, closeID: "close-tab-\(tab.id)",
+                             onSelect: { session.selectTab(id: tab.id) },
+                             onClose: { session.closeTab(id: tab.id) })
+                    .background(session.dropHover == .tab(tab.id)
+                                ? Theme.current.accent.opacity(0.28) : .clear)
+                    .onFrame { session.noteTabFrame(tab.id, $0) }
+                    .onDragGesture { session.dragTab(tab.id, $0) }
+                    .onDrop(
+                        targeted: { session.setDropHover(.tab(tab.id), $0) },
+                        springLoaded: { session.selectTab(id: tab.id) }
+                    ) { session.dropOnTab(id: tab.id, $0) }
+                    .agentId("tab-\(tab.id)")
             }
-            .flexGrow(0)
-            .flexShrink(1)
-            // A 22pt circle: 6 round a 10pt mark.
-            HStack(padding: 6, alignment: .center, onClick: { session.newTab() }) {
-                Mark(.plus, size: 10, color: Theme.current.textSecondary)
-            }
-            .hoverBackground(Theme.current.hover)
-            .cornerRadius(11)
-            .cursor(.pointer)
-            .tooltip("New Tab")
-            .agentId("new-tab")
-            // The strip stands everything on its bottom edge, which is right
-            // for the tabs and wrong for anything shorter than one: it sat
-            // low. Centred in a box a tab tall, it lines up with their titles
-            // at any size. The box is only placement; the click and the
-            // hover stay on the circle.
-            .frame(height: .pt(PaneChrome.tabHeight), alignment: .center)
-            .flexShrink(0)
-            Spacer()
-                .frame(height: .pt(PaneChrome.stripHeight), minWidth: 48)
-                .windowDrag()
-        }
-        .underlay { StripBackdrop() }
-    }
-
-    private func tabChip(_ tab: ExplorerTab) -> some View {
-        let on = tab.id == pane.tabs.currentID
-        let theme = Theme.current
-        let titleColor = on && active ? theme.textPrimary : theme.textSecondary
-        let aimedAt = session.dropHover == .tab(tab.id)
-        return HStack(
-            padding: 0,
-            alignment: .center,
-            spacing: 4,
-            onPointer: { _, button in
-                if button == PointerButton.middle {
-                    session.closeTab(id: tab.id)
-                    return
-                }
-                guard button == PointerButton.left else { return }
-                session.selectTab(id: tab.id)
-            }
-        ) {
-            Text(tab.title, color: titleColor, lineLimit: 1)
-            HStack(
-                padding: 0, alignment: .center,
-                onClick: { session.closeTab(id: tab.id) }
-            ) {
-                Mark(.cross, size: 8, color: theme.textDim)
-            }
-            .padding(4)
-            .hoverBackground(theme.hover)
-            .cornerRadius(4)
-            .cursor(.pointer)
-            .tooltip("Close Tab")
-            .agentId("close-tab-\(tab.id)")
-        }
-        .padding(8)
-        .frame(height: .pt(PaneChrome.tabHeight))
-        .underlay { TabShape(active: on) }
-        .background(aimedAt ? theme.accent.opacity(0.28) : Color.clear)
-        .hoverBackground(on ? Color.clear : theme.hover)
-        .cornerRadius(6)
-        .cursor(.pointer)
-        // Tabs keep their width and the strip scrolls, rather than a crowd of
-        // tabs being squeezed down to a row of "…".
-        .flexShrink(0)
-        .scrollIntoView(when: on)
-        .onFrame { frame in session.noteTabFrame(tab.id, frame) }
-        .onDragGesture { value in session.dragTab(tab.id, value) }
-        // A file carried to a tab lights it; resting on it opens it, so the
-        // folders inside are there to be dropped on.
-        .onDrop(
-            targeted: { session.setDropHover(.tab(tab.id), $0) },
-            springLoaded: { session.selectTab(id: tab.id) }
-        ) { urls in session.dropOnTab(id: tab.id, urls) }
-        .agentId("tab-\(tab.id)")
-    }
-}
-
-/// Behind the tabs: the strip's own fill, and the rule along its bottom edge
-/// that the active tab breaks.
-private struct StripBackdrop: View {
-    var body: some View {
-        Canvas(label: "tab-strip", width: .pct(100), height: .pct(100)) { list, frame in
-            let theme = Theme.current
-            list.rect(x: frame.x, y: frame.y, w: frame.w, h: frame.h, color: theme.background)
-            list.rect(
-                x: frame.x, y: frame.y + frame.h - 1, w: frame.w, h: 1,
-                color: theme.border
-            )
-        }
-    }
-}
-
-/// The active tab's plate and outline; nothing for the others.
-///
-/// One outline around the tab and the toolbar together, the way Chrome and
-/// Firefox draw it. The plate is the toolbar's colour and runs down over the
-/// strip's rule, so the rule stops at the tab's sides and the outline carries
-/// on up, over and back down. `.border` cannot say this: it strokes four
-/// sides, and the point is the open fourth.
-private struct TabShape: View {
-    let active: Bool
-
-    var body: some View {
-        Canvas(label: "tab-shape", width: .pct(100), height: .pct(100)) { list, frame in
-            guard active else { return }
-            let theme = Theme.current
-            TabOutline.paint(list, frame: frame, fill: theme.panel, line: theme.border)
-        }
-    }
-}
-
-private enum TabOutline {
-    static let radius: Float = 7
-
-    static func paint(_ list: DrawList, frame: CanvasFrame, fill: Color, line: Color) {
-        let r = min(radius, frame.w * 0.5, frame.h)
-        // Rounded on top only: the plate runs a radius past the bottom and the
-        // clip cuts its lower corners off square, flush with the toolbar.
-        list.pushClip(x: frame.x, y: frame.y, w: frame.w, h: frame.h)
-        list.roundedRect(
-            x: frame.x, y: frame.y, w: frame.w, h: frame.h + r, color: fill, radius: r
-        )
-        list.popClip()
-        list.polyline(points(frame: frame, radius: r), color: line)
-    }
-
-    /// Up the left side, round the top, down the right side, ending on the
-    /// strip's bottom edge where its rule takes over. Half-pixel centres, so a
-    /// one-pixel line lands on one row of pixels rather than across two.
-    static func points(frame: CanvasFrame, radius r: Float) -> [(x: Float, y: Float)] {
-        let left = frame.x + 0.5
-        let right = frame.x + frame.w - 0.5
-        let top = frame.y + 0.5
-        let bottom = frame.y + frame.h
-        var out: [(x: Float, y: Float)] = [(left, bottom)]
-        arc(into: &out, cx: left + r, cy: top + r, r: r, from: .pi, to: .pi * 1.5)
-        arc(into: &out, cx: right - r, cy: top + r, r: r, from: .pi * 1.5, to: .pi * 2)
-        out.append((right, bottom))
-        return out
-    }
-
-    private static func arc(
-        into out: inout [(x: Float, y: Float)],
-        cx: Float, cy: Float, r: Float, from start: Float, to end: Float
-    ) {
-        let steps = 6
-        for step in 0...steps {
-            let t = start + (end - start) * Float(step) / Float(steps)
-            out.append((cx + r * cos(t), cy + r * sin(t)))
         }
     }
 }

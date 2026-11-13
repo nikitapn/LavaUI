@@ -9,18 +9,16 @@ struct LavaEditorView: View {
     @State private var pathMenuOpen = false
 
     /// Height of the tab strip, which is also the title bar.
-    private static let barHeight: Float = TabChrome.barHeight
+    private static let barHeight: Float = 36
 
     var body: some View {
         VStack(flexGrow: 1, spacing: 0) {
             tabStrip
-            Divider()
             if session.pendingClose != nil { unsavedBar }
             if session.gotoOpen { gotoBar }
             if session.find.isOpen { findBar }
             if let notice = session.notice { noticeBar(notice) }
             editor
-            Divider()
             statusBar
         }
         .background(Environment.current.theme.background)
@@ -44,21 +42,11 @@ struct LavaEditorView: View {
                 WindowControls()
                     .padding(.horizontal, 8)
             }
-            TabStrip(session: session)
-            // Leftover space (`flexGrow: 1`), never thinner than `dragGrab`
-            // so a full tab row still leaves a window-drag handle.
-            Spacer()
-                .frame(height: .pt(Self.barHeight), minWidth: TabChrome.dragGrab)
-                .windowDrag()
-            HStack(padding: 9, alignment: .center, onClick: { session.newDocument() }) {
-                Mark(.plus, size: 10, color: .muted)
-            }
-                .hoverBackground(Environment.current.theme.hover)
-                .cornerRadius(4)
-                .cursor(.pointer)
-                .agentId("new-document")
+            EditorTabs(session: session)
+                .flexGrow(1)
+                .flexShrink(1)
         }
-        .background(Environment.current.theme.panel)
+        .background(Environment.current.theme.background)
     }
 
     // MARK: - The editor
