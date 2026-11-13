@@ -1,6 +1,6 @@
 import Foundation
 
-/// A small stroked symbol — a close cross, a plus — drawn as lines.
+/// A small stroked symbol — a close cross, a plus, an arrow — drawn as lines.
 ///
 /// Not a character: a `Text("×")` is a box the height of the font's line
 /// with the mark sat on the baseline, so it is never centred in anything and
@@ -24,6 +24,10 @@ public struct Mark: View {
         case cross
         /// Add: a horizontal and a vertical.
         case plus
+        /// Up, or previous: a shaft with a head at its top.
+        case arrowUp
+        /// Down, or next.
+        case arrowDown
     }
 
     /// Which symbol is drawn.
@@ -62,6 +66,19 @@ public struct Mark: View {
                 list.line(x1: cx - arm, y1: cy, x2: cx + arm, y2: cy,
                           color: color, width: lineWidth)
                 list.line(x1: cx, y1: cy - arm, x2: cx, y2: cy + arm,
+                          color: color, width: lineWidth)
+            case .arrowUp, .arrowDown:
+                // A shaft, and a head of two strokes meeting it at the tip at
+                // right angles, reaching back two thirds of the arm.
+                let up = kind == .arrowUp
+                let tip = up ? cy - arm : cy + arm
+                let head = arm * 0.67
+                let headY = up ? tip + head : tip - head
+                list.line(x1: cx, y1: cy - arm, x2: cx, y2: cy + arm,
+                          color: color, width: lineWidth)
+                list.line(x1: cx - head, y1: headY, x2: cx, y2: tip,
+                          color: color, width: lineWidth)
+                list.line(x1: cx + head, y1: headY, x2: cx, y2: tip,
                           color: color, width: lineWidth)
             }
         }

@@ -693,10 +693,24 @@ final class ReaderSession: @unchecked Sendable {
         return result
     }
 
+    /// Never empty: before a search it is the "No results" placeholder, dimmed
+    /// (see `findMissed`), so the panel's status slot always says something.
     var findStatus: String {
-        if query.isEmpty || query != searchedQuery { return "" }
-        if matches.isEmpty { return searching ? "Searching…" : "No matches" }
+        if !findSearched { return "No results" }
+        if matches.isEmpty { return searching ? "Searching…" : "No results" }
         let position = (matchIndex ?? 0) + 1
         return searching ? "\(position) of \(matches.count)…" : "\(position) of \(matches.count)"
+    }
+
+    /// A finished search for this query that found nothing — the one state
+    /// the status shows in red, rather than the placeholder's dim grey.
+    var findMissed: Bool {
+        findSearched && !searching && matches.isEmpty
+    }
+
+    /// The field's text is what was last searched for, so the status is a
+    /// result rather than the placeholder.
+    var findSearched: Bool {
+        !query.isEmpty && query == searchedQuery
     }
 }

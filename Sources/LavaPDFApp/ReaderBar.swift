@@ -60,12 +60,19 @@ struct ReaderBar: View {
     }
 }
 
-/// Floats over the document's top-right corner while finding.
+/// Floats over the document's top-right corner while finding: the field, how
+/// many matches, and the steps, laid out after VS Code's find widget.
 struct FindBar: View {
     @Bindable var session: ReaderSession
 
+    /// Wide enough for "No results" and "Searching…", and for "128 of 4096";
+    /// fixed, so the panel does not change width under the pointer as the
+    /// count changes, and its left edge does not jump while typing.
+    static let statusWidth: Float = 104
+
     var body: some View {
-        HStack(padding: 8, alignment: .center, spacing: 6) {
+        let found = !session.matches.isEmpty
+        return HStack(padding: 4, alignment: .center, spacing: 2) {
             TextField(
                 text: $session.query, placeholder: "Find in document",
                 autoFocus: true, selectionOnFocus: .all,
@@ -75,22 +82,64 @@ struct FindBar: View {
             .frame(width: .pt(200))
             .flexShrink(1)
             .agentId("find-field")
-            Text(session.findStatus, color: Theme.current.textDim)
+            Text(session.findStatus, color: statusColor, lineLimit: 1)
+                .padding(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 4))
+                .frame(width: .pt(Self.statusWidth))
+                .flexShrink(0)
                 .agentId("find-status")
-            step("Previous", id: "find-previous") { session.findNext(-1) }
-            step("Next", id: "find-next") { session.findNext(1) }
-            step("Done", id: "find-done") { session.closeFind() }
+            FindIcon(mark: .arrowUp, enabled: found, tip: "Previous Match", id: "find-previous") {
+                session.findNext(-1)
+            }
+            FindIcon(mark: .arrowDown, enabled: found, tip: "Next Match", id: "find-next") {
+                session.findNext(1)
+            }
+            FindIcon(mark: .cross, enabled: true, tip: "Close", id: "find-done") {
+                session.closeFind()
+            }
         }
         .agentId("find-bar")
     }
 
-    private func step(_ label: String, id: String, action: @escaping () -> Void) -> some View {
-        Text(label, color: Theme.current.textSecondary, onClick: action)
-            .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
-            .hoverBackground(Theme.current.hover)
-            .cornerRadius(4)
-            .cursor(.pointer)
-            .agentId(id)
+    /// Red for a search that came back empty, dim for the placeholder before
+    /// one, and the ordinary secondary colour for a count. The theme has no
+    /// error colour; this red reads on both the light and the dark panel.
+    private var statusColor: Color {
+        if session.findMissed { return Self.missColor }
+        return session.findSearched ? Theme.current.textSecondary : Theme.current.textDim
+    }
+
+    static let missColor = Color(r: 0.94, g: 0.36, b: 0.36)
+}
+
+/// A square button around a `Mark`. The click and the hover are the stack's,
+/// so the target and the fill are the same 26-point box (see `Mark`).
+private struct FindIcon: View {
+    let mark: Mark.Kind
+    let enabled: Bool
+    let tip: String
+    let id: String
+    let action: () -> Void
+
+    var body: some View {
+        let theme = Theme.current
+        let color = enabled ? theme.textSecondary : theme.textDim.opacity(0.5)
+        return HStack(
+            width: .pt(26), height: .pt(26), padding: 0,
+            alignment: .center, spacing: 0,
+            onClick: enabled ? action : nil
+        ) {
+            Spacer()
+            Mark(mark, size: mark == .cross ? 10 : 12, color: color)
+            Spacer()
+        }
+        .hoverBackground(enabled ? theme.hover : .clear)
+        .cornerRadius(4)
+        .cursor(enabled ? .pointer : .arrow)
+        .flexShrink(0)
+        // Even while disabled: a greyed arrow is the one whose meaning a user
+        // most needs to read.
+        .tooltip(tip)
+        .agentId(id)
     }
 }
 
