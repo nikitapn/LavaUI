@@ -113,6 +113,27 @@ final class ViewerSession: @unchecked Sendable {
 
     @ObservationIgnored private unowned let editor: Editor
 
+    // MARK: - Photo info
+
+    /// What the info panel shows about one file: what the file system says,
+    /// and what the file says about itself.
+    struct FileInfo: Equatable {
+        var path: String
+        var bytes: Int64?
+        var modified: Date?
+        /// Nil when the file carries no EXIF, or none worth a row.
+        var photo: PhotoInfo?
+    }
+
+    /// The panel beside the picture. Remembered between runs: somebody who
+    /// wants to see exposures wants to see them on every photograph.
+    private(set) var showInfo: Bool = AppSettings.bool(forKey: "infoPanel") ?? false
+    /// The current file's, once read. Observed — the panel is drawn from it.
+    private(set) var info: FileInfo?
+    /// The path a worker is reading, so a panel redrawn while it reads does not
+    /// start a second one.
+    @ObservationIgnored private var infoReading: String?
+
     init(editor: Editor, folder: ImageFolder) {
         self.editor = editor
         self.folder = folder
@@ -652,12 +673,60 @@ final class ViewerSession: @unchecked Sendable {
         rotation = .none
         hasUnsavedRotation = false
         if let shown { writtenBack[result.path] = shown }
+        // Read again: the encoder writes no metadata, so the panel's EXIF is
+        // gone from the file now, and its size and date have changed.
+        if info?.path == result.path { info = nil }
         if result.path != folder.current {
             // A format change (an SVG that had to become a PNG) wrote a new
             // file. Land on what we just made rather than on what it came from.
             folder = ImageFolder.around(path: result.path)
         }
         ViewInvalidation.markDirty()
+    }
+
+    func toggleInfo() {
+        showInfo.toggle()
+        AppSettings.set(showInfo, forKey: "infoPanel")
+        ViewInvalidation.markDirty()
+    }
+
+    /// The current file's info if it has been read; otherwise starts reading
+    /// it and answers with the *previous* file's, until the read lands.
+    ///
+    /// The same rule as the picture, which stays on screen until the next one
+    /// has decoded: stepping through a folder used to blank the panel to
+    /// "Reading…" and back on every picture, a flash for a read that takes a
+    /// millisecond. The two arrive within a frame or two of each other, and
+    /// until then both describe the same, previous, picture. Nil only before
+    /// anything has been read at all.
+    ///
+    /// Called from the panel's body, so it writes nothing observed until the
+    /// read lands.
+    ///
+    /// On a worker even though it is one small read: the folder can be on a
+    /// network mount, and a viewer that freezes while it asks a server for
+    /// 256 KiB is a viewer that freezes on every step.
+    func infoForCurrent() -> FileInfo? {
+        guard let path = folder.current else { return nil }
+        if let info, info.path == path { return info }
+        guard infoReading != path else { return info }
+        infoReading = path
+        Thread.detachNewThread { [weak self] in
+            let attributes = try? FileManager.default.attributesOfItem(atPath: path)
+            let read = FileInfo(
+                path: path,
+                bytes: (attributes?[.size] as? NSNumber)?.int64Value,
+                modified: attributes?[.modificationDate] as? Date,
+                photo: PhotoInfoReader.read(path: path)
+            )
+            MainQueue.async { [weak self] in
+                guard let self else { return }
+                if self.infoReading == path { self.infoReading = nil }
+                self.info = read
+                ViewInvalidation.markDirty()
+            }
+        }
+        return info
     }
 
     func dismissNotice() {

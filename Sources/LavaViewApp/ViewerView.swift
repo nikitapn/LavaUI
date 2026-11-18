@@ -51,7 +51,10 @@ struct ViewerView: View {
             // about.
             if let target = session.pendingSave { confirmBar(target) }
             if let message = message { messageBar(message) }
-            picture
+            HStack(flexGrow: 1, spacing: 0) {
+                picture
+                if session.showInfo { InfoPanel(session: session) }
+            }
             // Divider()
             ControlBar(session: session)
         }

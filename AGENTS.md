@@ -513,8 +513,9 @@ Sources/
                     `TraceLoom x.traceloom` reopens a saved workspace)
   Weather*/        LavaWeather (core headless + app; Open-Meteo, no API key)
   LavaView*/       LavaView — image viewer (core headless + app). Fit / 1:1,
-                   wheel zoom at the cursor, the folder as a cycle, and two
-                   rotate buttons that can write the turn back to the file
+                   wheel zoom at the cursor, the folder as a cycle, two
+                   rotate buttons that can write the turn back to the file,
+                   and an EXIF panel (`I`; `PhotoInfoReader`, pure Swift)
   LavaPDF*/        PDF reader (core headless + app). Poppler through
                    CLavaPDF's C API, so no C++ interop above it; tiles at the
                    exact zoom, rendered a window per page on two workers and

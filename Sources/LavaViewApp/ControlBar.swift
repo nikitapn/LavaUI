@@ -32,6 +32,8 @@ struct ControlBar: View {
             transportGroup
             separator
             rotateGroup
+            separator
+            infoButton
             Spacer()
         }
         .background(Theme.current.panel)
@@ -100,6 +102,26 @@ struct ControlBar: View {
                 session.rotateRight()
             }
         }
+    }
+
+    /// Latches like the mode pair: the panel is a state, and the button says
+    /// which one it is in.
+    private var infoButton: some View {
+        let theme = Theme.current
+        let on = session.showInfo
+        return Text(
+            // A word, not ⓘ: the UI face has no circled letters, and a box
+            // where a symbol should be is worse than a word.
+            "Info", color: on ? theme.textPrimary : theme.textSecondary, align: .center,
+            onClick: { session.toggleInfo() }
+        )
+        .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
+        .frame(width: .pt(52))
+        .background(on ? theme.selectionFill : theme.panel)
+        .hoverBackground(on ? theme.selectionFill : theme.hover)
+        .cornerRadius(4)
+        .cursor(.pointer)
+        .agentId("info")
     }
 
     /// Not while the next picture is on its way: what is on screen is the

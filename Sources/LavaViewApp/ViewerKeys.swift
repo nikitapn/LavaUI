@@ -14,6 +14,7 @@ enum ViewerKeys {
     /// to the framework for one app.
     private enum Extra {
         static let f: Int32 = 70
+        static let i: Int32 = 73
         static let r: Int32 = 82
         static let bracketLeft: Int32 = 91
         static let bracketRight: Int32 = 93
@@ -71,6 +72,10 @@ enum ViewerKeys {
             session.openDialog()
         case Extra.r where event.control:
             session.reloadFolder()
+
+        // Info, as in most viewers that have the panel at all.
+        case Extra.i where !event.control:
+            session.toggleInfo()
 
         case KeyCode.escape:
             session.dismissNotice()

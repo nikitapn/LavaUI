@@ -135,26 +135,38 @@ Saving bakes the total — the file's own turn and the user's — into the pixel
 and the output carries no EXIF at all, so nothing downstream turns it a second
 time.
 
+## Photo info
+
+`I`, the bar's Info button, or View → Photo Info opens a panel beside the
+picture, and it stays open between runs. Beside rather than over: a panel laid
+on the picture covers what the numbers are about, and the canvas refits to the
+narrower box on its own.
+
+It always shows what the file system knows — name, dimensions as drawn, size,
+modified, folder — and, when the file carries EXIF, the dozen fields anybody
+reads: camera, lens, exposure, aperture, ISO, focal length (with the 35 mm
+equivalent when the camera wrote one), exposure bias, flash, when it was
+taken, where, altitude, software.
+
+The reader is `PhotoInfoReader` in `LavaViewCore`: pure Swift, on this side of
+the line rather than in the decoder, because an orientation changes the pixels
+a decoder must return and a lens name does not. It finds the TIFF block in a
+JPEG's APP1, a PNG's `eXIf` or a bare TIFF (which is what a CR2 is), and every
+offset in it is bounds-checked — the tests feed it every truncation of a
+header and two thousand scrambled ones. Maker notes are not read, on purpose.
+
+GPS is shown as coordinates and never resolved to a place: that is a network
+request, and an image viewer has no business telling a server where somebody's
+photographs were taken. 0,0 is treated as a GPS with no fix.
+
+The file is read on a worker (256 KiB of its head), because a folder on a
+network mount would otherwise freeze the window on every step. A save clears
+what was read: the encoder writes no metadata, so after a rotate-and-save the
+panel honestly shows none.
+
 ## Next, in the order I would do them
 
-### 1. EXIF panel
-
-Camera, lens, exposure, aperture, ISO, focal length, when it was taken. A side
-panel toggled by `I`, or the bar growing a second row — not a dialog, and not a
-mode.
-
-The IFD walk in `canvas/src/render/exif.cpp` is most of a reader already, but
-this one belongs on *this* side of the line rather than in the decoder: an
-orientation changes the pixels a decoder must return, and a lens name does not.
-It is a reader in `LavaViewCore`, tested the way the roadmap originally
-described — pure Swift, recorded headers, no GPU and no files.
-
-The trap is scope: EXIF has hundreds of tags and a maker-note swamp, and the
-answer is a fixed list of the dozen anybody reads. GPS is the one judgement
-call — showing coordinates is useful, resolving them to a place name is a
-network request an image viewer should not be making.
-
-### 2. Resize and save
+### 1. Resize and save
 
 The cheapest of the three obvious ones, because the write path is already
 built: decode native, transform, encode, atomic rename, with `SaveTarget`
@@ -173,7 +185,7 @@ already reports drag gestures, so the missing part is a rubber-band rectangle
 and the arithmetic to map it back to source pixels — which belongs in
 `LavaViewCore` next to `ViewportMath`, for the same reason that is there.
 
-### 3. Animated GIF
+### 2. Animated GIF
 
 No new dependency: `stbi_load_gif_from_memory` returns every frame and a delay
 array in one call. The work is that the pipeline assumes one texture per path,

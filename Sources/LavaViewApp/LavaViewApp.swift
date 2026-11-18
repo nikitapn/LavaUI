@@ -115,6 +115,10 @@ struct LavaViewApp {
                         MenuItem("Rotate Right", id: "view.rotate-right") {
                             session.rotateRight()
                         }
+                        MenuSeparator()
+                        // `I` itself is in `ViewerKeys`, beside the other
+                        // single-letter keys.
+                        MenuItem("Photo Info", id: "view.info") { session.toggleInfo() }
                     }
                     Menu("Go", id: "go") {
                         MenuItem("Next Image", id: "go.next") { session.step(1) }
