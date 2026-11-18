@@ -2453,11 +2453,12 @@ public final class LayoutHost {
     /// `dropTarget` finds a drop target and for the same reason: the press
     /// lands on a row's label, and it is the row that registered.
     public func fileDragSource(
-        x: Float, y: Float, originX: Float = 0, originY: Float = 0
+        x: Float, y: Float, originX: Float = 0, originY: Float = 0,
+        button: Int32 = PointerButton.left
     ) -> NodeID? {
         for id in hitTestScrollChain(
             x: x, y: y, originX: originX, originY: originY
-        ) where FileDragRouter.hasSource(id) {
+        ) where FileDragRouter.hasSource(id, button: button) {
             return id
         }
         return nil

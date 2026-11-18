@@ -148,6 +148,7 @@ final class ExplorerSession: @unchecked Sendable {
             && pendingOverwrite == nil && newFolderDraft == nil && renameDraft == nil
             && bulkRenameDraft == nil && compressDraft == nil && passwordRequest == nil && remoteLogin == nil
             && connectDraft == nil && tabDrag == nil && remoteDrag == nil
+            && rightDrag == nil && dropMenu == nil
     }
 
     func selectProfile(_ id: String) {
@@ -1210,9 +1211,20 @@ final class ExplorerSession: @unchecked Sendable {
         case "ctx.download":
             dismissContext()
             download(targets(for: entry), into: Self.downloadsFolder())
-        case "ctx.copy": stub("Copy")
-        case "ctx.cut": stub("Cut")
-        case "ctx.paste": stub("Paste")
+        case "ctx.copy":
+            dismissContext()
+            copyToClipboard(targets(for: entry), cut: false)
+        case "ctx.cut":
+            dismissContext()
+            copyToClipboard(targets(for: entry), cut: true)
+        case "ctx.paste":
+            dismissContext()
+            // On a folder, into it — Explorer's rule; on a file, beside it.
+            if entry.isDirectory {
+                paste(into: entry.path, title: entry.name)
+            } else {
+                paste()
+            }
         case "ctx.rename":
             dismissContext()
             let targets = targets(for: entry)
@@ -2424,23 +2436,49 @@ final class ExplorerSession: @unchecked Sendable {
         ownDrag = []
         dropHover = nil
         dismissContext()
+        // Carried with the right button — from this window or another Lava
+        // one — it asks rather than doing.
+        if DropRouter.button == PointerButton.right {
+            let menu = DropMenu(
+                paths: urls.map(\.path), directory: directory, title: title,
+                x: DropRouter.point.x, y: DropRouter.point.y
+            )
+            // Picked up and put back down in its own folder, from this
+            // window: a drag that changed its mind, not a question.
+            if !(own && menu.inPlace) { dropMenu = menu }
+            ViewInvalidation.markDirty()
+            return
+        }
+        transfer(urls.map(\.path), into: directory, title: title, mode: .byDevice, own: own)
+    }
+
+    /// Copies or moves local `paths` into `directory`: a drop, a paste, a
+    /// choice from the right-drag menu. `own` is a drag of this window's rows,
+    /// let go of where it was picked up — see `ownDrag`.
+    func transfer(
+        _ paths: [String], into directory: String, title: String,
+        mode: CopyPlan.Mode, own: Bool = false, onDone: (() -> Void)? = nil
+    ) {
         // Dropped on the Trash is thrown away, not copied into it.
         if TrashPath.isTrash(directory) {
-            moveToTrash(urls.map(\.path))
+            moveToTrash(paths)
             return
         }
         // Dropped on a server's folder is sent there.
         if let folder = RemoteURL(directory) {
-            upload(urls.map(\.path), into: folder)
+            upload(paths, into: folder)
             return
         }
         guard !copying, pendingCopy == nil else {
-            notice = "Still copying — drop again when it is done"
+            notice = "Still copying — try again when it is done"
             ViewInvalidation.markDirty()
             return
         }
+        // A copy asked for by name (Paste, Copy Here) into the folder it is
+        // in is a duplicate; a plain drop there is a drag that changed its mind.
         let plan = CopyPlan.make(
-            sources: urls.map(\.path), into: directory, source: source, moveWithinDevice: true
+            sources: paths, into: directory, source: source, mode: mode,
+            duplicateInPlace: mode == .copy
         )
         guard !plan.items.isEmpty else {
             // A row picked up and let go of in the folder it came from is a
@@ -2455,6 +2493,7 @@ final class ExplorerSession: @unchecked Sendable {
             ViewInvalidation.markDirty()
             return
         }
+        afterCopy = onDone
         if plan.clashes.isEmpty {
             startCopy(plan, choice: .skip, folderTitle: title)
         } else {
@@ -2463,12 +2502,17 @@ final class ExplorerSession: @unchecked Sendable {
         }
     }
 
+    /// Run once the copy `transfer` started has finished — a Cut whose
+    /// clipboard is spent by its Paste. Dropped with a cancelled clash bar.
+    @ObservationIgnored private var afterCopy: (() -> Void)?
+
     /// The clash bar's answer. Nil is Cancel: nothing is copied, not even the
     /// items that did not clash — the drop was one decision.
     func resolveCopy(_ choice: ClashChoice?) {
         guard let pending = pendingCopy else { return }
         pendingCopy = nil
         guard let choice else {
+            afterCopy = nil
             ViewInvalidation.markDirty()
             return
         }
@@ -2492,6 +2536,9 @@ final class ExplorerSession: @unchecked Sendable {
 
     private func finishCopy(_ outcome: CopyOutcome, plan: CopyPlan, folderTitle: String) {
         copying = false
+        let done = afterCopy
+        afterCopy = nil
+        done?()
         // One drop is one step to undo, however it split between moving and
         // copying.
         var changes: [FileChange] = []
@@ -2548,6 +2595,169 @@ final class ExplorerSession: @unchecked Sendable {
         }
     }
 
+    // MARK: - Copy, Cut and Paste
+
+    /// What Copy or Cut last took, for Paste. Shared by every window of this
+    /// process, the way a clipboard is; not the system clipboard, which holds
+    /// text — Copy Path is how a path gets there.
+    struct FileClipboard {
+        var paths: [String]
+        var cut: Bool
+    }
+
+    nonisolated(unsafe) static var clipboard: FileClipboard?
+
+    var canPaste: Bool { Self.clipboard != nil && !isOnServer && !inTrash }
+
+    /// Copy (or Cut) the selection — or `entries`, from a right-click.
+    func copyToClipboard(_ entries: [FileEntry]? = nil, cut: Bool) {
+        let chosen = entries ?? selectedEntries
+        // A server's rows have no local path to copy from; the Trash's are
+        // restored, not pasted somewhere.
+        let paths = chosen.map(\.path).filter { $0.hasPrefix("/") }
+        guard !paths.isEmpty, !inTrash else {
+            notice = chosen.isEmpty ? "Nothing selected" : "These cannot be copied from here"
+            ViewInvalidation.markDirty()
+            return
+        }
+        Self.clipboard = FileClipboard(paths: paths, cut: cut)
+        let what = paths.count == 1
+            ? (paths[0] as NSString).lastPathComponent : Self.items(paths.count)
+        notice = cut
+            ? "Cut \(what) — paste to move it"
+            : "Copied \(what) — paste to put a copy somewhere"
+        ViewInvalidation.markDirty()
+    }
+
+    /// Into `directory`, or the folder the active pane is showing.
+    func paste(into directory: String? = nil, title: String? = nil) {
+        guard let clip = Self.clipboard else {
+            notice = "Nothing to paste — copy or cut something first"
+            ViewInvalidation.markDirty()
+            return
+        }
+        let target = directory ?? listing.path
+        guard !TrashPath.isTrash(target) else {
+            notice = "Cannot paste into the Trash"
+            ViewInvalidation.markDirty()
+            return
+        }
+        let name = title ?? tabSet.current.title
+        // A cut is spent by the paste that moves it: a second paste would find
+        // nothing where the files were.
+        transfer(
+            clip.paths, into: target, title: name, mode: clip.cut ? .move : .copy,
+            onDone: clip.cut ? { Self.clipboard = nil } : nil
+        )
+    }
+
+    // MARK: - Dragging with the right button
+
+    /// Rows carried with the right button: let go of over a pane, a menu asks
+    /// whether to copy or move them there. Observed — the pane under the
+    /// pointer lights up from it, so written only as that pane changes.
+    struct RightDrag: Equatable {
+        var paths: [String]
+        var paneID: Int?
+        /// What the first of them is, for the chip.
+        var isDirectory = false
+    }
+
+    var rightDrag: RightDrag?
+
+    /// Waiting on the answer to where a right-drag was let go of. Observed:
+    /// the menu is drawn from it.
+    struct DropMenu: Equatable {
+        var paths: [String]
+        var directory: String
+        var title: String
+        var x: Float
+        var y: Float
+
+        var toServer: Bool { RemoteURL.isRemote(directory) }
+        var toTrash: Bool { TrashPath.isTrash(directory) }
+        /// Let go of in the folder the rows are in: only a copy makes sense.
+        var inPlace: Bool {
+            paths.allSatisfy { ($0 as NSString).deletingLastPathComponent == directory }
+        }
+    }
+
+    var dropMenu: DropMenu?
+
+    /// A right press on a row: the menu waits for the release, as in Windows,
+    /// so the press can still become a right-drag instead.
+    func rightPress(_ entry: FileEntry) {
+        rightDragged = false
+        dismissContext()
+        // Selected on the press, as in Windows; one of several selected keeps
+        // them all, since the menu or the drag is about all of them.
+        if !tabSet.current.selection.contains(entry.path) {
+            tabSet.updateCurrent { $0.selected = entry.path }
+            ViewInvalidation.markDirty()
+        }
+        PointerRelease.next { [weak self] in
+            guard let self, !self.rightDragged else { return }
+            self.openContext(entry)
+        }
+    }
+
+    @ObservationIgnored private var rightDragged = false
+
+    func dragRight(_ entry: FileEntry, _ value: DragGestureValue) {
+        switch value.phase {
+        case .began:
+            rightDragged = true
+            dismissContext()
+            dropMenu = nil
+            collapseOnRelease = nil
+            let selection = selectedEntries
+            let entries = selection.contains(entry) ? selection : [entry]
+            if !selection.contains(entry) {
+                tabSet.updateCurrent { $0.selected = entry.path }
+            }
+            rightDrag = RightDrag(
+                paths: entries.map(\.path), paneID: pane(at: value.x, value.y),
+                isDirectory: entries.first?.isDirectory ?? false
+            )
+        case .changed:
+            guard var drag = rightDrag else { return }
+            let pane = pane(at: value.x, value.y)
+            guard pane != drag.paneID else { return }
+            drag.paneID = pane
+            rightDrag = drag
+        case .ended:
+            guard let drag = rightDrag else { return }
+            rightDrag = nil
+            defer { ViewInvalidation.markDirty() }
+            guard let paneID = drag.paneID, let pane = layout.pane(id: paneID) else { return }
+            let tab = pane.tabs.current
+            let menu = DropMenu(
+                paths: drag.paths, directory: tab.listing.path,
+                title: tab.title, x: value.x, y: value.y
+            )
+            // Picked up and put back down where it was: a drag that changed
+            // its mind, not a question.
+            if menu.inPlace, pane.id == layout.activePaneID { return }
+            dropMenu = menu
+        }
+    }
+
+    /// The right-drag menu's answer. Nil is Cancel.
+    func resolveDropMenu(_ mode: CopyPlan.Mode?) {
+        guard let menu = dropMenu else { return }
+        dropMenu = nil
+        ViewInvalidation.markDirty()
+        guard let mode else { return }
+        transfer(menu.paths, into: menu.directory, title: menu.title, mode: mode)
+    }
+
+    /// The pane under a point, whatever it shows.
+    private func pane(at x: Float, _ y: Float) -> Int? {
+        layout.panes.first { pane in
+            paneFrames[pane.id].map { $0.contains(x: x, y: y) } ?? false
+        }?.id
+    }
+
     static func items(_ count: Int) -> String {
         count == 1 ? "1 item" : "\(count) items"
     }
@@ -2568,6 +2778,8 @@ final class ExplorerSession: @unchecked Sendable {
         // dragged inside the window instead (`dragRemote`).
         if RemoteURL.isRemote(entry.path) { return [] }
         dismissContext()
+        // A right press that became a drag opens no menu on its release.
+        rightDragged = true
         // It became a drag, so the press on one of several rows keeps them.
         collapseOnRelease = nil
         let selection = selectedEntries

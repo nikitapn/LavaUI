@@ -54,7 +54,7 @@ public final class LavaWindow {
     /// every hit test and emit origin below refers to it.
     private let menuH: Float = 0
 
-    /// A left press on a `.onFileDrag` view that has not yet travelled far
+    /// A press on a `.onFileDrag` view that has not yet travelled far
     /// enough to be a drag: the source, and where the press was.
     private var pendingFileDrag: (source: NodeID, x: Float, y: Float)?
 
@@ -557,16 +557,19 @@ public final class LavaWindow {
             // Looked up before the click handler, which may rebuild the view
             // under the pointer — a row selecting itself, say.
             pendingFileDrag = nil
-            if ev.button == 0, DragBridge.startFileDrag != nil,
-               let source = host.fileDragSource(x: ev.x, y: ev.y, originY: menuH)
+            if DragBridge.startFileDrag != nil,
+               let source = host.fileDragSource(
+                   x: ev.x, y: ev.y, originY: menuH, button: ev.button
+               )
             {
                 pendingFileDrag = (source, ev.x, ev.y)
             }
             // A drag gesture, found the same way and for the same reason.
             DragGestureRouter.press(
-                source: ev.button == 0
-                    ? host.dragGestureSource(x: ev.x, y: ev.y, originY: menuH) : nil,
-                x: ev.x, y: ev.y
+                source: host.dragGestureSource(
+                    x: ev.x, y: ev.y, originY: menuH, button: ev.button
+                ),
+                button: ev.button, x: ev.x, y: ev.y
             )
             // Focus first: a list pressed on has the keyboard by the time its
             // row's click runs, and a text field inside it still takes focus
@@ -744,7 +747,8 @@ public final class LavaWindow {
             DropRouter.dragLeave()
             DropRouter.deliver(
                 to: host.dropTarget(x: ev.x, y: ev.y, originY: menuH),
-                paths: DropBridge.paths(window: id, editor: editor)
+                paths: DropBridge.paths(window: id, editor: editor),
+                button: ev.button, x: ev.x, y: ev.y
             )
         case .text:
             FocusManager.releaseIfGone { host.contains($0) }

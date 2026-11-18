@@ -86,6 +86,8 @@ struct FileDragEntry {
     let chip: (() -> any AnyViewNode)?
     let offsetX: Float
     let offsetY: Float
+    /// The buttons whose press can become this drag.
+    var buttons: [Int32] = [PointerButton.left]
 }
 
 /// `.onFileDrag` registrations by node, the way `DropRouter` keeps drops.
@@ -98,7 +100,9 @@ enum FileDragRouter {
         for id in ids { entries[id] = nil }
     }
 
-    static func hasSource(_ id: NodeID) -> Bool { entries[id] != nil }
+    static func hasSource(_ id: NodeID, button: Int32 = PointerButton.left) -> Bool {
+        entries[id]?.buttons.contains(button) ?? false
+    }
 
     static func entry(_ id: NodeID) -> FileDragEntry? { entries[id] }
 }
@@ -114,6 +118,10 @@ public struct FileDragSourceView<Content: View, Chip: View>: PrimitiveView {
     public var offsetX: Float
     /// Vertical distance from the pointer to the chip's top-left, in pixels.
     public var offsetY: Float
+    /// The buttons whose press can become the drag. The compositor carries a
+    /// drag on whichever one started it, and a drop says which that was
+    /// (`DropRouter.button`) — a right-drag that asks on landing.
+    public var buttons: [Int32] = [PointerButton.left]
     /// The view files can be dragged out of.
     public var content: Content
 
@@ -147,7 +155,8 @@ public struct FileDragSourceView<Content: View, Chip: View>: PrimitiveView {
             { () -> any AnyViewNode in ViewGraph.mount(make()) }
         }
         return FileDragEntry(
-            paths: paths, chip: mountChip, offsetX: offsetX, offsetY: offsetY
+            paths: paths, chip: mountChip, offsetX: offsetX, offsetY: offsetY,
+            buttons: buttons
         )
     }
 
@@ -178,18 +187,20 @@ extension View {
     /// `DragChipImage`). It hangs `offsetX`,`offsetY` from the pointer —
     /// below and to the right by default, clear of what is being aimed at.
     ///
-    /// The left button only, after `FileDrag.threshold` of travel, and only
-    /// where a compositor can carry a drag (`DragBridge`). The press is
-    /// delivered as a press either way, so a row selects itself first.
+    /// A press of one of `buttons` (the left alone, unless said otherwise),
+    /// after `FileDrag.threshold` of travel, and only where a compositor can
+    /// carry a drag (`DragBridge`). The press is delivered as a press either
+    /// way, so a row selects itself first.
     public func onFileDrag<Chip: View>(
         offsetX: Float = 16,
         offsetY: Float = 12,
+        buttons: [Int32] = [PointerButton.left],
         paths: @escaping () -> [String],
         @ViewBuilder chip: @escaping () -> Chip
     ) -> FileDragSourceView<Self, Chip> {
         FileDragSourceView(
             paths: paths, chip: chip, offsetX: offsetX, offsetY: offsetY,
-            content: self
+            buttons: buttons, content: self
         )
     }
 
@@ -355,6 +366,7 @@ extension View {
     public func onFileDrag<Chip: View>(
         offsetX: Float = 16,
         offsetY: Float = 12,
+        buttons: [Int32] = [PointerButton.left],
         paths: @escaping () -> [String],
         @ViewBuilder chip: @escaping () -> Chip
     ) -> Self { self }

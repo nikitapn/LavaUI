@@ -369,7 +369,9 @@ class CanvasSurface {
   /// that handles it; the paths do not travel with it, because a list of them
   /// does not fit a fixed-size `InputEvent` and most events are not drops.
   /// `SurfaceRegistry::takeDroppedPaths` is the other half.
-  void fileDrop(float x, float y);
+  /// `button` is what carried the drag, when a Lava window started it
+  /// (`lava::file_drag_button`); 0 otherwise.
+  void fileDrop(float x, float y, int button = 0);
 
   /// A drag offering files is over this surface at `x`,`y`, or has left it.
   /// See `DragOver` in `draw_command.hpp`. The drop itself is still

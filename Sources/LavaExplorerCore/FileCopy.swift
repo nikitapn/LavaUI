@@ -24,6 +24,23 @@ public struct CopyPlan: Equatable, Sendable {
         /// folder it was dropped on, which is when Explorer moves too. A move
         /// there is a rename — instant, and nothing is left behind twice.
         public var moves: Bool = false
+        /// Must end up moved even where a rename cannot do it: Cut and Paste,
+        /// or Move Here, to another disk. Copied, then the original removed.
+        public var mustMove: Bool = false
+        /// Copied into the folder it is already in — Copy and Paste in place.
+        /// Always under a free name; there is nothing to ask about.
+        public var duplicates: Bool = false
+    }
+
+    /// What a plan does with each item.
+    public enum Mode: Equatable, Sendable {
+        /// Copied, always.
+        case copy
+        /// Moved, always — across disks too.
+        case move
+        /// Explorer's rule for a plain drop: moved on the same filesystem as
+        /// the target, copied otherwise.
+        case byDevice
     }
 
     public enum Refusal: Equatable, Sendable {
@@ -51,8 +68,22 @@ public struct CopyPlan: Equatable, Sendable {
         moveWithinDevice: Bool = false,
         deviceOf: (String) -> UInt64? = TrashCan.device(of:)
     ) -> CopyPlan {
+        make(
+            sources: sources, into: directory, source: files,
+            mode: moveWithinDevice ? .byDevice : .copy, deviceOf: deviceOf
+        )
+    }
+
+    /// `duplicateInPlace`: a `.copy` into the folder an item is already in
+    /// makes a second one under a free name — Paste, and Copy Here — rather
+    /// than being refused as a drop let go of where it was picked up.
+    public static func make(
+        sources: [String], into directory: String, source files: any FileSource,
+        mode: Mode, duplicateInPlace: Bool = false,
+        deviceOf: (String) -> UInt64? = TrashCan.device(of:)
+    ) -> CopyPlan {
         let target = CopyPaths.normalize(directory)
-        let targetDevice = moveWithinDevice ? deviceOf(target) : nil
+        let targetDevice = mode == .byDevice ? deviceOf(target) : nil
         var plan = CopyPlan(directory: target, items: [], refused: [])
         var seen = Set<String>()
         var names = Set<String>()
@@ -63,7 +94,9 @@ public struct CopyPlan: Equatable, Sendable {
                 plan.refused.append(.missing(path))
                 continue
             }
-            if CopyPaths.normalize((path as NSString).deletingLastPathComponent) == target {
+            let inPlace =
+                CopyPaths.normalize((path as NSString).deletingLastPathComponent) == target
+            if inPlace, !(mode == .copy && duplicateInPlace) {
                 plan.refused.append(.alreadyThere(path))
                 continue
             }
@@ -72,13 +105,25 @@ public struct CopyPlan: Equatable, Sendable {
                 continue
             }
             let name = (path as NSString).lastPathComponent
+            if inPlace {
+                // Its own name is taken by itself; that is not a clash to ask
+                // about, just a copy that needs a name of its own.
+                plan.items.append(
+                    Item(
+                        source: path, name: name, isDirectory: entry.isDirectory,
+                        clashes: false, duplicates: true
+                    )
+                )
+                continue
+            }
             let taken = files.exists(CopyPaths.join(target, name)) || names.contains(name)
             names.insert(name)
-            let moves = targetDevice != nil && deviceOf(path) == targetDevice
+            let moves = mode == .move
+                || (targetDevice != nil && deviceOf(path) == targetDevice)
             plan.items.append(
                 Item(
                     source: path, name: name, isDirectory: entry.isDirectory,
-                    clashes: taken, moves: moves
+                    clashes: taken, moves: moves, mustMove: mode == .move
                 )
             )
         }
@@ -166,30 +211,30 @@ public enum FileCopier {
                 continue
             }
             do {
-                // Asked again rather than read off the plan: the disk may
-                // have changed since, and an earlier item in this drop can
-                // have taken the name.
-                guard fileManager.fileExists(atPath: destination) else {
-                    try fileManager.copyItem(atPath: item.source, toPath: destination)
-                    outcome.copied += 1
-                    outcome.created.append(destination)
+                guard let written = try copy(
+                    item, to: destination, clashes: choice, plan: plan,
+                    fileManager: fileManager
+                ) else {
+                    outcome.skipped += 1
                     continue
                 }
-                switch choice {
-                case .skip:
-                    outcome.skipped += 1
-                case .keepBoth:
-                    let name = CopyNaming.keepBoth(
-                        item.name, isDirectory: item.isDirectory, in: plan.directory,
-                        exists: { fileManager.fileExists(atPath: $0) }
-                    )
-                    let copy = CopyPaths.join(plan.directory, name)
-                    try fileManager.copyItem(atPath: item.source, toPath: copy)
+                guard item.mustMove else {
                     outcome.copied += 1
-                    outcome.created.append(copy)
-                case .replace:
-                    try replace(source: item.source, destination: destination, fileManager: fileManager)
+                    if written.isNew { outcome.created.append(written.path) }
+                    continue
+                }
+                // A move to another disk: the copy is whole, so the original
+                // can go. If it will not, the copy stays and says why.
+                do {
+                    try fileManager.removeItem(atPath: item.source)
+                } catch {
                     outcome.copied += 1
+                    if written.isNew { outcome.created.append(written.path) }
+                    throw error
+                }
+                outcome.moved += 1
+                if written.isNew {
+                    outcome.moves.append(FileMove(from: item.source, to: written.path))
                 }
             } catch let error as FileAccessError {
                 outcome.failures.append(error)
@@ -200,6 +245,37 @@ public enum FileCopier {
             }
         }
         return outcome
+    }
+
+    /// Copies one item; nil when it was skipped. `isNew` is false for a
+    /// replacement, which Undo cannot take back.
+    private static func copy(
+        _ item: CopyPlan.Item, to destination: String, clashes choice: ClashChoice,
+        plan: CopyPlan, fileManager: FileManager
+    ) throws -> (path: String, isNew: Bool)? {
+        // Asked again rather than read off the plan: the disk may have
+        // changed since, and an earlier item in this drop can have taken the
+        // name.
+        let taken = item.duplicates || fileManager.fileExists(atPath: destination)
+        guard taken else {
+            try fileManager.copyItem(atPath: item.source, toPath: destination)
+            return (destination, true)
+        }
+        switch item.duplicates ? .keepBoth : choice {
+        case .skip:
+            return nil
+        case .keepBoth:
+            let name = CopyNaming.keepBoth(
+                item.name, isDirectory: item.isDirectory, in: plan.directory,
+                exists: { fileManager.fileExists(atPath: $0) }
+            )
+            let copy = CopyPaths.join(plan.directory, name)
+            try fileManager.copyItem(atPath: item.source, toPath: copy)
+            return (copy, true)
+        case .replace:
+            try replace(source: item.source, destination: destination, fileManager: fileManager)
+            return (destination, false)
+        }
     }
 
     /// Moves one item. False when it turned out not to be movable after all —

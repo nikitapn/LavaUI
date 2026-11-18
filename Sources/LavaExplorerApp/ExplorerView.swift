@@ -17,12 +17,15 @@ enum PaneChrome {
 /// Places on the left; on the right, one or more panes, each a browser of its
 /// own — tabs, an address bar and a details list. Drag a tab to the edge of a
 /// pane to split it, or into another pane to move it there. Drag a file onto
-/// a folder, a pane, a tab or a place to copy it there.
+/// a folder, a pane, a tab or a place to copy it there; drag it with the
+/// right button to be asked whether to copy or move it.
 struct ExplorerView: View {
     @Bindable var session: ExplorerSession
 
     var body: some View {
-        VStack(flexGrow: 1, padding: 0, spacing: 0) {
+        let dropX = session.dropMenu?.x ?? 0
+        let dropY = session.dropMenu?.y ?? 0
+        return VStack(flexGrow: 1, padding: 0, spacing: 0) {
             HSplitView(
                 fraction: $session.sidebarFraction,
                 minLeading: 140,
@@ -67,6 +70,29 @@ struct ExplorerView: View {
         .background(Theme.current.background)
         .onDrop { urls in session.acceptDrop(urls) }
         .overlayLayer { TabGhost(session: session) }
+        .overlayLayer { RightDragGhost(session: session) }
+        .overlay(
+            isPresented: Binding(
+                get: { session.dropMenu != nil },
+                set: { shown in if !shown { session.resolveDropMenu(nil) } }
+            ),
+            placement: OverlayPlacement { [dropX, dropY] context in
+                let width = context.idealSize.width
+                let height = context.idealSize.height
+                let x = min(max(0, dropX), max(0, context.viewport.width - width))
+                let y = min(max(0, dropY), max(0, context.viewport.height - height))
+                return OverlayFrame(x: x, y: y, width: width, height: height)
+            },
+            style: {
+                var style = MenuBarStyle.standard(theme: Theme.current).overlayStyle
+                style.minWidth = 200
+                return style
+            }()
+        ) {
+            if let menu = session.dropMenu {
+                DropChoiceMenu(session: session, menu: menu)
+            }
+        }
     }
 }
 
@@ -192,6 +218,59 @@ private struct DropOutline: View {
             list.strokedRect(
                 x: x, y: y, w: w, h: h, color: theme.accent.opacity(0.7), radius: 6, width: 2
             )
+        }
+    }
+}
+
+/// Rows carried with the right button where no compositor can carry them
+/// (windowed): the same plate `FileDragChip` is, drawn beside the pointer.
+/// In client mode the compositor draws the chip and this is never up.
+private struct RightDragGhost: View {
+    @Bindable var session: ExplorerSession
+
+    var body: some View {
+        let drag = session.rightDrag
+        return Canvas(label: "right-drag-ghost", width: .pct(100), height: .pct(100)) { list, frame in
+            guard let drag, let first = drag.paths.first else { return }
+            let theme = Theme.current
+            let font = FontStore.default
+            let lineHeight = font?.lineHeight ?? 16
+            let pointer = PointerState.window
+            let name = (first as NSString).lastPathComponent
+            let others = drag.paths.count - 1
+            let badge = others > 0 ? "+\(others)" : ""
+            // A little over the measured width: a run is drawn a few pixels
+            // wider than it shapes, and an exact clip takes its last letter.
+            let nameW = min(220, (font?.measure(name).width ?? Float(name.count) * 7) + 6)
+            let badgeTextW = (font?.measure(badge).width ?? 16) + 6
+            let badgeW: Float = badge.isEmpty ? 0 : badgeTextW + 8 + 8
+            let w = 8 + 16 + 8 + nameW + badgeW + 8
+            let h = lineHeight + 16
+            let x = min(max(frame.x, pointer.x + 16), frame.x + frame.w - w - 4)
+            let y = min(max(frame.y, pointer.y + 12), frame.y + frame.h - h - 4)
+            list.roundedRect(x: x, y: y, w: w, h: h, color: theme.panel.opacity(0.95), radius: 6)
+            list.strokedRect(
+                x: x, y: y, w: w, h: h,
+                color: drag.paneID == nil ? theme.border : theme.accent, radius: 6, width: 1
+            )
+            let ty = y + (h - lineHeight) * 0.5
+            list.text(
+                drag.isDirectory ? "▣" : "▤", x: x + 8, y: ty, w: 16, h: lineHeight,
+                color: drag.isDirectory ? theme.accent : theme.textDim, font: font
+            )
+            list.pushClip(x: x + 32, y: y, w: nameW, h: h)
+            list.text(name, x: x + 32, y: ty, w: nameW, h: lineHeight, color: theme.textPrimary, font: font)
+            list.popClip()
+            if !badge.isEmpty {
+                let bx = x + 32 + nameW + 8
+                list.roundedRect(
+                    x: bx, y: ty, w: badgeW - 8, h: lineHeight, color: theme.accent, radius: 8
+                )
+                list.text(
+                    badge, x: bx + 4, y: ty, w: badgeTextW, h: lineHeight,
+                    color: theme.textPrimary, font: font
+                )
+            }
         }
     }
 }
@@ -1079,6 +1158,7 @@ private struct FilePane: View {
         .overlayLayer {
             DropOutline(
                 active: session.dropHover == .pane(paneID) || session.remoteDrag?.paneID == paneID
+                    || session.rightDrag?.paneID == paneID
             )
         }
     }
@@ -1346,7 +1426,7 @@ private struct FileRow: View {
 
     private func pointer(_ mods: Int32, _ button: Int32) {
         if button == PointerButton.right {
-            session.openContext(entry)
+            session.rightPress(entry)
             return
         }
         // Middle-click opens a folder in a new tab, as in a browser;
@@ -1487,10 +1567,22 @@ private struct FileRow: View {
     private func dragged<Content: View>(_ content: Content) -> some View {
         if RemoteURL.isRemote(entry.path) {
             content.onDragGesture { value in session.dragRemote(entry, value) }
-        } else {
-            content.onFileDrag(paths: { session.dragPaths(for: entry) }) {
+        } else if DragBridge.startFileDrag != nil {
+            // Either button: the compositor carries the drag on whichever
+            // started it, to this window or any other, and a right-button
+            // drop asks whether to copy or move (`DropRouter.button`).
+            content.onFileDrag(
+                buttons: [PointerButton.left, PointerButton.right],
+                paths: { session.dragPaths(for: entry) }
+            ) {
                 // Built after `paths`, so it knows how many went with this row.
                 FileDragChip(entry: entry, others: max(0, session.ownDrag.count - 1))
+            }
+        } else {
+            // Windowed: no compositor to carry a drag, so the right button
+            // carries the rows inside the window, to another pane.
+            content.onDragGesture(button: PointerButton.right) { value in
+                session.dragRight(entry, value)
             }
         }
     }
@@ -1562,10 +1654,51 @@ private struct FileDragChip: View {
     }
 }
 
-/// Right-click menu. Open / Open With / Set Default, Rename, Move to Trash
-/// and Delete Permanently are real; copy, cut and paste are labelled
-/// stubs — they set a notice rather than touching the disk. In the Trash it
-/// is Restore and Delete Permanently instead.
+/// What a right-drag let go of over a pane does: copy or move into the
+/// folder it shows. Move is offered only where it means something — not into
+/// the folder the rows are already in, not onto a server.
+private struct DropChoiceMenu: View {
+    @Bindable var session: ExplorerSession
+    let menu: ExplorerSession.DropMenu
+
+    var body: some View {
+        let count = menu.paths.count
+        let what = count > 1 ? " \(count) Items" : ""
+        var entries: [MenuEntry] = []
+        if menu.toTrash {
+            entries.append(.item(MenuItemModel(
+                id: MenuID("drop.move"), title: "Move\(what) to Trash"
+            )))
+        } else {
+            entries.append(.item(MenuItemModel(
+                id: MenuID("drop.copy"),
+                title: menu.toServer ? "Upload\(what) Here" : "Copy\(what) Here"
+            )))
+            entries.append(.item(MenuItemModel(
+                id: MenuID("drop.move"), title: "Move\(what) Here",
+                isEnabled: !menu.toServer && !menu.inPlace
+            )))
+        }
+        entries.append(.separator)
+        entries.append(.item(MenuItemModel(id: MenuID("drop.cancel"), title: "Cancel")))
+        return MenuDropdownPanel(
+            entries: entries,
+            onActivate: { id in
+                switch id.raw {
+                case "drop.copy": session.resolveDropMenu(.copy)
+                case "drop.move": session.resolveDropMenu(.move)
+                default: session.resolveDropMenu(nil)
+                }
+            },
+            style: .standard(theme: Theme.current)
+        )
+        .agentId("drop-menu")
+    }
+}
+
+/// Right-click menu, opened on release. Open / Open With / Set Default,
+/// Copy, Cut and Paste, Rename, Move to Trash and Delete Permanently. In the
+/// Trash it is Restore and Delete Permanently instead.
 private struct FileContextMenu: View {
     @Bindable var session: ExplorerSession
     let entry: FileEntry
@@ -1618,7 +1751,11 @@ private struct FileContextMenu: View {
         items.append(.separator)
         items.append(.item(MenuItemModel(id: MenuID("ctx.copy"), title: "Copy")))
         items.append(.item(MenuItemModel(id: MenuID("ctx.cut"), title: "Cut")))
-        items.append(.item(MenuItemModel(id: MenuID("ctx.paste"), title: "Paste")))
+        items.append(.item(MenuItemModel(
+            id: MenuID("ctx.paste"),
+            title: entry.isDirectory ? "Paste Into Folder" : "Paste",
+            isEnabled: session.canPaste
+        )))
         items.append(.separator)
         items.append(.item(MenuItemModel(
             id: MenuID("ctx.rename"), title: many > 1 ? "Rename\(what)\u{2026}" : "Rename"

@@ -242,3 +242,88 @@ struct FileCopierTests {
         #expect(disk.read("to/album/raw/1.cr2") == "r")
     }
 }
+
+@Suite("Copy, Cut and Paste")
+struct ClipboardCopyTests {
+    @Test("Copy into the folder it is in makes a second one under a free name")
+    func duplicateInPlace() throws {
+        let disk = try Scratch()
+        try disk.folder("here")
+        try disk.file("here/a.txt", "a")
+        try disk.folder("here/Pics")
+
+        let plan = CopyPlan.make(
+            sources: [disk.path("here/a.txt"), disk.path("here/Pics")],
+            into: disk.path("here"), source: LocalFileSource(), mode: .copy,
+            duplicateInPlace: true
+        )
+        #expect(plan.refused.isEmpty)
+        #expect(plan.clashes.isEmpty, "a duplicate has nothing to ask about")
+        let outcome = FileCopier.run(plan, clashes: .skip)
+        #expect(outcome.copied == 2)
+        #expect(disk.names("here") == ["Pics", "Pics (2)", "a (2).txt", "a.txt"])
+        #expect(outcome.created.count == 2)
+    }
+
+    @Test("Copy never moves, even on the same disk")
+    func copyStaysPut() throws {
+        let disk = try Scratch()
+        try disk.folder("from")
+        try disk.folder("to")
+        try disk.file("from/a.txt", "a")
+        let plan = CopyPlan.make(
+            sources: [disk.path("from/a.txt")], into: disk.path("to"),
+            source: LocalFileSource(), mode: .copy
+        )
+        let outcome = FileCopier.run(plan, clashes: .skip)
+        #expect(outcome.copied == 1 && outcome.moved == 0)
+        #expect(disk.read("from/a.txt") == "a")
+        #expect(disk.read("to/a.txt") == "a")
+    }
+
+    @Test("Move moves, whatever the device check says, and is not done in place")
+    func moveAlways() throws {
+        let disk = try Scratch()
+        try disk.folder("from")
+        try disk.folder("to")
+        try disk.file("from/a.txt", "a")
+        let plan = CopyPlan.make(
+            sources: [disk.path("from/a.txt")], into: disk.path("to"),
+            source: LocalFileSource(), mode: .move, deviceOf: { _ in nil }
+        )
+        #expect(plan.items.allSatisfy { $0.moves })
+        let outcome = FileCopier.run(plan, clashes: .skip)
+        #expect(outcome.moved == 1)
+        #expect(outcome.moves == [FileMove(from: disk.path("from/a.txt"), to: disk.path("to/a.txt"))])
+        #expect(disk.read("from/a.txt") == nil)
+
+        let inPlace = CopyPlan.make(
+            sources: [disk.path("to/a.txt")], into: disk.path("to"),
+            source: LocalFileSource(), mode: .move
+        )
+        #expect(inPlace.items.isEmpty)
+        #expect(inPlace.refused == [.alreadyThere(disk.path("to/a.txt"))])
+    }
+
+    @Test("Move to another filesystem copies, then removes the original")
+    func moveAcrossDisks() throws {
+        let disk = try Scratch()
+        let shm = "/dev/shm/lava-copy-\(UUID().uuidString)"
+        guard (try? FileManager.default.createDirectory(atPath: shm, withIntermediateDirectories: true)) != nil,
+              TrashCan.device(of: shm) != TrashCan.device(of: disk.root)
+        else { return }  // no second filesystem here to cross to
+        defer { try? FileManager.default.removeItem(atPath: shm) }
+        try disk.folder("from/Pics")
+        try disk.file("from/Pics/p.jpg", "p")
+
+        let plan = CopyPlan.make(
+            sources: [disk.path("from/Pics")], into: shm, source: LocalFileSource(), mode: .move
+        )
+        let outcome = FileCopier.run(plan, clashes: .skip)
+        #expect(outcome.failures.isEmpty)
+        #expect(outcome.moved == 1 && outcome.copied == 0)
+        #expect(outcome.moves == [FileMove(from: disk.path("from/Pics"), to: shm + "/Pics")])
+        #expect(!FileManager.default.fileExists(atPath: disk.path("from/Pics")))
+        #expect(FileManager.default.contents(atPath: shm + "/Pics/p.jpg") == Data("p".utf8))
+    }
+}

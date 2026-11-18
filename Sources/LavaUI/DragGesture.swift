@@ -46,6 +46,9 @@ public struct DragGestureValue: Equatable, Sendable {
 
 struct DragGestureEntry {
     let minimumDistance: Float
+    /// Which button's press this gesture follows. One gesture per button: a
+    /// row can be dragged out with the left and carried with the right.
+    var button: Int32 = PointerButton.left
     let perform: (DragGestureValue) -> Void
 }
 
@@ -54,24 +57,30 @@ struct DragGestureEntry {
 /// Process-wide rather than per window for the reason `PointerCapture` is:
 /// there is one pointer, and a press belongs to one window at a time.
 enum DragGestureRouter {
-    nonisolated(unsafe) private static var entries: [NodeID: DragGestureEntry] = [:]
+    nonisolated(unsafe) private static var entries: [NodeID: [Int32: DragGestureEntry]] = [:]
     nonisolated(unsafe) private static var pending: (entry: DragGestureEntry, x: Float, y: Float)?
     nonisolated(unsafe) private static var active: (entry: DragGestureEntry, x: Float, y: Float)?
 
-    static func register(_ id: NodeID, _ entry: DragGestureEntry) { entries[id] = entry }
+    static func register(_ id: NodeID, _ entry: DragGestureEntry) {
+        entries[id, default: [:]][entry.button] = entry
+    }
 
     static func unregisterAll(ids: Set<NodeID>) {
         for id in ids { entries[id] = nil }
     }
 
-    static func hasGesture(_ id: NodeID) -> Bool { entries[id] != nil }
+    static func hasGesture(_ id: NodeID, button: Int32 = PointerButton.left) -> Bool {
+        entries[id]?[button] != nil
+    }
 
     static var isActive: Bool { active != nil }
 
     /// A press went down on `source`, or on nothing that drags.
-    static func press(source: NodeID?, x: Float, y: Float) {
+    static func press(
+        source: NodeID?, button: Int32 = PointerButton.left, x: Float, y: Float
+    ) {
         active = nil
-        pending = source.flatMap { entries[$0] }.map { ($0, x, y) }
+        pending = source.flatMap { entries[$0]?[button] }.map { ($0, x, y) }
     }
 
     /// True when this move belongs to a gesture and nothing else should see
@@ -187,12 +196,14 @@ public struct BoxRegistrationView<Content: View>: PrimitiveView {
 }
 
 extension LayoutHost {
-    /// The nearest `.onDragGesture` at this point, walking outwards.
+    /// The nearest `.onDragGesture` for `button` at this point, walking
+    /// outwards.
     public func dragGestureSource(
-        x: Float, y: Float, originX: Float = 0, originY: Float = 0
+        x: Float, y: Float, originX: Float = 0, originY: Float = 0,
+        button: Int32 = PointerButton.left
     ) -> NodeID? {
         hitTestScrollChain(x: x, y: y, originX: originX, originY: originY)
-            .first { DragGestureRouter.hasGesture($0) }
+            .first { DragGestureRouter.hasGesture($0, button: button) }
     }
 
     /// Every `.onAnyPress` containing this point, innermost first.
@@ -205,10 +216,10 @@ extension LayoutHost {
 }
 
 extension View {
-    /// Runs `perform` as a left press on this view travels: `.began` once it
-    /// has moved `minimumDistance` pixels, `.changed` on every move after —
-    /// wherever the pointer goes, including out of the view — and `.ended` on
-    /// release.
+    /// Runs `perform` as a press of `button` (left unless said otherwise) on
+    /// this view travels: `.began` once it has moved `minimumDistance`
+    /// pixels, `.changed` on every move after — wherever the pointer goes,
+    /// including out of the view — and `.ended` on release.
     ///
     /// The press still goes to whatever is under it first, so a tab that
     /// selects on press and moves on drag is two modifiers, not a gesture that
@@ -217,14 +228,17 @@ extension View {
     /// else captures — a slider inside it — never becomes this gesture.
     public func onDragGesture(
         minimumDistance: Float = 6,
+        button: Int32 = PointerButton.left,
         perform: @escaping (DragGestureValue) -> Void
     ) -> BoxRegistrationView<Self> {
         BoxRegistrationView(
-            label: "DragGesture",
+            label: button == PointerButton.left ? "DragGesture" : "DragGesture\(button)",
             register: {
                 DragGestureRouter.register(
                     $0.id,
-                    DragGestureEntry(minimumDistance: minimumDistance, perform: perform)
+                    DragGestureEntry(
+                        minimumDistance: minimumDistance, button: button, perform: perform
+                    )
                 )
             },
             content: self
@@ -274,7 +288,8 @@ extension View {
 extension View {
     /// No-op without Yoga (stubs).
     public func onDragGesture(
-        minimumDistance: Float = 6, perform: @escaping (DragGestureValue) -> Void
+        minimumDistance: Float = 6, button: Int32 = PointerButton.left,
+        perform: @escaping (DragGestureValue) -> Void
     ) -> Self { self }
 
     /// No-op without Yoga (stubs).

@@ -47,4 +47,12 @@ wlr_drag *start_file_drag(wlr_seat *seat, wl_display *display,
                           uint32_t timeMsec,
                           const std::vector<std::string> &paths);
 
+/// The button that started `source`, numbered from zero as Lava numbers them
+/// (0 left, 1 right), when `source` is one `start_file_drag` made; -1 for
+/// any other — a foreign client's drag, which says nothing about buttons.
+///
+/// What lets a right-drag between Lava windows ask "copy or move?" where it
+/// lands, the way it does inside one window: the drop event carries it.
+int file_drag_button(const wlr_data_source *source);
+
 }  // namespace lava

@@ -565,11 +565,27 @@ public enum DropRouter {
     /// consumed — a caller can use this to decide whether to fall back to
     /// some other drop behavior (or none).
     @discardableResult
-    public static func deliver(to target: NodeID?, paths: [String]) -> Bool {
+    public static func deliver(
+        to target: NodeID?, paths: [String], button: Int32 = PointerButton.left,
+        x: Float = 0, y: Float = 0
+    ) -> Bool {
         guard let target, let handler = handlers[target] else { return false }
+        Self.button = button
+        point = (x, y)
+        defer { Self.button = PointerButton.left }
         handler(paths)
         return true
     }
+
+    /// The button that carried the drop being delivered, for an `.onDrop`
+    /// handler to read: right for a right-drag out of a Lava window, which
+    /// a file manager answers with a menu rather than a copy. Left for every
+    /// other drop, foreign drags included — Wayland says nothing of buttons.
+    /// Left again once the handler returns.
+    nonisolated(unsafe) public private(set) static var button: Int32 = PointerButton.left
+
+    /// Where in the window the drop being delivered landed.
+    nonisolated(unsafe) public private(set) static var point: (x: Float, y: Float) = (0, 0)
 }
 
 /// Multi-click detection. Kept here rather than in the field so any control

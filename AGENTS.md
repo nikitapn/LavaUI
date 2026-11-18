@@ -649,7 +649,7 @@ reproducible, completely fictional bug.
 | `LAVA_IMAGE_BUDGET_MB=N` | Any canvas process: ceiling for standalone image textures, in use and dormant together (default 512) |
 | `LAVA_IMAGE_CACHE_MB=N` | The dormant half of that — the most held on spec when there is room (default 256) |
 | `LAVA_IMAGE_SPECULATION=0`/`1` | Pins the dormant half off/on instead of following the screens. A test lever — see `Server::syncImageSpeculation` |
-| `LAVA_TEST_DROP=a:b:c` | Compositor: files that `kill -USR1` delivers as a synthetic file drop. A Wayland drag needs a real pointer press on a real device, which headless has not — see `Server::deliverTestDrop` |
+| `LAVA_TEST_DROP=a:b:c` | Compositor: files that `kill -USR1` delivers as a synthetic file drop. A Wayland drag needs a real pointer press on a real device, which headless has not — see `Server::deliverTestDrop`. `LAVA_TEST_DROP_BUTTON=1` makes it a right-button drop |
 | `LAVA_MSAA=N` | Any canvas process: cap multisampling at N (1/2/4/8). Overrides `[render] msaa`; the way to A/B a session without a rebuild |
 | `LAVA_SCROLL_EASING=N` | Any canvas process: how long a wheel scroll takes to settle, in ms (`off`/0: each notch lands in one frame). Overrides `[render] scroll-easing` (default 75) |
 | `LAVA_FULL_DAMAGE=1` | Compositor: damage a Lava surface's whole buffer on every frame, as before, instead of only the tiles whose submitted quads changed (`canvas::FrameDamage`). The A/B for stale pixels; pair with `WLR_SCENE_DEBUG_DAMAGE=highlight` to see what each frame recomposites |

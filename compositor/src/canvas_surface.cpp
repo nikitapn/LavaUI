@@ -724,9 +724,9 @@ void CanvasSurface::keyEvent(int key, int action, int mods) {
   renderer_.engine().keyEvent(key, action, mods, windowId_);
 }
 
-void CanvasSurface::fileDrop(float x, float y) {
+void CanvasSurface::fileDrop(float x, float y, int button) {
   renderer_.engine().postInputEvent(
-      static_cast<uint32_t>(canvas::InputEventKind::FileDrop), x, y, 0, 0,
+      static_cast<uint32_t>(canvas::InputEventKind::FileDrop), x, y, button, 0,
       windowId_);
 }
 

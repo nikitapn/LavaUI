@@ -16,6 +16,8 @@ namespace {
 struct FileDragSource {
   wlr_data_source base{};
   std::string uriList;
+  /// Linux code of the button the drag started on. See `file_drag_button`.
+  uint32_t button = 0;
   wl_event_loop *loop = nullptr;
   /// The destroy `dnd_finish` deferred, while it is pending. See there.
   wl_event_source *reap = nullptr;
@@ -129,6 +131,7 @@ wlr_drag *start_file_drag(wlr_seat *seat, wl_display *display,
 
   auto *source = new FileDragSource();
   source->uriList = std::move(list);
+  source->button = button;
   source->loop = wl_display_get_event_loop(display);
   wlr_data_source_init(&source->base, &kFileDragImpl);
   char *mime = strdup("text/uri-list");
@@ -157,6 +160,13 @@ wlr_drag *start_file_drag(wlr_seat *seat, wl_display *display,
                                  WL_POINTER_BUTTON_STATE_PRESSED);
   wlr_seat_start_pointer_drag(seat, drag, wl_display_next_serial(display));
   return drag;
+}
+
+int file_drag_button(const wlr_data_source *source) {
+  if (source == nullptr || source->impl != &kFileDragImpl) return -1;
+  const uint32_t button =
+      reinterpret_cast<const FileDragSource *>(source)->button;
+  return button >= 0x110u ? static_cast<int>(button - 0x110u) : -1;
 }
 
 }  // namespace lava

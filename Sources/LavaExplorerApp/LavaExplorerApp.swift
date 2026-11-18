@@ -132,6 +132,13 @@ struct LavaExplorerApp {
                 MenuItem("Redo", id: "edit.redo") { session.redo() }
                 MenuSeparator()
                 MenuItem("Select All", id: "edit.select-all") { session.selectAll() }
+                // Ctrl+C, X and V are in `keys`: in the address bar they are
+                // the field's own.
+                MenuItem("Cut", id: "edit.cut") { session.copyToClipboard(cut: true) }
+                MenuItem("Copy", id: "edit.copy") { session.copyToClipboard(cut: false) }
+                MenuItem("Paste", id: "edit.paste", isEnabled: session.canPaste) {
+                    session.paste()
+                }
                 MenuItem("Copy Path", id: "edit.copy-path") {
                     session.copySelectedPath()
                 }
@@ -300,6 +307,12 @@ struct LavaExplorerApp {
             session.setViewMode(.icons)
         case KeyCode.a where control && !typing:
             session.selectAll()
+        case KeyCode.c where control && !shift && !typing:
+            session.copyToClipboard(cut: false)
+        case KeyCode.x where control && !typing:
+            session.copyToClipboard(cut: true)
+        case KeyCode.v where control && !typing:
+            session.paste()
         case KeyCode.f2 where !typing:
             session.startRename()
         case KeyCode.f4 where shift && !typing:

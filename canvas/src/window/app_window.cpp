@@ -613,7 +613,10 @@ void AppWindow::installGlfwCallbacks()
       ev.kind = static_cast<uint32_t>(canvas::InputEventKind::FileDrop);
       ev.x = static_cast<float>(x);
       ev.y = static_cast<float>(y);
-      ev.button = count;
+      // The button that carried the drag, as the compositor reports it for a
+      // drag one Lava window started. GLFW knows none, and an OS drag here is
+      // somebody else's: a left one, a plain drop.
+      ev.button = 0;
       {
         std::lock_guard lock(self->inputMu_);
         // Overwritten by the next drop, same as every other "pull the

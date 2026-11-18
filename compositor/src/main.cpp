@@ -14705,6 +14705,9 @@ struct DropRead {
   Server *server = nullptr;
   uint32_t surfaceId = 0;
   float x = 0.f, y = 0.f;
+  /// What carried the drag, read off the source at the release: by the time
+  /// the list has been read, the drag and its source may both be gone.
+  int button = 0;
   int fd = -1;
   wl_event_source *readable = nullptr;
   wl_event_source *deadline = nullptr;
@@ -14729,7 +14732,7 @@ void finish_drop_read(DropRead *read, bool deliver) {
         // The event last, so the paths are already waiting when the client
         // asks for them — it asks the moment it sees this.
         if (onto->canvas) {
-          onto->canvas->fileDrop(read->x, read->y);
+          onto->canvas->fileDrop(read->x, read->y, read->button);
           read->server->surfaces->pump(*onto);
         }
       }
@@ -14801,6 +14804,7 @@ void Server::beginDropRead(ClientSurface &onto, float x, float y) {
   read->surfaceId = onto.id;
   read->x = x;
   read->y = y;
+  read->button = std::max(0, lava::file_drag_button(source));
   read->fd = fds[0];
 
   wl_event_loop *loop = wl_display_get_event_loop(display);
@@ -14861,7 +14865,12 @@ void Server::deliverTestDrop() {
   wlr_log(WLR_INFO, "test drop: %zu file(s) on surface %u", paths.size(),
           onto->id);
   surfaces->queueDrop(onto->id, std::move(paths));
-  onto->canvas->fileDrop(static_cast<float>(sx), static_cast<float>(sy));
+  // `LAVA_TEST_DROP_BUTTON=1` makes it a right-button drop, as a right-drag
+  // out of a Lava window would be — the half of that a headless session can
+  // reach, since starting a real drag needs a real button held.
+  const char *button = std::getenv("LAVA_TEST_DROP_BUTTON");
+  onto->canvas->fileDrop(static_cast<float>(sx), static_cast<float>(sy),
+                         button != nullptr ? std::atoi(button) : 0);
   surfaces->pump(*onto);
 }
 
