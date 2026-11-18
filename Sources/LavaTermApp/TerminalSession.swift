@@ -55,7 +55,7 @@ public final class TerminalSession: @unchecked Sendable {
 
     public init() {}
 
-    public func start() {
+    public func start(onExit: @escaping @Sendable () -> Void) {
         statusLine = "opening PTY…"
         // Seed the chrome with this process's cwd — the shell usually starts
         // there, and OSC 7 will refine it once the shell reports in.
@@ -75,6 +75,7 @@ public final class TerminalSession: @unchecked Sendable {
                     self.exitCode = code
                     self.statusLine = "shell exited (\(code))"
                     self.bump()
+                    onExit()
                 }
             }
         )

@@ -216,12 +216,15 @@ public final class PtySession: @unchecked Sendable {
 
         var status: Int32 = 0
         lock.lock()
-        let pid = childPid
-        isRunning = false
-        lock.unlock()
-        if pid > 0 {
-            _ = waitpid(pid, &status, WNOHANG)
+        guard isRunning else {
+            lock.unlock()
+            return
         }
+        isRunning = false
+        if childPid > 0, waitpid(childPid, &status, WNOHANG) == childPid {
+            childPid = -1
+        }
+        lock.unlock()
         let code = (status & 0xff00) >> 8
         onExit(Int32(code))
     }

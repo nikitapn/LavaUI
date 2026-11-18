@@ -88,7 +88,9 @@ guard let mono else {
 
 let session = TerminalSession()
 FrameTasks.after {
-    session.start()
+    session.start {
+        LavaApp.closeWindow(.main)
+    }
 }
 
 let menu = {
