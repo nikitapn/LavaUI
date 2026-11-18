@@ -423,10 +423,15 @@ Consequences that surprise people:
   one call that is not microseconds — a 24-megapixel JPEG held the loop for
   609 ms, with no window drawing. So `Compositor.GetImages` hands out an
   `Images` object living on a second POA with no executor: its
-  `RegisterImage` / `RegisterImageData` run on the RPC pool and visit the loop
-  only to look up and to upload (`ImagesImpl`, `LoopQueue::call`), which
-  brought the same photo to 70–100 ms — the upload of 96 MB of RGBA, which is
-  what is left. Leases, ids and `ReleaseImage` are shared with `Compositor`.
+  `RegisterImage` / `RegisterImageData` / `UploadPixels` run on the RPC pool
+  and visit the loop only to look up and to file the result (`ImagesImpl`,
+  `LoopQueue::call`). The upload is on the worker too now
+  (`TextureManager::prepareTexture`, adopted by the `uploadTexture` that
+  follows on the loop): it was the 30–65 ms of a 12-megapixel photo and the
+  300 ms of a large SVG that every window waited behind, and a viewer reading
+  its neighbours ahead queued two more behind each picture. The loop's share
+  is now under 0.1 ms. Atlas-sized images still upload on the loop — a copy
+  into an existing page. Leases, ids and `ReleaseImage` are shared with `Compositor`.
   `CompositorResources` uses it, and falls back to `Compositor` against a
   compositor too old to have it. A new call that does real work belongs on
   that POA, not on `Compositor`.

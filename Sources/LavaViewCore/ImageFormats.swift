@@ -34,6 +34,32 @@ public enum ImageFormats {
         extensions.contains(ext.lowercased())
     }
 
+    /// Longest edge a raster picture is decoded at for display: a ceiling,
+    /// never reached by anything smaller. Not a quality decision — a device
+    /// limit. `maxImageDimension2D` is 16384 on every desktop GPU and 4096 is
+    /// all Vulkan guarantees; 8192 is comfortably inside every real limit and
+    /// past any display.
+    public static let rasterDecodeSide: UInt32 = 8192
+
+    /// Longest edge a vector picture is drawn at for display.
+    ///
+    /// For an SVG the decoder's size is not a ceiling but the size it draws
+    /// at — a vector has no pixels of its own to be capped. Handed the raster
+    /// ceiling, every SVG became an 8192-pixel square: 256 MiB, 120–170 ms to
+    /// draw and 165–300 ms to upload, for a file that might be an icon. This
+    /// fills a 4K screen's height, which is the most a fitted picture is ever
+    /// drawn at; zoom past that and it is scaled up like a photograph would be.
+    public static let vectorDecodeSide: UInt32 = 2560
+
+    public static func isVector(path: String) -> Bool {
+        (path as NSString).pathExtension.lowercased() == "svg"
+    }
+
+    /// The size to ask the decoder for when showing `path`.
+    public static func displayDecodeSide(for path: String) -> UInt32 {
+        isVector(path: path) ? vectorDecodeSide : rasterDecodeSide
+    }
+
     /// Filters for `FileDialog.openFile`.
     public static var dialogExtensions: [String] {
         extensions.sorted()

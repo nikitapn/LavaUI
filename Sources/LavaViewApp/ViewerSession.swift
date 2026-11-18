@@ -15,20 +15,17 @@ import Observation
 /// is written only by the thread that draws.
 @Observable
 final class ViewerSession: @unchecked Sendable {
-    /// Longest edge the *display* texture is decoded at.
-    ///
-    /// Not a quality decision — a device limit. `maxImageDimension2D` is 16384
-    /// on every desktop GPU and 4096 is all Vulkan guarantees; a 20000-pixel
-    /// panorama decoded natively fails the upload and shows nothing at all,
-    /// which is exactly the failure an image viewer must not have. 8192 is
-    /// comfortably inside every real limit and past any display.
+    /// Longest edge the *display* texture is decoded at: the raster ceiling,
+    /// or the size an SVG is drawn at — see `ImageFormats.displayDecodeSide`.
     ///
     /// Saving does **not** go through this. A rotate-and-save decodes the file
     /// again at native size, so what gets written is never the capped copy
     /// that was on screen. `Original size` on a picture longer than this is
     /// therefore 100% of what is held rather than of what is on disk — the
     /// status bar says so by reporting both numbers.
-    static let displayDecodeSide: UInt32 = 8192
+    static func displayDecodeSide(for path: String) -> UInt32 {
+        ImageFormats.displayDecodeSide(for: path)
+    }
 
     enum Status: Equatable {
         case ready
@@ -180,7 +177,10 @@ final class ViewerSession: @unchecked Sendable {
         guard displaySize.width >= 1, displaySize.height >= 1 else { return "" }
         let w = Int(displaySize.width)
         let h = Int(displaySize.height)
-        let capped = max(w, h) >= Int(Self.displayDecodeSide)
+        // An SVG's size is the one it was drawn at, which is a choice and not
+        // a cap on anything in the file.
+        let vector = folder.current.map { ImageFormats.isVector(path: $0) } ?? false
+        let capped = !vector && max(w, h) >= Int(ImageFormats.rasterDecodeSide)
         return "\(capped ? "~" : "")\(w) × \(h)"
     }
 
@@ -231,10 +231,10 @@ final class ViewerSession: @unchecked Sendable {
         // Asked *before* `imageIfLoaded`, which starts a decode and would make
         // the answer yes whatever the truth was a moment ago.
         let wasDecoding = ImageStore.isLoading(
-            path: path, maxPixelSize: Self.displayDecodeSide, turn: quarter
+            path: path, maxPixelSize: Self.displayDecodeSide(for: path), turn: quarter
         )
         if let image = ImageStore.imageIfLoaded(
-            path: path, maxPixelSize: Self.displayDecodeSide, turn: quarter,
+            path: path, maxPixelSize: Self.displayDecodeSide(for: path), turn: quarter,
             into: editor
         ) {
             adopt(image)
@@ -400,7 +400,8 @@ final class ViewerSession: @unchecked Sendable {
                       self.writtenBack[path] == nil
                 else { continue }
                 _ = ImageStore.imageIfLoaded(
-                    path: path, maxPixelSize: Self.displayDecodeSide, into: self.editor
+                    path: path, maxPixelSize: Self.displayDecodeSide(for: path),
+                    into: self.editor
                 )
             }
         }

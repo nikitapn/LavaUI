@@ -14,6 +14,7 @@
 #include "render/font_key.hpp"
 #include "render/png_encode.hpp"
 #include "render/svg_image.hpp"
+#include "render/texture_manager.hpp"
 #include "window/canvas_window.hpp"
 
 #define GLFW_INCLUDE_NONE
@@ -814,6 +815,18 @@ int Engine::uploadTexture(const std::string &key, const uint8_t *rgba,
     id = app.uploadTexture(key, rgba, width, height);
   });
   return id;
+}
+
+bool Engine::prepareTexture(const std::string &key, const DecodedImage &image)
+{
+  if (!image.valid()) return false;
+  return TextureManager::getInstance().prepareTexture(
+    key, image.pixels.data(), image.width, image.height);
+}
+
+void Engine::dropPreparedTexture(const std::string &key)
+{
+  TextureManager::getInstance().dropPrepared(key);
 }
 
 int Engine::uploadTexture(const std::string &key, const U8Vector &rgba,

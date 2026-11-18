@@ -463,6 +463,14 @@ class Engine {
   /// Uploads pre-decoded pixels under `key`. Device thread only.
   int uploadTexture(const std::string &key, const uint8_t *rgba,
                     uint32_t width, uint32_t height);
+
+  /// Does the expensive half of `uploadTexture(key, image)` on the calling
+  /// thread — any thread — so that call, made next on the device thread, only
+  /// files the result. Pair it with `dropPreparedTexture(key)` after that
+  /// call, which frees the texture if it was never adopted. See
+  /// `TextureManager::prepareTexture`.
+  static bool prepareTexture(const std::string &key, const DecodedImage &image);
+  static void dropPreparedTexture(const std::string &key);
   int uploadTexture(const std::string &key, const U8Vector &rgba,
                     uint32_t width, uint32_t height);
 

@@ -241,7 +241,7 @@ void TextureManager::cleanUp() {
     std::cout << "TextureManager cleaning up " << textures_.size() << " textures\n";
     // Before any image goes: a frost blit may still be writing one.
     destroyBlitPoolLocked();
-    
+
     // Clean up all textures
     for (auto& [path, textureData] : textures_) {
         if (textureData && device_ && textureData->ownsImage) {
@@ -252,7 +252,10 @@ void TextureManager::cleanUp() {
             device_->destroyImage(textureData->image, textureData->allocation);
         }
     }
-    
+
+    for (auto& [key, prepared] : prepared_) destroyPreparedLocked(prepared);
+    prepared_.clear();
+
     atlas_.cleanUp();
     textures_.clear();
     textureById_.clear();
@@ -285,6 +288,32 @@ TextureHandle TextureManager::uploadTexture(const std::string& key,
         existing->second->lastUsed = ++useCounter_;
         return {existing->second->view, existing->second->id,
                 existing->second->uv0, existing->second->uv1};
+    }
+
+    // Built already by whoever decoded it: only the filing is left.
+    if (auto ready = prepared_.find(key); ready != prepared_.end()) {
+        PreparedTexture prepared = ready->second;
+        prepared_.erase(ready);
+        if (prepared.width == width && prepared.height == height) {
+            auto textureData = std::make_unique<TextureData>();
+            textureData->image = prepared.image;
+            textureData->allocation = prepared.allocation;
+            textureData->view = prepared.view;
+            textureData->path = key;
+            textureData->refCount = 1;
+            textureData->width = width;
+            textureData->height = height;
+            textureData->bytes = static_cast<uint64_t>(width) * height * 4;
+            chargeImageBytesLocked(textureData->bytes);
+            textureData->ownsImage = true;
+            const uint32_t textureId = nextId_++;
+            textureData->id = textureId;
+            textureById_[textureId] = textureData.get();
+            textures_[key] = std::move(textureData);
+            return {prepared.view, textureId};
+        }
+        // Not these pixels after all; build what was asked for below.
+        destroyPreparedLocked(prepared);
     }
 
     if (ImageAtlas::Region r = atlas_.add(rgba, width, height); r.valid) {
@@ -901,6 +930,65 @@ TextureHandle TextureManager::loadTexture(const std::string& path) {
               << ") with ID " << textureId << "\n";
 
     return {textureImageView, textureId};
+}
+
+bool TextureManager::prepareTexture(const std::string& key,
+                                    const uint8_t* rgba, uint32_t width,
+                                    uint32_t height) {
+    if (rgba == nullptr || width == 0 || height == 0) return false;
+    // What fits a cell goes into the atlas, on the drawing thread: it is a
+    // copy into a page that already exists, and small.
+    if (width <= ImageAtlas::largestCell() && height <= ImageAtlas::largestCell()) {
+        return false;
+    }
+    RenderDevice* device = nullptr;
+    {
+        std::lock_guard lock(mutex_);
+        if (!device_ || textures_.count(key) != 0 || prepared_.count(key) != 0 ||
+            !preparing_.insert(key).second) {
+            return false;
+        }
+        device = device_;
+    }
+
+    PreparedTexture prepared{.width = width, .height = height};
+    const bool built = createStandaloneTexture(*device, key, rgba, width, height,
+                                               prepared.image,
+                                               prepared.allocation, prepared.view);
+
+    std::lock_guard lock(mutex_);
+    preparing_.erase(key);
+    // The device went while this was building: `cleanUp` has run, and the
+    // image belongs to an allocator that may be gone too. Nothing to file it
+    // under, and nothing safe to free it with — the device is torn down.
+    if (!device_) return false;
+    if (!built) {
+        destroyPreparedLocked(prepared);
+        return false;
+    }
+    prepared_[key] = prepared;
+    return true;
+}
+
+void TextureManager::dropPrepared(const std::string& key) {
+    std::lock_guard lock(mutex_);
+    auto it = prepared_.find(key);
+    if (it == prepared_.end()) return;
+    destroyPreparedLocked(it->second);
+    prepared_.erase(it);
+}
+
+void TextureManager::destroyPreparedLocked(PreparedTexture& prepared) {
+    // Never sampled — no frame was given its id — and its uploads waited for
+    // the queue before `createStandaloneTexture` returned, so it can go now.
+    if (!device_) return;
+    if (prepared.view != VK_NULL_HANDLE) {
+        vkDestroyImageView(device_->getDevice(), prepared.view, nullptr);
+    }
+    if (prepared.image != VK_NULL_HANDLE) {
+        device_->destroyImage(prepared.image, prepared.allocation);
+    }
+    prepared = {};
 }
 
 TextureHandle TextureManager::registerTexture(const std::string& name, 

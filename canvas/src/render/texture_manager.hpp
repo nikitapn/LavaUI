@@ -91,6 +91,19 @@ private:
     ImageAtlas atlas_;
     mutable std::mutex mutex_;
 
+    /// Built by `prepareTexture`, not yet adopted: an image no frame has seen.
+    struct PreparedTexture {
+        VkImage image = VK_NULL_HANDLE;
+        VmaAllocation allocation = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;
+        uint32_t width = 0;
+        uint32_t height = 0;
+    };
+    std::unordered_map<std::string, PreparedTexture> prepared_;
+    /// Keys a thread is building right now, so a second does not build twice.
+    std::unordered_set<std::string> preparing_;
+    void destroyPreparedLocked(PreparedTexture& prepared);
+
     /// A frost blit submitted without waiting for it — see
     /// `submitAsyncBlitLocked`. Everything here lives until `fence` signals.
     struct PendingBlit {
@@ -223,6 +236,27 @@ public:
     /// the thread that owns the device.
     TextureHandle uploadTexture(const std::string& key, const uint8_t* rgba,
                                 uint32_t width, uint32_t height);
+
+    /// Builds the texture `uploadTexture(key, …)` would, on the calling
+    /// thread, and holds it unseen until that call adopts it.
+    ///
+    /// The whole cost of a big upload — the copy into staging, the copy to
+    /// the GPU, the mip chain — was paid inside `uploadTexture`, which runs
+    /// on the thread that draws: a 12-megapixel photo held every window on
+    /// the desktop for 30–65 ms, an SVG drawn large for 300. Here it is paid
+    /// by whoever decoded, and the adoption is a map insert. Nothing draws a
+    /// prepared texture, so nothing has to wait for it.
+    ///
+    /// Callable from any thread: the device's one-shot commands and the queue
+    /// carry their own locks, and this holds `mutex_` only to look and to
+    /// file. False when there is nothing to do — the key is already resident
+    /// or being prepared, or the image will go into the atlas, which is cheap
+    /// enough to stay where it is. Follow with `dropPrepared(key)` once the
+    /// upload has had its chance to adopt, so one it never made is freed.
+    bool prepareTexture(const std::string& key, const uint8_t* rgba,
+                        uint32_t width, uint32_t height);
+    /// Frees what `prepareTexture` built under `key` and nobody adopted.
+    void dropPrepared(const std::string& key);
 
     /// GPU-side crop of a dma-buf another driver wrote. Same cache contract
     /// as `uploadTexture`, without a host copy: the importer blits `x,y,w,h`

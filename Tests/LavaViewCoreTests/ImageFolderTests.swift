@@ -139,3 +139,18 @@ final class ImageFolderTests: XCTestCase {
         XCTAssertNil(ImageFolder(entries: ["/a.png"], index: 9).current)
     }
 }
+
+final class DisplayDecodeSideTests: XCTestCase {
+    func testARasterIsCappedAtTheDeviceLimit() {
+        XCTAssertEqual(ImageFormats.displayDecodeSide(for: "/p/photo.JPG"), 8192)
+        XCTAssertEqual(ImageFormats.displayDecodeSide(for: "/p/raw.cr2"), 8192)
+    }
+
+    func testAVectorIsDrawnAtScreenSizeNotTheCap() {
+        // The decoder draws an SVG *at* the size it is given, so the raster
+        // ceiling here was an 8192-pixel square for every icon.
+        XCTAssertEqual(ImageFormats.displayDecodeSide(for: "/p/icon.svg"), 2560)
+        XCTAssertEqual(ImageFormats.displayDecodeSide(for: "/p/ICON.SVG"), 2560)
+        XCTAssertLessThan(ImageFormats.vectorDecodeSide, ImageFormats.rasterDecodeSide)
+    }
+}

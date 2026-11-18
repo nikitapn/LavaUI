@@ -2433,6 +2433,27 @@ class ImagesImpl final : public IImages_Servant {
   ImagesImpl(CompositorImpl &compositor, LoopQueue &loop)
       : compositor_(compositor), loop_(loop) {}
 
+  /// Uploads on this worker, then files the texture on the loop.
+  ///
+  /// The decode was already here; the upload — staging copy, GPU copy, mip
+  /// chain — was on the loop, which is every window's frame and every input
+  /// event. A 12-megapixel photo held the desktop for 30–65 ms and a large
+  /// SVG for 300, and a viewer reading its neighbours ahead did that twice
+  /// more behind every picture. Now the loop's share is a map insert.
+  ///
+  /// `dropPreparedTexture` after, whatever happened: the loop may have found
+  /// the key already resident — another client, or the same one twice — and
+  /// then what was built here is nobody's.
+  std::optional<ImageInfo> store(const std::string &key,
+                                 const canvas::DecodedImage &decoded,
+                                 const void *session) {
+    canvas::Engine::prepareTexture(key, decoded);
+    auto stored =
+        loop_.call([&] { return compositor_.storeImage(key, decoded, session); });
+    canvas::Engine::dropPreparedTexture(key);
+    return stored;
+  }
+
   ImageInfo RegisterImage(nprpc::flat::Span<char> path, uint32_t maxPixelSize,
                           ImageTurn turn) override {
     const std::string file{path};
@@ -2445,8 +2466,7 @@ class ImagesImpl final : public IImages_Servant {
     const canvas::DecodedImage decoded =
         canvas::Engine::decodeImage(file, maxPixelSize, quarter);
     if (!decoded.valid()) throw ImageNotFound(file);
-    if (auto stored = loop_.call([&] { return compositor_.storeImage(key, decoded, session); }))
-      return *stored;
+    if (auto stored = store(key, decoded, session)) return *stored;
     throw ImageNotFound(file);
   }
 
@@ -2461,8 +2481,7 @@ class ImagesImpl final : public IImages_Servant {
         canvas::Engine::decodeImageData(data, bytes.size(), maxPixelSize);
     const std::string what = "<" + std::to_string(bytes.size()) + " bytes in memory>";
     if (!decoded.valid()) throw ImageNotFound(what);
-    if (auto stored = loop_.call([&] { return compositor_.storeImage(key, decoded, session); }))
-      return *stored;
+    if (auto stored = store(key, decoded, session)) return *stored;
     throw ImageNotFound(what);
   }
 
@@ -2502,8 +2521,7 @@ class ImagesImpl final : public IImages_Servant {
     pixels.width = layout.width;
     pixels.height = layout.height;
     const std::string key = pixel_key();
-    if (auto stored = loop_.call([&] { return compositor_.storeImage(key, pixels, session); }))
-      return *stored;
+    if (auto stored = store(key, pixels, session)) return *stored;
     // Not the region's fault, but the only refusal the call declares; the
     // reason says which it was.
     throw PixelRegionInvalid("the renderer could not upload it");
