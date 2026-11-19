@@ -93,7 +93,10 @@ bool fontFileDigest(const std::string &path, FontDigest &outDigest,
 /// need a format and a shader before they need a key. The bits above are
 /// reserved for them.
 enum class FontHinting : uint32_t {
-  /// FreeType's default: the font's own bytecode where it has any.
+  /// FreeType's default: the font's own bytecode where it has any. A face
+  /// with none is fitted as `Light` instead (`faceLoadFlags` in font.cpp):
+  /// FreeType would autohint it on both axes, off the unhinted advances
+  /// every pen is placed by.
   Normal = 0,
   /// Unhinted. Outlines land where the outline says, which keeps shapes
   /// faithful and stems blurry — what most people mean by "macOS-like".

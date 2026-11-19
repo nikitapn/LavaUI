@@ -55,6 +55,8 @@ public struct ShapedGlyph: Equatable, Sendable {
 /// hand out whichever was rasterized first.
 public enum FontHinting: UInt32, Sendable {
     /// The font's own bytecode, where it has any. The renderer's default.
+    /// A face with none gets `.light` instead: full autohinting moves glyphs
+    /// sideways, off the unhinted advances text is laid out with.
     case normal = 0
     /// Unhinted — faithful outlines, softer stems.
     case none = 1

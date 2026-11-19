@@ -51,8 +51,30 @@ struct TextRenderer::Impl {
   std::unordered_map<uint64_t, int> scaledFonts_;
   std::unordered_map<uint64_t, GlyphInfo> glyphMap_;
 
-  static uint64_t glyphKey(uint32_t fontId, uint32_t glyphId) {
-    return (static_cast<uint64_t>(fontId) << 32) | glyphId;
+  /// (font, glyph, subpixel bin). Two bits for the bin, under the font id;
+  /// glyph ids are 16-bit in every format FreeType loads, so the low word
+  /// is never crowded.
+  static uint64_t glyphKey(uint32_t fontId, uint32_t glyphId, uint32_t bin) {
+    return (static_cast<uint64_t>(fontId) << 34) |
+           (static_cast<uint64_t>(bin) << 32) | glyphId;
+  }
+
+  /// Snaps a device-pixel pen: the whole pixel the quad is placed on, and
+  /// which of the face's `kSubpixelBins` the glyph is rasterized at.
+  /// Unlocked like `findGlyph`; the caller holds `mutex_` either way.
+  void snapPen(uint32_t fontId, float penX, float &whole, uint32_t &bin) const {
+    const bool subpixel =
+      fontId < fonts_.size() && fonts_[fontId].subpixelPositioning();
+    if (!subpixel) {
+      whole = std::round(penX);
+      bin = 0;
+      return;
+    }
+    constexpr float bins = static_cast<float>(canvas::kSubpixelBins);
+    const float quantised = std::round(penX * bins) / bins;
+    whole = std::floor(quantised);
+    bin = static_cast<uint32_t>(std::lround((quantised - whole) * bins)) %
+          canvas::kSubpixelBins;
   }
 
   // Vulkan resources
@@ -259,16 +281,18 @@ struct TextRenderer::Impl {
   /// Lookup only — no rasterizing, no packing, no upload. This is what the
   /// shared (reader) path calls; a null means "take the exclusive lock and
   /// try again", not "no such glyph".
-  const GlyphInfo* findGlyph(uint32_t fontId, uint32_t glyphId) const {
-    auto it = glyphMap_.find(glyphKey(fontId, glyphId));
+  const GlyphInfo* findGlyph(uint32_t fontId, uint32_t glyphId,
+                             uint32_t bin) const {
+    auto it = glyphMap_.find(glyphKey(fontId, glyphId, bin));
     return it == glyphMap_.end() ? nullptr : &it->second;
   }
 
   /// Rasterizes and packs on first use. Returns nullptr when the glyph does
   /// not fit; the caller drops it for this frame and the atlas grows before
   /// the next replay (see growAtlasIfNeeded).
-  const GlyphInfo* getOrCreateGlyph(uint32_t fontId, uint32_t glyphId) {
-    const uint64_t key = glyphKey(fontId, glyphId);
+  const GlyphInfo* getOrCreateGlyph(uint32_t fontId, uint32_t glyphId,
+                                    uint32_t bin) {
+    const uint64_t key = glyphKey(fontId, glyphId, bin);
     auto it = glyphMap_.find(key);
     if (it != glyphMap_.end()) {
       return &it->second;
@@ -277,7 +301,8 @@ struct TextRenderer::Impl {
       return nullptr;
     }
 
-    canvas::GlyphBitmap bitmap = fonts_[fontId].rasterize(glyphId);
+    canvas::GlyphBitmap bitmap =
+      fonts_[fontId].rasterize(glyphId, bin * (64 / canvas::kSubpixelBins));
 
     // Shelf packing with a per-shelf height: a period no longer reserves a
     // full line-height row, which is most of the vertical waste.
@@ -511,13 +536,18 @@ void fillQuad(const GlyphInfo &g, TextRenderer::GlyphQuad &out) {
 }
 }  // namespace
 
-bool TextRenderer::glyphQuad(uint32_t fontId, uint32_t glyphId, GlyphQuad &out) {
+bool TextRenderer::glyphQuad(uint32_t fontId, uint32_t glyphId, float penX,
+                             GlyphQuad &out) {
+  float whole = 0.f;
+  uint32_t bin = 0;
   // Hit path first, under the shared lock: text that has been drawn once
   // costs a map lookup and blocks no other window.
   {
     std::shared_lock lock(mutex_);
-    if (const GlyphInfo *g = impl_->findGlyph(fontId, glyphId)) {
+    impl_->snapPen(fontId, penX, whole, bin);
+    if (const GlyphInfo *g = impl_->findGlyph(fontId, glyphId, bin)) {
       fillQuad(*g, out);
+      out.penX = whole;
       return true;
     }
   }
@@ -530,9 +560,10 @@ bool TextRenderer::glyphQuad(uint32_t fontId, uint32_t glyphId, GlyphQuad &out) 
   // dropped and reacquired above, so another window may have added exactly
   // this glyph in between.
   std::unique_lock lock(mutex_);
-  const GlyphInfo *g = impl_->getOrCreateGlyph(fontId, glyphId);
+  const GlyphInfo *g = impl_->getOrCreateGlyph(fontId, glyphId, bin);
   if (!g) return false;  // didn't fit; atlas grows before the next frame
   fillQuad(*g, out);
+  out.penX = whole;
   return true;
 }
 

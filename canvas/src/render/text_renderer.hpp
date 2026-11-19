@@ -55,9 +55,16 @@ public:
     vec2 uv0;      // atlas UV top-left
     vec2 uv1;      // atlas UV bottom-right
     vec2 size;     // pixel dimensions
-    vec2 bearing;  // offset from pen position to the quad's top-left
+    vec2 bearing;  // offset from `penX` to the quad's top-left
+    /// The pen, in device pixels, snapped to the whole pixel the bitmap was
+    /// rasterized against. Place the quad at `penX + bearing.x`.
+    float penX;
   };
-  bool glyphQuad(uint32_t fontId, uint32_t glyphId, GlyphQuad &out);
+  /// `penX` is the glyph's exact pen in device pixels. It is snapped to the
+  /// nearest quarter pixel, and the glyph rasterized at that quarter — or to
+  /// the nearest whole pixel on a face that cannot be shifted (see
+  /// `canvas::Font::subpixelPositioning`).
+  bool glyphQuad(uint32_t fontId, uint32_t glyphId, float penX, GlyphQuad &out);
 
   /// Registers a face; returns its id (stable, idempotent) or -1. Glyph ids
   /// are face-relative, so every glyph must be looked up with the id of the

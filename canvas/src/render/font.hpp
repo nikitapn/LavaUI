@@ -77,6 +77,18 @@ struct GlyphBitmap {
   std::vector<uint8_t> pixels;
 };
 
+/// How many horizontal positions within a pixel a glyph is rasterized at.
+///
+/// Pens come from HarfBuzz's fractional advances, and a glyph drawn from one
+/// bitmap has to land on a whole pixel to sample texel for pixel. Snapping
+/// each pen to the nearest pixel errs by up to half a pixel per glyph, in
+/// either direction, so a pair can open or close by nearly a whole pixel —
+/// Figtree SemiBold at 14px designs 0.36px between `x` and `t`, and the
+/// snapped pair drew 1.2px apart. Four bins bound the error at an eighth of
+/// a pixel; it is what Skia and Chrome use, and the atlas only holds the
+/// bins that text actually lands on.
+inline constexpr uint32_t kSubpixelBins = 4;
+
 class Font {
   struct Impl;
   std::unique_ptr<Impl> impl_;
@@ -129,6 +141,11 @@ class Font {
                                               uint32_t rasterFlags);
 
   bool isLoaded() const;
+
+  /// Whether FreeType hints this face with its own bytecode. False for an
+  /// unhinted TrueType face, which `FontHinting::Normal` then rasterizes with
+  /// light (vertical-only) autohinting — see `faceLoadFlags` in font.cpp.
+  bool hasNativeHinting() const;
 
   /// How many faces the loaded file contains — 1 for a plain font, more for a
   /// `.ttc`/`.otc` collection. Valid indices are `0 … faceCount() - 1`.
@@ -206,7 +223,19 @@ class Font {
   // separate FT_Get_Char_Index lookup is needed here either). TextRenderer
   // calls this once per not-yet-cached glyph and uploads the bitmap into
   // its own atlas; Font doesn't know Vulkan exists.
-  GlyphBitmap rasterize(uint32_t glyphId) const;
+  //
+  // `subpixelX26_6` moves the outline right by that many 64ths of a pixel
+  // before it is rendered, so a glyph whose pen falls between pixels can be
+  // drawn there rather than at the nearest whole one (see
+  // `kSubpixelBins`). Ignored when `subpixelPositioning()` is false.
+  GlyphBitmap rasterize(uint32_t glyphId, uint32_t subpixelX26_6 = 0) const;
+
+  /// Whether a glyph may be rasterized at a fractional horizontal offset.
+  /// False where the hinting fits glyphs to the pixel grid sideways —
+  /// `Mono`, or the autohinter forced at `Normal` — because their stems are
+  /// placed for a whole-pixel pen, and shifting the outline undoes exactly
+  /// what the hinting was asked to do.
+  bool subpixelPositioning() const;
 
   float pixelSize() const;
   float lineHeight() const;

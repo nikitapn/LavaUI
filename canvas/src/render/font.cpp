@@ -2,6 +2,9 @@
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include FT_OUTLINE_H
+#include FT_TRUETYPE_TABLES_H
+#include FT_TRUETYPE_TAGS_H
 
 #include <hb-ot.h>
 #include <hb.h>
@@ -37,6 +40,11 @@ struct Font::Impl {
   uint32_t faceCount = 0;
   /// Precomputed from `rasterFlags` once, because it is wanted per glyph.
   int32_t loadFlags = FT_LOAD_DEFAULT;
+  /// Whether the face carries TrueType bytecode FreeType will run instead of
+  /// its autohinter. See `faceHasNativeHints` below.
+  bool nativeHinting = false;
+  /// See `Font::subpixelPositioning`.
+  bool subpixel = true;
 
   /// Last prepareWrap result (for wrapLineAt).
   std::vector<std::string> wrapCache;
@@ -74,6 +82,8 @@ struct Font::Impl {
     bytes.shrink_to_fit();
     faceCount = 0;
     loadFlags = FT_LOAD_DEFAULT;
+    nativeHinting = false;
+    subpixel = true;
   }
 };
 
@@ -211,6 +221,54 @@ int32_t freetypeLoadFlags(uint32_t rasterFlags) {
   return flags;
 }
 
+/// Whether FreeType will hint `face` with the font's own bytecode rather than
+/// fall back to its autohinter.
+///
+/// FreeType's own test, restated through public API (`FT_Load_Glyph` in
+/// ftobjs.c): a `glyf` font whose glyphs carry no instructions, with no
+/// `fpgm` and a `prep` of seven bytes or fewer, is treated as unhinted. Seven
+/// bytes is the stub fontmake writes into every unhinted build — dropout
+/// control and nothing else — so most Google Fonts statics land here.
+///
+/// CFF outlines answer true: the Adobe engine hints lightly whatever it is
+/// asked, and never moves anything sideways.
+bool faceHasNativeHints(FT_Face face) {
+  if (!FT_IS_SFNT(face)) return true;
+  FT_ULong glyf = 0;
+  if (FT_Load_Sfnt_Table(face, TTAG_glyf, 0, nullptr, &glyf) != 0 || glyf == 0) {
+    return true;
+  }
+  const auto *maxp =
+    static_cast<const TT_MaxProfile *>(FT_Get_Sfnt_Table(face, FT_SFNT_MAXP));
+  if (maxp != nullptr && maxp->maxSizeOfInstructions != 0) return true;
+  FT_ULong fpgm = 0, prep = 0;
+  FT_Load_Sfnt_Table(face, TTAG_fpgm, 0, nullptr, &fpgm);
+  FT_Load_Sfnt_Table(face, TTAG_prep, 0, nullptr, &prep);
+  return fpgm != 0 || prep > 7;
+}
+
+/// The load flags for this face, which is `freetypeLoadFlags` with one
+/// correction: `Normal` on a face with no hints of its own becomes `Light`.
+///
+/// FreeType autohints such a face, and the autohinter at `TARGET_NORMAL`
+/// grid-fits *horizontally* — it moves stems and changes advances, and the
+/// bitmap is drawn for the hinted advances. But every pen here comes from
+/// HarfBuzz's unhinted ones, so each glyph's ink ends up off its pen by its
+/// own fraction of a pixel to a whole one: overlapping pairs and gaps inside
+/// a word, worst in bold (Figtree SemiBold at 14px: `te` and `tx` collided,
+/// `s.` and `xt` gaped). The v40 interpreter a hinted face gets leaves x
+/// alone, which is why only unhinted faces ever showed it. `Light` is the
+/// autohinter fitting y only — the same thing FreeType's native path does.
+///
+/// A caller that forces the autohinter gets it as asked.
+int32_t faceLoadFlags(uint32_t rasterFlags, bool nativeHinting) {
+  if (!nativeHinting && !RasterFlags::forceAutohint(rasterFlags) &&
+      RasterFlags::hinting(rasterFlags) == FontHinting::Normal) {
+    return freetypeLoadFlags(RasterFlags::of(FontHinting::Light));
+  }
+  return freetypeLoadFlags(rasterFlags);
+}
+
 } // namespace
 
 Font::Font() : impl_(std::make_unique<Impl>()) {}
@@ -256,7 +314,6 @@ VoidResult Font::loadFaceFromMemory(const uint8_t *bytes, size_t byteCount,
   }
 
   impl_->bytes.assign(bytes, bytes + byteCount);
-  impl_->loadFlags = freetypeLoadFlags(rasterFlags);
 
   FT_Error ftError = FT_Init_FreeType(&impl_->ftLibrary);
   if (ftError) {
@@ -273,6 +330,15 @@ VoidResult Font::loadFaceFromMemory(const uint8_t *bytes, size_t byteCount,
                 " in this font");
   }
   impl_->faceCount = static_cast<uint32_t>(impl_->ftFace->num_faces);
+  impl_->nativeHinting = faceHasNativeHints(impl_->ftFace);
+  impl_->loadFlags = faceLoadFlags(rasterFlags, impl_->nativeHinting);
+  {
+    const FontHinting hinting = RasterFlags::hinting(rasterFlags);
+    const bool fitsSideways =
+      hinting == FontHinting::Mono ||
+      (hinting == FontHinting::Normal && RasterFlags::forceAutohint(rasterFlags));
+    impl_->subpixel = !fitsSideways;
+  }
 
   // `FT_Set_Char_Size` at 72 dpi rather than `FT_Set_Pixel_Sizes`, so one
   // point is one pixel and the size keeps its fractional part. The old call
@@ -316,6 +382,10 @@ VoidResult Font::loadFaceFromMemory(const uint8_t *bytes, size_t byteCount,
 }
 
 bool Font::isLoaded() const { return impl_->isLoaded(); }
+
+bool Font::hasNativeHinting() const { return impl_->nativeHinting; }
+
+bool Font::subpixelPositioning() const { return impl_->subpixel; }
 
 
 uint32_t Font::faceCount() const { return impl_->faceCount; }
@@ -457,7 +527,7 @@ std::vector<PositionedGlyph> Font::shape(const std::string &text) const {
   return result;
 }
 
-GlyphBitmap Font::rasterize(uint32_t glyphId) const {
+GlyphBitmap Font::rasterize(uint32_t glyphId, uint32_t subpixelX26_6) const {
   GlyphBitmap result;
   if (!impl_->isLoaded()) {
     return result;
@@ -471,6 +541,13 @@ GlyphBitmap Font::rasterize(uint32_t glyphId) const {
   FT_Error error = FT_Load_Glyph(impl_->ftFace, glyphId, impl_->loadFlags);
   if (error) {
     return result;
+  }
+  // After hinting, which fits y only on every face that allows this, so the
+  // shift moves the glyph and nothing else. `bitmap_left` then includes it.
+  if (subpixelX26_6 != 0 && impl_->subpixel &&
+      impl_->ftFace->glyph->format == FT_GLYPH_FORMAT_OUTLINE) {
+    FT_Outline_Translate(&impl_->ftFace->glyph->outline,
+                         static_cast<FT_Pos>(subpixelX26_6), 0);
   }
   error = FT_Render_Glyph(impl_->ftFace->glyph, FT_RENDER_MODE_NORMAL);
   if (error) {

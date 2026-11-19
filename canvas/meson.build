@@ -150,3 +150,20 @@ frame_damage_test = executable(
   build_by_default: false,
 )
 test('frame damage', frame_damage_test)
+
+# Rasterizes real font files, so it takes FreeType and HarfBuzz — still no GPU.
+# The faces are named here because what is being tested is what is in their
+# tables: Figtree is an unhinted Google Fonts build, OpenSans has bytecode.
+font_hinting_test = executable(
+  'font_hinting_test',
+  ['tests/font_hinting_test.cpp', 'src/render/font.cpp', 'src/render/font_key.cpp'],
+  include_directories: canvas_includes,
+  dependencies: [dependency('freetype2'), dependency('harfbuzz')],
+  build_by_default: false,
+)
+test('font hinting', font_hinting_test, args: [
+  meson.project_source_root() / 'Sources/LavaEditorApp/Fonts/Figtree-SemiBold.ttf',
+  meson.project_source_root() / 'Sources/LavaEditorApp/Fonts/Figtree-Regular.ttf',
+  meson.project_source_root() / 'Sources/LavaUI/Resources/fonts/OpenSans-Regular.ttf',
+  meson.project_source_root() / 'Sources/LavaUI/Resources/fonts/NotoSansSymbols2-Regular.ttf',
+])

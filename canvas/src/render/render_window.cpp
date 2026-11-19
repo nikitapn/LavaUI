@@ -2081,14 +2081,15 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
           }
           if (rasterFont >= 0 &&
               dev_.textRenderer().glyphQuad(static_cast<uint32_t>(rasterFont),
-                                            gi.glyphId, q)) {
+                                            gi.glyphId, (gi.x + ox) * dsx, q)) {
             if (q.size.x <= 0.f || q.size.y <= 0.f) continue;
-            // The pen snapped to a device pixel, and the bitmap's bearing is
+            // The pen snapped to a device pixel — the glyph rasterized at
+            // whatever fraction was left over — and the bitmap's bearing is
             // whole device pixels already: every texel then lands on exactly
             // one pixel, which is the whole difference between this and a
             // 1x glyph stretched. Back to layout units for the vertices; the
             // viewport undoes the division.
-            const float penX = std::round((gi.x + ox) * dsx);
+            const float penX = q.penX;
             const float penY = std::round((gi.y + oy) * dsy);
             quads_.pushGlyph({(penX + q.bearing.x) / dsx,
                               (penY - q.bearing.y) / dsy},
@@ -2099,7 +2100,8 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
           // A face that will not load at the device size still draws, from
           // the one the producer named — resampled, as before.
         }
-        if (!dev_.textRenderer().glyphQuad(gi.fontId, gi.glyphId, q)) {
+        if (!dev_.textRenderer().glyphQuad(gi.fontId, gi.glyphId,
+                                           (gi.x + ox) * dsx, q)) {
           // Silent by design — a run naming a face this renderer does not
           // have draws nothing rather than drawing something wrong. That is
           // the right behaviour and a miserable thing to debug, because the
@@ -2114,9 +2116,11 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
         // Snapped to a device pixel, as the scaled path above does. HarfBuzz
         // advances are fractional (an `l` after "He" in 12px OpenSans lands
         // at 15.594), and the atlas is sampled linearly — so an unsnapped pen
-        // smears a one-texel stem across two pixels at 40/60. The bitmap's
-        // bearing is whole pixels already.
-        const float penX = std::round((gi.x + ox) * dsx) / dsx;
+        // smears a one-texel stem across two pixels at 40/60. The fraction
+        // is not thrown away: `glyphQuad` rasterized the glyph shifted by it,
+        // to the nearest quarter pixel (`canvas::kSubpixelBins`). The
+        // bitmap's bearing is whole pixels already.
+        const float penX = q.penX / dsx;
         const float penY = std::round((gi.y + oy) * dsy) / dsy;
         quads_.pushGlyph({penX + q.bearing.x, penY - q.bearing.y},
                          q.size, q.uv0, q.uv1, faded(cmd.color));
