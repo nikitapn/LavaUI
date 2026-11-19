@@ -162,8 +162,8 @@ font_hinting_test = executable(
   build_by_default: false,
 )
 test('font hinting', font_hinting_test, args: [
-  meson.project_source_root() / 'Sources/LavaEditorApp/Fonts/Figtree-SemiBold.ttf',
-  meson.project_source_root() / 'Sources/LavaEditorApp/Fonts/Figtree-Regular.ttf',
+  meson.project_source_root() / 'Sources/LavaUI/Resources/fonts/Figtree-SemiBold.ttf',
+  meson.project_source_root() / 'Sources/LavaUI/Resources/fonts/Figtree-Regular.ttf',
   meson.project_source_root() / 'Sources/LavaUI/Resources/fonts/OpenSans-Regular.ttf',
   meson.project_source_root() / 'Sources/LavaUI/Resources/fonts/NotoSansSymbols2-Regular.ttf',
 ])

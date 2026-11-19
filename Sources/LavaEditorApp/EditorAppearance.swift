@@ -45,7 +45,7 @@ struct EditorAppearance {
     }
 }
 
-/// Figtree's faces are bundled so this window uses the same type in both hosts.
+/// Figtree's faces are bundled with LavaUI so this window uses the same type in both hosts.
 struct EditorFonts {
     static let documentSize: Float = 17
 
@@ -69,10 +69,8 @@ struct EditorFonts {
         _ weight: String, size: Float, document: Bool = false, editor: Editor?
     ) -> UIFont? {
         guard let editor,
-              let url = Bundle.module.url(
-                forResource: "Figtree-\(weight)", withExtension: "ttf", subdirectory: "Fonts"
-              ),
-              let font = UIFont(path: url.path, pixelSize: size,
+              let path = BundledFont.path("Figtree-\(weight)"),
+              let font = UIFont(path: path, pixelSize: size,
                                 lineHeightMultiple: document ? 1.75 : nil),
               font.registerWithEngine(editor)
         else { return nil }

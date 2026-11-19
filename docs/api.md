@@ -622,6 +622,14 @@ trailing: 8))`. For a close cross or a plus, use `Mark(.cross)` /
 `Mark(.plus)` inside the button's stack — a `"×"` character sits on the
 baseline of a full line box and is never centred.
 
+For any other glyph a design hands over as SVG path data, `Icon` strokes it
+as given, in the 24-unit box Lucide and similar sets use:
+`Icon("M18 6 6 18M6 6l12 12", size: 12, color: .secondary, strokeWidth: 2.75)`.
+Several elements go in a list — `[.path(…), .circle(cx:cy:r:), .rect(…)]` —
+and `.fill(…)` fills a convex subpath instead of stroking it. Strokes are
+round-capped and round-joined; use opaque colours, since segments overlap at
+every join.
+
 `TabStrip` lays out a horizontally scrolling row, a new-tab mark beside the
 last tab, and a remaining window-drag area. Both LavaEditor and LavaExplorer
 use it. Supply keyed `TabStripItem`s with selection and close callbacks:
@@ -1015,7 +1023,13 @@ Prefer semantic colors such as `.primary`, `.secondary`, `.accent`,
 
 Use `.theme(customTheme)` and `.font(customFont)` for scoped overrides. Fonts
 can be loaded with `UIFont(path:pixelSize:)`; `FontStore` owns the default,
-symbol font, content scale, and shape caches.
+symbol font, content scale, and shape caches. LavaUI also bundles Figtree
+(Regular, SemiBold, Bold) and Caprasimo, found by `BundledFont.path("Figtree-SemiBold")`.
+
+A face can carry shaping options: `features: ["tnum"]` for OpenType features
+(tabular figures keep a seconds clock from shaking), and `letterSpacing: 0.1`
+(in ems, as CSS) for spaced-out labels. Both are applied by the client's
+shaper and included in every measured width.
 
 `Transition.opacity`, `Transition.slide(dx:dy:)`, and custom `Transition`
 values support fade/offset animation with `.linear`, `.easeOut`, or

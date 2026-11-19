@@ -161,21 +161,38 @@ public final class UIFont: @unchecked Sendable {
     /// - faceIndex: Which face of a collection; 0 for a single-face file.
     /// - raster: Hinting selection.
     /// - lineHeightMultiple: Optional baseline spacing in ems, with extra leading split above and below the glyphs.
+    /// - features: OpenType features to shape with, in HarfBuzz's form —
+    ///   `["tnum"]` for figures that do not shift a clock's width every
+    ///   second. Shaping only: the renderer draws the glyphs it is given.
+    /// - letterSpacing: Extra advance after every glyph, in ems, as CSS
+    ///   `letter-spacing` — `0.1` for a spaced-out uppercase label.
+    ///   Measured widths include it.
     public init?(
         path: String, pixelSize: Float = 16, faceIndex: UInt32 = 0,
-        raster: FontRasterFlags = .default, lineHeightMultiple: Float? = nil
+        raster: FontRasterFlags = .default, lineHeightMultiple: Float? = nil,
+        features: [String] = [], letterSpacing: Float = 0
     ) {
         self.path = path
         self.pixelSize = pixelSize
         self.faceIndex = faceIndex
         self.raster = raster
-        let faceIdentity = "\(path)#\(faceIndex)@\(pixelSize)/\(raster.raw)"
-        self.identity = lineHeightMultiple.map { "\(faceIdentity):\($0)" } ?? faceIdentity
+        // Everything that changes a shaped run is in the key: the shape cache
+        // is per instance, but `TextLayoutCache` and friends key on this.
+        var identity = "\(path)#\(faceIndex)@\(pixelSize)/\(raster.raw)"
+        if let lineHeightMultiple { identity += ":\(lineHeightMultiple)" }
+        if !features.isEmpty { identity += "+" + features.joined(separator: ",") }
+        if letterSpacing != 0 { identity += "~\(letterSpacing)" }
+        self.identity = identity
         var f = canvas.Font()
         let size26_6 = UInt32((pixelSize * 64).rounded())
         let ok = f.loadFace(std.string(path), size26_6, faceIndex, raster.raw)
             .has_value()
         guard ok, f.isLoaded() else { return nil }
+        if !features.isEmpty,
+           !f.setFeatures(std.string(features.joined(separator: ","))) {
+            return nil
+        }
+        if letterSpacing != 0 { f.setTracking(letterSpacing * pixelSize) }
         self.raw = f
         // Probe metrics via empty measure.
         let m = self.raw.measure(std.string(""))

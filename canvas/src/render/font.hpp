@@ -237,6 +237,19 @@ class Font {
   /// what the hinting was asked to do.
   bool subpixelPositioning() const;
 
+  /// OpenType features every shaping call applies, in HarfBuzz's string
+  /// form, separated by commas or spaces: `"tnum"`, `"tnum,-liga"`,
+  /// `"ss01=1"`. Replaces the previous set; an empty string clears it. False,
+  /// with nothing changed, if any entry does not parse.
+  ///
+  /// Shaping only — the glyph ids it picks are ids of the same face, so the
+  /// renderer that rasterizes them needs to know nothing about it.
+  bool setFeatures(const std::string &spec);
+
+  /// Extra advance after every glyph, in pixels — CSS `letter-spacing`.
+  /// Measured widths include it, so layout and drawing agree.
+  void setTracking(float pixels);
+
   float pixelSize() const;
   float lineHeight() const;
 };

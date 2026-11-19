@@ -10,6 +10,7 @@
 #include <hb.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
@@ -18,6 +19,16 @@
 #include <vector>
 
 namespace canvas {
+
+/// What a face is shaped with beyond its file and size: OpenType features
+/// and letter-spacing. Both change advances, so every shaping call — width,
+/// glyphs, word wrap — takes the same options, or measure and draw disagree.
+struct ShapingOptions {
+  std::vector<hb_feature_t> features;
+  /// Added to every advance, after shaping, in 26.6 — CSS `letter-spacing`,
+  /// which also follows the last letter.
+  int32_t tracking26_6 = 0;
+};
 
 struct Font::Impl {
   FT_Library ftLibrary = nullptr;
@@ -43,6 +54,7 @@ struct Font::Impl {
   /// Whether the face carries TrueType bytecode FreeType will run instead of
   /// its autohinter. See `faceHasNativeHints` below.
   bool nativeHinting = false;
+  ShapingOptions shaping;
   /// See `Font::subpixelPositioning`.
   bool subpixel = true;
 
@@ -84,6 +96,7 @@ struct Font::Impl {
     loadFlags = FT_LOAD_DEFAULT;
     nativeHinting = false;
     subpixel = true;
+    shaping = {};
   }
 };
 
@@ -92,20 +105,33 @@ namespace {
 // Shapes `text` against `font`, returning a buffer the caller must destroy.
 // Shared by measure() and shape() so they can never disagree about what
 // shaping produces — same buffer setup, same hb_shape() call, every time.
-hb_buffer_t *shapeText(hb_font_t *font, const std::string &text) {
+hb_buffer_t *shapeText(hb_font_t *font, const ShapingOptions &options,
+                       const std::string &text) {
   hb_buffer_t *buffer = hb_buffer_create();
   hb_buffer_add_utf8(
     buffer, text.c_str(), static_cast<int>(text.size()), 0, static_cast<int>(text.size()));
   hb_buffer_guess_segment_properties(buffer);
-  hb_shape(font, buffer, nullptr, 0);
+  hb_shape(font, buffer,
+           options.features.empty() ? nullptr : options.features.data(),
+           static_cast<unsigned int>(options.features.size()));
+  if (options.tracking26_6 != 0) {
+    unsigned int glyphCount = 0;
+    hb_glyph_position_t *positions = hb_buffer_get_glyph_positions(buffer, &glyphCount);
+    // A mark has no advance of its own and rides on its base; spacing it
+    // would pull it off the letter it belongs to.
+    for (unsigned int i = 0; i < glyphCount; ++i) {
+      if (positions[i].x_advance != 0) positions[i].x_advance += options.tracking26_6;
+    }
+  }
   return buffer;
 }
 
 // Shapes `text` and sums its glyph advances — the width-only fast path
 // wrapLineWidths() needs per word, without paying for a PositionedGlyph
 // vector it isn't going to use.
-float shapedWidth(hb_font_t *font, const std::string &text) {
-  hb_buffer_t *buffer = shapeText(font, text);
+float shapedWidth(hb_font_t *font, const ShapingOptions &options,
+                  const std::string &text) {
+  hb_buffer_t *buffer = shapeText(font, options, text);
   unsigned int glyphCount = 0;
   hb_glyph_position_t *positions = hb_buffer_get_glyph_positions(buffer, &glyphCount);
   float width = 0.f;
@@ -126,11 +152,12 @@ float shapedWidth(hb_font_t *font, const std::string &text) {
 //
 // When `outLines` is non-null, also records the text of each line (same
 // break points as the widths) so draw can match measure.
-void wrapLinesImpl(hb_font_t *font, const std::string &text, float availWidth,
+void wrapLinesImpl(hb_font_t *font, const ShapingOptions &options,
+                   const std::string &text, float availWidth,
                    std::vector<float> *outWidths,
                    std::vector<std::string> *outLines)
 {
-  const float spaceWidth = shapedWidth(font, " ");
+  const float spaceWidth = shapedWidth(font, options, " ");
 
   float currentLineWidth = 0.f;
   std::string currentLine;
@@ -161,7 +188,7 @@ void wrapLinesImpl(hb_font_t *font, const std::string &text, float availWidth,
       ++pos;
     }
     const std::string word = text.substr(wordStart, pos - wordStart);
-    const float wordWidth = shapedWidth(font, word);
+    const float wordWidth = shapedWidth(font, options, word);
 
     const float advanceIfAppended = (lineHasContent ? spaceWidth : 0.f) + wordWidth;
     if (lineHasContent && currentLineWidth + advanceIfAppended > availWidth) {
@@ -184,11 +211,11 @@ void wrapLinesImpl(hb_font_t *font, const std::string &text, float availWidth,
   }
 }
 
-std::vector<float> wrapLineWidths(hb_font_t *font, const std::string &text,
-                                  float availWidth)
+std::vector<float> wrapLineWidths(hb_font_t *font, const ShapingOptions &options,
+                                  const std::string &text, float availWidth)
 {
   std::vector<float> lineWidths;
-  wrapLinesImpl(font, text, availWidth, &lineWidths, nullptr);
+  wrapLinesImpl(font, options, text, availWidth, &lineWidths, nullptr);
   return lineWidths;
 }
 
@@ -387,6 +414,28 @@ bool Font::hasNativeHinting() const { return impl_->nativeHinting; }
 
 bool Font::subpixelPositioning() const { return impl_->subpixel; }
 
+bool Font::setFeatures(const std::string &spec) {
+  std::vector<hb_feature_t> features;
+  size_t pos = 0;
+  while (pos < spec.size()) {
+    const size_t end = spec.find_first_of(", ", pos);
+    const std::string one = spec.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
+    pos = end == std::string::npos ? spec.size() : end + 1;
+    if (one.empty()) continue;
+    hb_feature_t feature;
+    if (!hb_feature_from_string(one.c_str(), static_cast<int>(one.size()), &feature)) {
+      return false;
+    }
+    features.push_back(feature);
+  }
+  impl_->shaping.features = std::move(features);
+  return true;
+}
+
+void Font::setTracking(float pixels) {
+  impl_->shaping.tracking26_6 = static_cast<int32_t>(std::lround(pixels * 64.f));
+}
+
 
 uint32_t Font::faceCount() const { return impl_->faceCount; }
 
@@ -399,7 +448,7 @@ TextMetrics Font::measure(const std::string &text) const {
     return TextMetrics{0.f, impl_->lineHeight, impl_->ascent, impl_->descent};
   }
 
-  hb_buffer_t *buffer = shapeText(impl_->hbFont, text);
+  hb_buffer_t *buffer = shapeText(impl_->hbFont, impl_->shaping, text);
   unsigned int glyphCount = 0;
   hb_glyph_position_t *positions = hb_buffer_get_glyph_positions(buffer, &glyphCount);
 
@@ -427,7 +476,7 @@ TextMetrics Font::measure(const std::string &text, float availWidth, int mode) c
       mode == kExactly ? availWidth : 0.f, impl_->lineHeight, impl_->ascent, impl_->descent};
   }
 
-  std::vector<float> lineWidths = wrapLineWidths(impl_->hbFont, text, availWidth);
+  std::vector<float> lineWidths = wrapLineWidths(impl_->hbFont, impl_->shaping, text, availWidth);
 
   float width = availWidth;
   if (mode != kExactly) {
@@ -452,7 +501,7 @@ int Font::prepareWrap(const std::string &text, float availWidth)
     impl_->wrapCache.emplace_back();
     return 1;
   }
-  wrapLinesImpl(impl_->hbFont, text, availWidth, nullptr, &impl_->wrapCache);
+  wrapLinesImpl(impl_->hbFont, impl_->shaping, text, availWidth, nullptr, &impl_->wrapCache);
   if (impl_->wrapCache.empty()) {
     impl_->wrapCache.emplace_back();
   }
@@ -497,7 +546,7 @@ std::vector<PositionedGlyph> Font::shape(const std::string &text) const {
     return result;
   }
 
-  hb_buffer_t *buffer = shapeText(impl_->hbFont, text);
+  hb_buffer_t *buffer = shapeText(impl_->hbFont, impl_->shaping, text);
   unsigned int glyphCount = 0;
   hb_glyph_info_t *infos = hb_buffer_get_glyph_infos(buffer, &glyphCount);
   hb_glyph_position_t *positions = hb_buffer_get_glyph_positions(buffer, &glyphCount);
