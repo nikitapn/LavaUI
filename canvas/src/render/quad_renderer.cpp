@@ -1017,7 +1017,7 @@ void QuadRenderer::pushCornerMask(vec2 topLeft, vec2 size, float radius) {
 }
 
 void QuadRenderer::pushShadow(vec2 topLeft, vec2 size, float radius,
-                              float blur, uint32_t rgba) {
+                              float blur, uint32_t rgba, bool hollow) {
   if (size.x <= 0.0f || size.y <= 0.0f) {
     return;
   }
@@ -1032,8 +1032,11 @@ void QuadRenderer::pushShadow(vec2 topLeft, vec2 size, float radius,
   const vec2 ext{half.x + spread + 1.f, half.y + spread + 1.f};
   const float r = std::min(radius, std::min(half.x, half.y));
 
+  // Hollow rides on the sign of the blur, which is otherwise never negative:
+  // the instance has no spare field, and the shader takes `abs` anyway.
   appendInstance({center.x-ext.x, center.y-ext.y}, {ext.x*2.f, ext.y*2.f},
-                 half, r, rgba, Kind::Shadow, spread);
+                 half, r, rgba, Kind::Shadow,
+                 hollow ? -std::max(spread, 1e-3f) : spread);
 }
 
 void QuadRenderer::pushCircle(vec2 center, float radius, uint32_t rgba) {

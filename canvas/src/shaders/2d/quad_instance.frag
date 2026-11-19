@@ -8,7 +8,8 @@
 //   3 Mesh          — unused here; arbitrary polygons stay on the indexed path.
 //   4 Mask          — window corner punch: emit coverage as alpha, multiply
 //                     dest, write nothing inside the shape.
-//   5 Shadow        — the same rounded box, faded outwards over `vAux` px.
+//   5 Shadow        — the same rounded box, faded outwards over `|vAux|` px;
+//                     negative `vAux` leaves the box's inside undrawn.
 //   6 BlurComposite — frosted backdrop, sampled through the same SDF.
 //
 // Sdf, Image and BlurComposite also take glass (`vGlass`, zero when off): the
@@ -230,8 +231,12 @@ vec3 dither(vec3 premultiplied) {
 void main() {
   if (vKind == 5u) { // Shadow
     float d = sdRoundBox(vLocal, vHalfSize, vRadius);
-    float fall = 1.0 - smoothstep(0.0, max(vAux, 1e-4), max(d, 0.0));
+    float fall = 1.0 - smoothstep(0.0, max(abs(vAux), 1e-4), max(d, 0.0));
     float a = vColor.a * fall * fall;
+    // Hollow (negative aux, `kShadowHollow`): nothing inside the caster, so a
+    // translucent plate is not darkened by its own shadow; faded in over the
+    // pixel at the edge to meet the plate's antialiased rim. Same as quad.frag.
+    if (vAux < 0.0) a *= clamp(d / max(fwidth(d), 1e-5) + 0.5, 0.0, 1.0);
     if (a <= 0.002) discard;
     // No RGB dither. A shadow is premultiplied black — `rgb = 0, a = falloff`
     // — and adding ±½ a quantization step to the colour (the trick that

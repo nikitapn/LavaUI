@@ -51,6 +51,21 @@ public struct MenuBarStyle: Equatable, Sendable {
     /// Radius of the frosted-glass blur behind the dropdown, or `nil` for a plain fill.
     public var dropdownBlur: Float?
 
+    /// Fill behind an icon title, always — a logo on a coloured disc rather
+    /// than a bare picture. `nil` gives it the same chrome as a text title.
+    public var iconFill: Color? = nil
+    /// The icon title's fill under the pointer and while its menu is open.
+    /// `nil` uses `titleHover` / `titleOpenFill`.
+    public var iconHoverFill: Color? = nil
+    /// Corner radius of the icon title; `nil` uses `titleCornerRadius`.
+    public var iconCornerRadius: Float? = nil
+    /// Multiplied into an icon title's picture, so a white mark can take the
+    /// colour that reads on `iconFill`. White leaves it as drawn.
+    public var iconTint: Color = Color(r: 1, g: 1, b: 1)
+    /// Every title's height, padding included, so text and icon titles line
+    /// up as chips of one size. `nil` lets each size to its content.
+    public var titleHeight: Float? = nil
+
     /// Creates a style from every metric. `standard()` and `panel()` are the usual starting points.
     public init(
         stripFill: Color?,
@@ -303,9 +318,11 @@ public struct MenuBarStrip: View {
             titleLabel(menu, theme: theme, isOpen: isOpen)
         }
         .padding(menu.icon != nil ? style.iconPadding : style.titlePadding)
-        .background(isOpen ? style.titleOpenFill : .clear)
-        .hoverBackground(style.titleHover)
-        .cornerRadius(style.titleCornerRadius)
+        .frame(height: style.titleHeight.map { .pt($0) } ?? .auto)
+        .background(titleFill(isIcon: menu.icon != nil, isOpen: isOpen))
+        .hoverBackground(menu.icon != nil ? style.iconHoverFill ?? style.titleHover : style.titleHover)
+        .cornerRadius(menu.icon != nil ? style.iconCornerRadius ?? style.titleCornerRadius
+                                       : style.titleCornerRadius)
         .agentId("menu.\(menu.id.raw)")
         .overlay(
             isPresented: externalMenus
@@ -333,6 +350,13 @@ public struct MenuBarStrip: View {
         }
     }
 
+    private func titleFill(isIcon: Bool, isOpen: Bool) -> Color {
+        if isIcon, let fill = style.iconFill {
+            return isOpen ? style.iconHoverFill ?? fill : fill
+        }
+        return isOpen ? style.titleOpenFill : .clear
+    }
+
     @ViewBuilder
     private func titleLabel(
         _ menu: MenuNode, theme: Theme, isOpen: Bool
@@ -342,7 +366,8 @@ public struct MenuBarStrip: View {
             if let image = icons[menu.id] {
                 Image(
                     image,
-                    width: .pt(size), height: .pt(size), contentMode: .fit
+                    width: .pt(size), height: .pt(size), tint: style.iconTint,
+                    contentMode: .fit
                 )
             } else if let path = icon.path {
                 Image(

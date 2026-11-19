@@ -181,7 +181,9 @@ enum class DrawCommandKind : uint32_t {
   ///   x, y, w, h = the rect casting it, in this surface's own coordinates
   ///   aux        = corner radius, which must match the window's or the
   ///                shadow will not sit under it
-  ///   param      = blur in pixels: how far the fade reaches past the rect
+  ///   param      = blur in pixels: how far the fade reaches past the rect,
+  ///                with `kShadowHollow` set to leave the rect's own inside
+  ///                undrawn (a shadow under a translucent plate, CSS-style)
   ///   color      = the shadow's colour and its opacity at full strength
   ///
   /// A shape rather than a post-process, because that is what it is: a
@@ -282,6 +284,11 @@ enum class DrawCommandKind : uint32_t {
   /// A reader that predates it skips it, and the view draws without glass.
   Glass = 25,
 };
+
+/// In a `Shadow` command's `param`: the bit that makes it hollow. The blur
+/// is the low bits; nobody blurs by two billion pixels.
+inline constexpr uint32_t kShadowHollow = 0x80000000u;
+
 
 /// Bits in `NodeAnimate.color` — which properties the command states.
 ///

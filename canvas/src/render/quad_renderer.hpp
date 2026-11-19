@@ -279,7 +279,7 @@ class QuadRenderer {
   /// masked — onto whatever is behind, which for a compositor is a surface of
   /// its own sitting under the window.
   void pushShadow(vec2 topLeft, vec2 size, float radius, float blur,
-                  uint32_t rgba);
+                  uint32_t rgba, bool hollow = false);
 
   /// Stroked segment with round caps, emitted as a rotated capsule quad.
   void pushLine(vec2 p0, vec2 p1, float width, uint32_t rgba);

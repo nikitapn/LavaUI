@@ -299,14 +299,18 @@ public enum LavaClient {
     ///     opening `Resize`, which is also how a panel learns its length.
     ///   - reserve: ask that windows be laid out around this panel rather than
     ///     under it. What a panel wants; an overlay does not.
+    ///   - reserved: how much of `thickness` to reserve, when not all of it —
+    ///     a floating bar whose surface also holds the shadow under it.
+    ///     Applied as soon as the surface exists (`SetPanelThickness`).
     public static func openPanel(
         title: String,
         edge: PanelEdge = .top,
         thickness: Float = 32,
-        reserve: Bool = true
+        reserve: Bool = true,
+        reserved: Float? = nil
     ) -> Editor? {
         Self.panel = (edge, thickness, reserve)
-        Self.panelReserved = reserve ? thickness : 0
+        Self.panelReserved = reserve ? min(reserved ?? thickness, thickness) : 0
         // The requested size is only a starting point for layout until the
         // compositor sends the real one; a panel's length is not its own to
         // choose, so guessing the screen's width is as good as anything.
@@ -1498,6 +1502,11 @@ public enum LavaClient {
             )
             // Anything the application asked for before it had a surface.
             flushMinimumSize()
+            // `CreatePanel` reserves the whole thickness; a panel that asked
+            // for less says so now, before anything is laid out around it.
+            if let panel = Self.panel, Self.panelReserved < panel.thickness, panel.reserve {
+                setPanelThickness(panel.thickness, reserved: Self.panelReserved)
+            }
             // The process's `WindowBackdrop`, unless `setBackdropBlur` said.
             if !mainBackdropRadiusSet {
                 mainBackdrop.radius = WindowBackdrop.current.compositorBlurRadius

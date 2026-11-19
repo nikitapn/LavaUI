@@ -74,6 +74,10 @@ public enum DrawKind: UInt32 {
     /// `h` = frost, 0…1, `x` = magnification (0 or 1: none).
     /// See `Glass` in `draw_command.hpp`.
     case glass = 25
+    /// A soft shadow cast by a rounded rect: `aux` = corner radius, `param` =
+    /// blur in pixels, with `DrawList.shadowHollowBit` set when nothing is to
+    /// be drawn inside the rect. See `Shadow` in `draw_command.hpp`.
+    case shadow = 19
 
     /// Whether a `glass` prefix in front of this kind is consumed by it. The
     /// renderer's list, in `render_window.cpp`; anything else would leave the
@@ -713,6 +717,26 @@ public final class DrawList {
             kind: .text, x: x, y: y, w: Float(run.count), h: h,
             color: color, param: first
         )
+    }
+
+    /// In a `shadow` command's `param`: leave the casting rect's own interior
+    /// alone. Mirrors `canvas::kShadowHollow`.
+    static let shadowHollowBit: UInt32 = 0x8000_0000
+
+    /// A soft shadow under the rounded rect `x,y,w,h`, fading out over `blur`
+    /// pixels past its edge — a CSS `box-shadow` with no spread. Offset it by
+    /// moving the rect.
+    ///
+    /// `hollow` leaves the inside of the rect undrawn, as CSS does: a shadow
+    /// under a translucent plate would otherwise darken the plate. Opaque
+    /// casters can leave it off and save the discard.
+    public func shadow(
+        x: Float, y: Float, w: Float, h: Float, cornerRadius: Float,
+        blur: Float, color: Color, hollow: Bool = false
+    ) {
+        let blurPx = UInt32(max(0, min(blur, 4096)).rounded())
+        append(kind: .shadow, x: x, y: y, w: w, h: h, color: color,
+               param: blurPx | (hollow ? Self.shadowHollowBit : 0), aux: cornerRadius)
     }
 
     /// Fills a circle centred on `cx`,`cy`.

@@ -75,9 +75,14 @@ void main() {
     // rather than a straight ramp because a linear edge reads as a band; this
     // is not a Gaussian, and at these radii nobody can tell.
     float ds = sdRoundBox(vLocal, vHalfSize, vRadius);
-    float blur = max(vAux, 1e-4);
+    float blur = max(abs(vAux), 1e-4);
     float fall = 1.0 - smoothstep(0.0, blur, max(ds, 0.0));
     float av = vColor.a * fall * fall;
+    // Hollow (negative aux): nothing inside the caster, faded in over the
+    // pixel at its edge so the plate's own antialiased rim meets it cleanly.
+    if (vAux < 0.0) {
+      av *= clamp(ds / max(fwidth(ds), 1e-5) + 0.5, 0.0, 1.0);
+    }
     if (av <= 0.002) {
       discard;
     }

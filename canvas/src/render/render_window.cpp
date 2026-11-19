@@ -2031,7 +2031,9 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
     case canvas::DrawCommandKind::Shadow:
       // `param` is the blur distance; `aux` the corner radius it has to match.
       quads_.pushShadow({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h}, cmd.aux,
-                        static_cast<float>(cmd.param), faded(cmd.color));
+                        static_cast<float>(cmd.param & ~canvas::kShadowHollow),
+                        faded(cmd.color),
+                        (cmd.param & canvas::kShadowHollow) != 0);
       break;
     case canvas::DrawCommandKind::Line:
       // x,y = p0 and w,h = p1 (see draw_command.hpp). aux carries stroke
