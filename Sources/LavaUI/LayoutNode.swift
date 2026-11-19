@@ -961,8 +961,18 @@ final class LeafNode: YogaBoxNode {
     /// Last computed `(offset(of: focus), layout.rowIndex(of that offset))`,
     /// keyed on the exact `focus`/`affinity` they were computed from.
     private var cachedFocusPosition: (
-        index: String.Index, affinity: CaretAffinity, offset: Int, row: Int
+        index: String.Index, affinity: CaretAffinity, offset: Int, row: Int,
+        rows: Int
     )?
+    /// Bumped whenever the row table is replaced. The caret's *row* depends on
+    /// it as much as on the caret: a window resize re-breaks every line, and
+    /// a row cached against the old width drew the current-line highlight
+    /// (and the caret) on whatever row now has that number — usually off
+    /// screen. The offset does not depend on rows and is kept, since it is
+    /// the half that walks the buffer.
+    private var rowsGeneration = 0
+
+    func rowsReplaced() { rowsGeneration &+= 1 }
 
     /// `editing.offset(of: editing.focus)`, cached against the last `focus`
     /// this was computed for. `offset(of:)` walks the buffer from its start;
@@ -987,8 +997,14 @@ final class LeafNode: YogaBoxNode {
         if let cached = cachedFocusPosition,
            cached.index == editing.focus, cached.affinity == editing.affinity
         {
-            EditorProbe.count("caret.cacheHit")
-            return (cached.offset, cached.row)
+            if cached.rows == rowsGeneration {
+                EditorProbe.count("caret.cacheHit")
+                return (cached.offset, cached.row)
+            }
+            // Same caret, new rows: only the row is out of date.
+            let row = editing.layout.rowIndex(ofOffset: cached.offset, affinity: cached.affinity)
+            cachedFocusPosition = (cached.index, cached.affinity, cached.offset, row, rowsGeneration)
+            return (cached.offset, row)
         }
         // Split, because the two are different shapes of cost and a drag
         // invalidates the cache on every pointer move: the first is a walk
@@ -999,7 +1015,7 @@ final class LeafNode: YogaBoxNode {
         let row = EditorProbe.measure("caret.rowIndex", at: offset) {
             editing.layout.rowIndex(ofOffset: offset, affinity: editing.affinity)
         }
-        cachedFocusPosition = (editing.focus, editing.affinity, offset, row)
+        cachedFocusPosition = (editing.focus, editing.affinity, offset, row, rowsGeneration)
         return (offset, row)
     }
 
@@ -1127,6 +1143,13 @@ final class LeafNode: YogaBoxNode {
     /// Text at the viewport's top before a font change, plus the fractional
     /// row offset. Unlike a logical line, this survives a very long soft wrap.
     var pendingFontAnchor: (offset: Int, fraction: Float)?
+    /// The text a resize is holding in place — the caret, or the middle of
+    /// the view — and its height below the top of the view. Kept across the
+    /// width changes of one drag, so each step anchors on where the drag
+    /// *began* rather than on wherever the last step left a row starting,
+    /// which drifts. Let go of as soon as the reader scrolls it away from
+    /// that height, or an edit shifts the offsets under it.
+    var resizeAnchor: (offset: Int, screenY: Float)?
     /// False where `wrapCacheRows[i]` is that provisional row rather than a
     /// real break. See `refreshVisualRows`.
     var wrapMeasured: [Bool] = []

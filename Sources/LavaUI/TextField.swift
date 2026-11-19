@@ -322,17 +322,29 @@ extension LeafNode {
             // leaves most of the file unbroken and finishes it over the next
             // few frames.
             guard replanned || wrapUnmeasured > 0 || pendingFontAnchor != nil else { return }
+            let previousWidth = lastMeasuredWidth
+            let previousText = lastWrappedText
             lastMeasuredWidth = availableWidth
             lastWrappedText = textNow
 
             // The gutter is not part of the wrap width. Zero for a text
             // field, which is why this expression serves both.
             let inner = max(8, availableWidth - gutterWidth - textInset * 2)
+            // An edit shifts every offset after it; a held anchor would name
+            // the wrong character.
+            if textNow != previousText { resizeAnchor = nil }
             // A different width re-breaks every line, so the row a scroll
-            // offset names is about to mean a different line. Whoever is at
-            // the top of the box stays there.
-            if widthMoved, pendingTopLine == nil {
-                pendingTopLine = logicalLine(ofRow: max(0, Int(scrollY / f.lineHeight)))
+            // offset names is about to mean different text. What stays put is
+            // the text the reader is looking at — the caret if it is on
+            // screen, else the middle of the view — at the same height on
+            // screen. Not the top: holding the top kept the line numbers still
+            // while every paragraph below it grew or shrank, so what was being
+            // read slid off the bottom of the window as it narrowed. The
+            // paragraphs reflow around the anchor instead, and the line numbers
+            // are what move.
+            var resizing: (offset: Int, screenY: Float)?
+            if widthMoved, previousWidth > 0, pendingTopLine == nil, pendingFontAnchor == nil {
+                resizing = readingAnchor(lineHeight: f.lineHeight)
             }
             var anchor: WrapAnchor
             if let line = pendingTopLine {
@@ -347,22 +359,23 @@ extension LeafNode {
             if replanned {
                 planWrap(text: textNow, previous: wrapPlanText, widthMoved: widthMoved)
             }
+            // Break the destination before mapping a character offset into
+            // visual rows, even deep inside one long logical line. The window
+            // a pass breaks reaches a screenful and a margin past its anchor
+            // line either side, so an anchor anywhere on screen is covered.
             if let position = pendingFontAnchor {
-                // Break the destination before mapping its character offset
-                // into visual rows, even deep inside one long logical line.
-                let lines = logicalLineIndex.rows
-                var low = 0
-                var high = lines.count
-                while low < high {
-                    let mid = (low + high) / 2
-                    if lines[mid].lowerBound <= position.offset { low = mid + 1 }
-                    else { high = mid }
-                }
-                anchor = .line(max(0, low - 1))
+                anchor = .line(logicalLine(containingOffset: position.offset))
+            } else if let resizing {
+                anchor = .line(logicalLine(containingOffset: resizing.offset))
             }
             breakWrapWindow(font: f, inner: inner, anchor: anchor)
             installWrapRows()
             restoreFontAnchor(font: f)
+            if let resizing {
+                let row = editing.layout.rowIndex(ofOffset: resizing.offset)
+                scrollY = max(0, Float(row) * f.lineHeight - resizing.screenY)
+                resizeAnchor = resizing
+            }
             return
         }
 
@@ -380,6 +393,54 @@ extension LeafNode {
             }
         }
         if let font = font ?? FontStore.default { restoreFontAnchor(font: font) }
+    }
+
+    /// The text a resize keeps in place, and how far below the top of the
+    /// view it is: the caret when it is on screen — it is where the reader's
+    /// attention is — else the row in the middle of the view.
+    ///
+    /// In the middle of a drag, the one the drag started on, for as long as it
+    /// is still where the drag left it. Taking a fresh one at every step
+    /// would anchor on the start of whatever row is there now, which is a
+    /// little earlier each time and drifts the text over a long drag.
+    private func readingAnchor(lineHeight: Float) -> (offset: Int, screenY: Float)? {
+        let rows = editing.layout.rows
+        guard !rows.isEmpty, lineHeight > 0 else { return nil }
+        let visible = max(lineHeight, viewportHeight - textInset * 2)
+
+        // Still held while its row is within a row of where it was put. Not
+        // "while `scrollY` is unchanged": between two steps of a drag the
+        // background refinement breaks rows above the view and moves
+        // `scrollY` to keep the view still, which is not the reader
+        // scrolling. A real scroll moves the held text away from its height.
+        if let held = resizeAnchor {
+            let row = editing.layout.rowIndex(ofOffset: held.offset)
+            let screenY = Float(row) * lineHeight - scrollY
+            if abs(screenY - held.screenY) < lineHeight { return held }
+        }
+        resizeAnchor = nil
+
+        let caret = focusOffset()
+        let caretRow = editing.layout.rowIndex(ofOffset: caret)
+        let caretY = Float(caretRow) * lineHeight - scrollY
+        if caretY >= 0, caretY + lineHeight <= visible {
+            return (caret, caretY)
+        }
+        let middle = min(rows.count - 1, max(0, Int((scrollY + visible / 2) / lineHeight)))
+        return (rows[middle].lowerBound, Float(middle) * lineHeight - scrollY)
+    }
+
+    /// The logical line a character offset is on.
+    private func logicalLine(containingOffset offset: Int) -> Int {
+        let lines = logicalLineIndex.rows
+        var low = 0
+        var high = lines.count
+        while low < high {
+            let mid = (low + high) / 2
+            if lines[mid].lowerBound <= offset { low = mid + 1 }
+            else { high = mid }
+        }
+        return max(0, low - 1)
     }
 
     private func restoreFontAnchor(font: UIFont) {
@@ -715,6 +776,7 @@ extension LeafNode {
             base += lineLength(index) + 1  // + the newline that ended it
         }
         editing.setVisualRows(rows)
+        rowsReplaced()
         rowLogicalLine = logicalLine
         rowColumnStart = columnStart
     }
@@ -797,6 +859,7 @@ extension LeafNode {
         let index = VisualLayout.lineIndex(editing.text, includingBytes: wraps)
         logicalLineIndex = index
         editing.setVisualRows(index.rows)
+        rowsReplaced()
         // Row *is* logical line now, which the accessors above answer without
         // a table. Leaving a stale one installed would answer for the wrap
         // this buffer no longer has.

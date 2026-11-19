@@ -2571,7 +2571,6 @@ extension DrawList {
         let inset = leaf.textInset
         let lineH = font.lineHeight
         let focused = FocusManager.isFocused(leaf.id)
-        let state = leaf.editing
 
         // Re-wrap against the box Yoga actually granted, before anything reads
         // the rows.
@@ -2589,6 +2588,14 @@ extension DrawList {
         // which is what the measure pass is handed too, so the two agree and
         // neither invalidates the other's work.
         leaf.refreshVisualRows(availableWidth: w)
+        // Copied *after* the re-wrap. `TextEditingState` is a value, and a copy
+        // taken first kept the rows of the previous width: on every frame of
+        // a window drag the text was drawn from the old table at the scroll
+        // offset computed for the new one, while the gutter — which reads the
+        // leaf's own tables — drew the new. Line numbers held still and the
+        // text flicked to the wrong place, until the drag stopped and a frame
+        // with no width change drew the two from the same table again.
+        let state = leaf.editing
         let rows = state.layout.rows
         // Keyed by logical line, which is what a lexer threads state through
         // and is no longer the same as `row` — see `EditorView(wraps:)`. The

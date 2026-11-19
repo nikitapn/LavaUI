@@ -322,6 +322,162 @@ final class WrappedWindowTests: XCTestCase {
         )
     }
 
+    // MARK: Resizing a wrapped, scrolled viewport
+
+    /// One pass at `width`, the way a window being resized delivers it.
+    @discardableResult
+    private func pass(width: Float) throws -> LeafNode {
+        host.setRoot(
+            VStack(width: .pt(width), height: .pt(Self.viewport.h)) {
+                EditorView(text: binding, wraps: true, visibleLines: 8)
+            }
+        )
+        _ = host.calculateLayout(width: width, height: Self.viewport.h)
+        let root = try XCTUnwrap(host.rootNode)
+        let list = DrawList(editor: editor)
+        list.clear()
+        list.emitTree(root, viewportW: width, viewportH: Self.viewport.h)
+
+        func walk(_ node: any AnyViewNode) -> LeafNode? {
+            if let leaf = node as? LeafNode, leaf.kind == .editor { return leaf }
+            for child in node.childNodes {
+                if let hit = walk(child) { return hit }
+            }
+            return nil
+        }
+        return try XCTUnwrap(walk(root))
+    }
+
+    /// Where a character is, in pixels below the top of the view.
+    private func screenY(of offset: Int, in leaf: LeafNode, lineHeight: Float) -> Float {
+        Float(leaf.editing.layout.rowIndex(ofOffset: offset)) * lineHeight - leaf.scrollY
+    }
+
+    /// Dragging a window edge is a width change per pointer move, and every
+    /// paragraph on screen grows or shrinks with it. What the reader is
+    /// looking at has to stay where it is while that happens: with the caret
+    /// off screen, the text in the middle of the view. Holding the *top*
+    /// instead kept the line numbers still and slid what was being read off
+    /// the bottom of the window as it narrowed; holding the top *line* snapped
+    /// the text back and forth by the height of a paragraph at every step.
+    func testResizingKeepsTheMiddleOfTheViewInPlace() throws {
+        let leaf = try settleWrap()
+        let lineHeight = try XCTUnwrap(FontStore.default).lineHeight
+        leaf.scrollY = Float(leaf.editing.layout.count / 2) * lineHeight
+        _ = try pass(width: Self.viewport.w)  // the caret (offset 0) is far above
+
+        let visible = leaf.viewportHeight - leaf.textInset * 2
+        let middleRow = Int((leaf.scrollY + visible / 2) / lineHeight)
+        let held = leaf.editing.layout.rows[middleRow].lowerBound
+        let heldY = screenY(of: held, in: leaf, lineHeight: lineHeight)
+
+        for width: Float in [296, 290, 281, 270, 258, 246, 262, 279, 291] {
+            let now = try pass(width: width)
+            XCTAssertEqual(
+                screenY(of: held, in: now, lineHeight: lineHeight), heldY, accuracy: lineHeight * 0.5,
+                "at \(width)pt the text that was in the middle moved"
+            )
+        }
+        // Back where it started: not a pixel of drift for the round trip.
+        let back = try pass(width: Self.viewport.w)
+        XCTAssertEqual(screenY(of: held, in: back, lineHeight: lineHeight), heldY, accuracy: 0.01)
+    }
+
+    /// With the caret on screen, the caret is what stays put: it is where the
+    /// reader is looking, and the text being typed must not move under it.
+    func testResizingKeepsAVisibleCaretInPlace() throws {
+        let leaf = try settleWrap()
+        let lineHeight = try XCTUnwrap(FontStore.default).lineHeight
+        leaf.scrollY = Float(leaf.editing.layout.count / 3) * lineHeight
+        _ = try pass(width: Self.viewport.w)
+        // Two rows from the bottom of the view, so it is the caret and not
+        // the middle that is being held.
+        let visible = leaf.viewportHeight - leaf.textInset * 2
+        let row = Int((leaf.scrollY + visible) / lineHeight) - 2
+        let caret = leaf.editing.layout.rows[row].lowerBound + 3
+        leaf.editing.setCursor(leaf.textIndex(atOffset: caret))
+        let caretY = screenY(of: caret, in: leaf, lineHeight: lineHeight)
+
+        for width: Float in [280, 250, 230, 260, 300] {
+            let now = try pass(width: width)
+            XCTAssertEqual(screenY(of: caret, in: now, lineHeight: lineHeight), caretY,
+                           accuracy: lineHeight * 0.5, "at \(width)pt the caret moved")
+            // And the caret is drawn there: the row it is cached on follows
+            // the new table, not the one it was cached against.
+            XCTAssertEqual(now.focusRow(), now.editing.layout.rowIndex(ofOffset: caret),
+                           "at \(width)pt the caret row is stale")
+        }
+    }
+
+    /// The text one frame draws: every text command's position and glyph
+    /// count (`w` carries the count for text), in order.
+    ///
+    /// Laid out the way LavaEditor lays it out — growing to fill a box whose
+    /// size is fixed — because then Yoga never calls the measure function,
+    /// and the emitter's re-wrap is the only one there is. An editor that
+    /// sizes itself is re-wrapped by the measure pass first, which hid the
+    /// bug below from every test that built one.
+    private func drawnText(width: Float) throws -> [[Float]] {
+        host.setRoot(
+            VStack(width: .pt(width), height: .pt(Self.viewport.h)) {
+                EditorView(text: binding, wraps: true, visibleLines: 8).flexGrow(1)
+            }
+        )
+        _ = host.calculateLayout(width: width, height: Self.viewport.h)
+        let root = try XCTUnwrap(host.rootNode)
+        let list = DrawList(editor: editor)
+        list.clear()
+        list.emitTree(root, viewportW: width, viewportH: Self.viewport.h)
+        return (0..<list.commandCount).compactMap { list.emitted(at: $0) }
+            .filter { $0.kind == .text }
+            .map { [$0.x, $0.y, $0.w] }
+    }
+
+    /// The frame in which the width changes has to draw what the next frame
+    /// at that width draws. It did not: the emitter copied the editing state
+    /// before re-wrapping, so that one frame drew the *previous* width's rows
+    /// at the scroll offset worked out for the new one — while the gutter,
+    /// which reads the leaf's own tables, drew the new. A window drag is
+    /// nothing but such frames, so the text flickered to the wrong place for
+    /// as long as the edge moved and came back the moment it stopped.
+    func testTheFrameThatChangesWidthDrawsTheNewRows() throws {
+        let leaf = try settleWrap()
+        let lineHeight = try XCTUnwrap(FontStore.default).lineHeight
+        leaf.scrollY = Float(leaf.editing.layout.count / 2) * lineHeight
+        _ = try drawnText(width: Self.viewport.w)
+
+        for width: Float in [290, 270, 250, 275] {
+            let changing = try drawnText(width: width)
+            let settled = try drawnText(width: width)
+            XCTAssertFalse(changing.isEmpty)
+            XCTAssertEqual(changing, settled,
+                           "at \(width)pt the resizing frame drew different text than the settled one")
+        }
+    }
+
+    /// The anchor a drag holds is let go of the moment the reader scrolls, or
+    /// the next resize would yank the view back to where the *previous* drag
+    /// began.
+    func testAScrollBetweenResizesIsWhatTheNextResizeHolds() throws {
+        let leaf = try settleWrap()
+        let lineHeight = try XCTUnwrap(FontStore.default).lineHeight
+        leaf.scrollY = Float(leaf.editing.layout.count / 3) * lineHeight
+        _ = try pass(width: 280)
+
+        // Scrolled elsewhere, then resized again.
+        let scrolled = try pass(width: 280)
+        scrolled.scrollY = Float(scrolled.editing.layout.count * 2 / 3) * lineHeight
+        let visible = scrolled.viewportHeight - scrolled.textInset * 2
+        let middleRow = Int((scrolled.scrollY + visible / 2) / lineHeight)
+        let target = scrolled.editing.layout.rows[middleRow].lowerBound
+        let targetY = screenY(of: target, in: scrolled, lineHeight: lineHeight)
+
+        let after = try pass(width: 300)
+        XCTAssertEqual(screenY(of: target, in: after, lineHeight: lineHeight), targetY,
+                       accuracy: lineHeight * 0.5,
+                       "the resize should hold where the reader scrolled to, not the old anchor")
+    }
+
     // MARK: Toggling the mode under a scrolled viewport
 
     /// One pass at `wraps`, re-rooting the tree the way a toggle does.
