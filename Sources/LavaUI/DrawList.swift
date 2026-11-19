@@ -2323,11 +2323,15 @@ extension DrawList {
             )
         }
 
-        circle(
-            cx: cx, cy: cy,
-            radius: knobR * (leaf.sliderKnobScale?.current ?? 1),
-            color: enabled ? style.knob : style.disabledKnob
-        )
+        let radius = knobR * (leaf.sliderKnobScale?.current ?? 1)
+        if let ring = style.knobRing, enabled {
+            circle(cx: cx, cy: cy, radius: radius, color: ring)
+            circle(cx: cx, cy: cy, radius: max(0, radius - style.knobRingWidth),
+                   color: style.knob)
+        } else {
+            circle(cx: cx, cy: cy, radius: radius,
+                   color: enabled ? style.knob : style.disabledKnob)
+        }
 
         if !leaf.text.isEmpty, let font = leaf.font ?? FontStore.default {
             text(

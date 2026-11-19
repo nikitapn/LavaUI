@@ -235,6 +235,10 @@ public struct SliderStyle {
     /// Space reserved for the readout, wide enough that its text changing
     /// width cannot resize the track mid-drag.
     public var valueWidth: Float
+    /// A ring round the knob, in this colour, `knobRingWidth` wide — a white
+    /// knob outlined in the accent. `nil` is a plain disc.
+    public var knobRing: Color? = nil
+    public var knobRingWidth: Float = 3
     /// How long the knob takes to grow or shrink on hover, in seconds.
     public var duration: Double
 
