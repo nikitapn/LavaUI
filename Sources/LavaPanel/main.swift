@@ -1155,15 +1155,10 @@ final class MenuSession {
             return
         }
         closeMenu()
-        let panelW = editor?.framebufferSize().w ?? 1280
-        let anchor: LavaApp.SurfaceAnchor
-        if let clock = LavaApp.mainLayoutHost?.agentFrame(sid: "applet.calendar") {
-            anchor = LavaApp.SurfaceAnchor(clock)
-        } else {
-            anchor = LavaApp.SurfaceAnchor(
-                x: panelW - 180, y: 0, w: 160, h: Self.stripHeight
-            )
-        }
+        // The design hangs it 40pt past the clock's right edge, over the
+        // power button, so the month sits under the time.
+        let anchor = popupAnchor(under: "applet.calendar", width: CalendarWindow.width,
+                                 rightOverhang: 40)
         // Opens on today, wherever it was paged to last time.
         calendarModel.reset()
         let model = calendarModel
@@ -1181,9 +1176,8 @@ final class MenuSession {
                 }
             }
         ) {
+            // The card frosts itself, at its own corner radius.
             CalendarWindow(model: model)
-                .backdropBlur(radius: PanelChrome.popupBlurRadius)
-                .glassEffect(magnification: PanelChrome.popupMagnification)
         }
         calendarWindow = opened
     }
@@ -1205,16 +1199,15 @@ final class MenuSession {
             title: "Year",
             width: width,
             height: YearWindow.height,
-            anchor: .leftOf(parent, width: width),
+            anchor: .leftOf(parent, width: width, gap: 10),
             onClose: {
                 if let id = opened, session.yearWindow == id {
                     session.yearWindow = nil
                 }
             }
         ) {
+            // The card frosts itself, at its own corner radius.
             YearWindow(model: model)
-                .backdropBlur(radius: PanelChrome.popupBlurRadius)
-                .glassEffect(magnification: PanelChrome.popupMagnification)
         }
         yearWindow = opened
     }
@@ -1874,6 +1867,14 @@ guard let panelFonts = PanelFonts.load(into: editor) else {
     exit(1)
 }
 
+guard let loadedPopupFonts = PopupFonts.load(into: editor) else {
+    FileHandle.standardError.write(
+        Data("LavaPanel: could not load the popups' faces from LavaUI's fonts\n".utf8)
+    )
+    exit(1)
+}
+popupFonts = loadedPopupFonts
+
 // The system menu's flame, white, for the accent disc it sits on.
 guard let flameIcon = ImageStore.loadAsset(named: "flame.svg", bundle: .module, into: editor)
 else {
@@ -1947,6 +1948,32 @@ GLibPump.add {
 // surface that is not listening — a grab whose answer would go nowhere.
 LavaClient.onMenuChoice { serial, chosen in
     session.menuChosen(serial: serial, chosen: chosen)
+}
+
+// A test lever: open popups by name once the bar has drawn, for screenshots
+// of cards a headless session has no pointer to open — the agent port drives
+// the bar's window only. `LAVA_PANEL_OPEN=calendar,year`; also `player`,
+// `network`, `volume`, `bluetooth`. Each waits a frame for the one before.
+if let names = ProcessInfo.processInfo.environment["LAVA_PANEL_OPEN"] {
+    func openNext(_ rest: ArraySlice<Substring>, delay: Int) {
+        guard let name = rest.first else { return }
+        // Some frames in: the bar has to be laid out for an anchor to exist.
+        FrameScheduler.requestRedraw(in: 0.05)
+        FrameTasks.after {
+            if delay > 0 { return openNext(rest, delay: delay - 1) }
+            switch name {
+            case "calendar": session.toggleCalendar()
+            case "year": session.toggleYear()
+            case "player": session.togglePlayer()
+            case "network": session.toggleNetwork()
+            case "volume": session.toggleVolume()
+            case "bluetooth": session.toggleBluetooth()
+            default: FileHandle.standardError.write(Data("LAVA_PANEL_OPEN: no '\(name)'\n".utf8))
+            }
+            openNext(rest.dropFirst(), delay: 10)
+        }
+    }
+    openNext(names.split(separator: ",")[...], delay: 10)
 }
 
 LavaClient.run(editor: editor) {
