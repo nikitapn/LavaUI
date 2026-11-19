@@ -1231,7 +1231,12 @@ public final class DrawList {
         // that is all of its backdrop. Not a rectangle among the others: a
         // rectangle is cut to the view's corner, which a root view rarely
         // states, and the window's mask is the outline the plate must match.
-        if contentRadius == nil, glass != nil || (backdropRadius ?? 0) > 0,
+        //
+        // Unless it does state one. A card filling its popup with a corner
+        // rounder than the window's is a rectangle like any other: cut to the
+        // window's corner instead, the frost showed in the gap between the
+        // two curves, darker where the blur ran out of picture at the edge.
+        if contentRadius == nil, cornerRadius <= 0, glass != nil || (backdropRadius ?? 0) > 0,
            x <= 0.5, y <= 0.5, w >= viewport.w - 1, h >= viewport.h - 1
         {
             windowBackdrop = BackdropBridge.WindowPlate(
