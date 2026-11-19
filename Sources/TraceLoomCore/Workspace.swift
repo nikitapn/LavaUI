@@ -162,11 +162,11 @@ public struct WorkspaceDocument: Codable, Equatable, Sendable {
     /// widget did.
     public struct Position: Codable, Equatable, Sendable {
         public var scrollX: Float
-        public var scrollY: Float
+        public var scrollY: Double
         public var anchor: Int
         public var focus: Int
 
-        public init(scrollX: Float, scrollY: Float, anchor: Int, focus: Int) {
+        public init(scrollX: Float, scrollY: Double, anchor: Int, focus: Int) {
             self.scrollX = scrollX
             self.scrollY = scrollY
             self.anchor = anchor

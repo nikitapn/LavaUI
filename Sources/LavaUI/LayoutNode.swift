@@ -490,7 +490,7 @@ final class LeafNode: YogaBoxNode {
     /// exactly when the walks it exists to prevent were being made, and
     /// dragging near the end of a large file paid several full-buffer walks
     /// per move (`LAVA_EDITOR_PROBE=1` shows them).
-    private var indexAnchor: (revision: UInt64, offset: Int, index: String.Index)?
+    private(set) var indexAnchor: (revision: UInt64, offset: Int, index: String.Index)?
     var placeholder: String = ""
     var isMultiline = false
     var maxLines = 8
@@ -609,7 +609,16 @@ final class LeafNode: YogaBoxNode {
     var decorations: [EditorDecoration] = []
     var onDecorationTap: ((EditorDecoration) -> Void)?
     /// Vertical scroll offset in pixels. Positive scrolls content up.
-    var scrollY: Float = 0
+    ///
+    /// A `Double`, unlike every other coordinate here, because it is the one
+    /// that is a *document* coordinate. A 200 MB log wrapped is millions of
+    /// rows, and past 2^24 px a `Float` holds only even numbers, past 2^27
+    /// only multiples of 16: the offset could not land on a row, the held
+    /// line's fraction came out negative or larger than a row, and while the
+    /// refinement ran the text stepped up and down by half a line each frame.
+    /// Anything derived from it that is on screen is small again, and a
+    /// `Float`.
+    var scrollY: Double = 0
     /// Horizontal offset in pixels. The gutter does not move with it.
     var scrollX: Float = 0
     /// Width of the text area (box minus gutter and padding), from the last
@@ -894,7 +903,7 @@ final class LeafNode: YogaBoxNode {
         let content = Float(editing.layout.count) * font.lineHeight + textInset * 2
         return Scrollbar.metrics(
             track: viewportHeight, content: content,
-            offset: scrollY, maxOffset: maxScrollY(lineHeight: font.lineHeight)
+            offset: Float(scrollY), maxOffset: Float(maxScrollY(lineHeight: font.lineHeight))
         )
     }
 
@@ -908,10 +917,28 @@ final class LeafNode: YogaBoxNode {
         )
     }
 
+    /// Where a row starts in the document, in pixels — in `Double`, like
+    /// `scrollY`, since it is the same kind of number. See `scrollY`.
+    func documentY(ofRow row: Int, lineHeight: Float) -> Double {
+        Double(row) * Double(lineHeight)
+    }
+
+    /// Where a row starts below the top of the text area. Small whenever the
+    /// row is anywhere near the screen, which is the only time it is asked.
+    func screenY(ofRow row: Int, lineHeight: Float) -> Float {
+        Float(documentY(ofRow: row, lineHeight: lineHeight) - scrollY)
+    }
+
+    /// The row under a point `localY` below the top of the text area.
+    func row(atScreenY localY: Float, lineHeight: Float) -> Int {
+        guard lineHeight > 0 else { return 0 }
+        return Int(((scrollY + Double(localY)) / Double(lineHeight)).rounded(.down))
+    }
+
     /// Largest legal scroll offset for the current content.
-    func maxScrollY(lineHeight: Float) -> Float {
-        let content = Float(editing.layout.count) * lineHeight
-        let visible = viewportHeight - textInset * 2
+    func maxScrollY(lineHeight: Float) -> Double {
+        let content = Double(editing.layout.count) * Double(lineHeight)
+        let visible = Double(viewportHeight - textInset * 2)
         return max(0, content - visible)
     }
 
@@ -929,7 +956,7 @@ final class LeafNode: YogaBoxNode {
     }
 
     func scrollBy(_ delta: Float, lineHeight: Float) {
-        let next = min(max(0, scrollY + delta), maxScrollY(lineHeight: lineHeight))
+        let next = min(max(0, scrollY + Double(delta)), maxScrollY(lineHeight: lineHeight))
         if next != scrollY {
             scrollY = next
             // See `scrollByX` — same paint-only state, same reason `.body`
@@ -950,7 +977,7 @@ final class LeafNode: YogaBoxNode {
             min(max(0, scrollX + delta), maxScrollX(font: f)) != scrollX
         }
         func movesY(_ delta: Float) -> Bool {
-            min(max(0, scrollY + delta), maxScrollY(lineHeight: f.lineHeight)) != scrollY
+            min(max(0, scrollY + Double(delta)), maxScrollY(lineHeight: f.lineHeight)) != scrollY
         }
         // Mirrors the axis choice the handler makes, so eligibility and effect
         // never disagree.
@@ -959,10 +986,12 @@ final class LeafNode: YogaBoxNode {
     }
 
     /// Last computed `(offset(of: focus), layout.rowIndex(of that offset))`,
-    /// keyed on the exact `focus`/`affinity` they were computed from.
+    /// keyed on the exact `focus`/`affinity` they were computed from, and the
+    /// text: an index is a byte position, and the same one in a replaced
+    /// buffer can be a different character. `editorPosition()` saves this.
     private var cachedFocusPosition: (
-        index: String.Index, affinity: CaretAffinity, offset: Int, row: Int,
-        rows: Int
+        index: String.Index, affinity: CaretAffinity, revision: UInt64,
+        offset: Int, row: Int, rows: Int
     )?
     /// Bumped whenever the row table is replaced. The caret's *row* depends on
     /// it as much as on the caret: a window resize re-breaks every line, and
@@ -995,7 +1024,8 @@ final class LeafNode: YogaBoxNode {
 
     private func focusPosition() -> (offset: Int, row: Int) {
         if let cached = cachedFocusPosition,
-           cached.index == editing.focus, cached.affinity == editing.affinity
+           cached.index == editing.focus, cached.affinity == editing.affinity,
+           cached.revision == editing.revision
         {
             if cached.rows == rowsGeneration {
                 EditorProbe.count("caret.cacheHit")
@@ -1003,7 +1033,9 @@ final class LeafNode: YogaBoxNode {
             }
             // Same caret, new rows: only the row is out of date.
             let row = editing.layout.rowIndex(ofOffset: cached.offset, affinity: cached.affinity)
-            cachedFocusPosition = (cached.index, cached.affinity, cached.offset, row, rowsGeneration)
+            cachedFocusPosition = (
+                cached.index, cached.affinity, cached.revision, cached.offset, row, rowsGeneration
+            )
             return (cached.offset, row)
         }
         // Split, because the two are different shapes of cost and a drag
@@ -1015,7 +1047,9 @@ final class LeafNode: YogaBoxNode {
         let row = EditorProbe.measure("caret.rowIndex", at: offset) {
             editing.layout.rowIndex(ofOffset: offset, affinity: editing.affinity)
         }
-        cachedFocusPosition = (editing.focus, editing.affinity, offset, row, rowsGeneration)
+        cachedFocusPosition = (
+            editing.focus, editing.affinity, editing.revision, offset, row, rowsGeneration
+        )
         return (offset, row)
     }
 
@@ -1080,13 +1114,13 @@ final class LeafNode: YogaBoxNode {
         let row = editing.layout.rowIndex(
             ofOffset: editing.offset(of: editing.focus), affinity: editing.affinity
         )
-        let rowTop = Float(row) * lineHeight
-        let visible = viewportHeight - textInset * 2
+        let rowTop = Double(row) * Double(lineHeight)
+        let visible = Double(viewportHeight - textInset * 2)
         if rowTop < scrollY {
             scrollY = rowTop
             ViewInvalidation.markDirty()
-        } else if rowTop + lineHeight > scrollY + visible {
-            scrollY = rowTop + lineHeight - visible
+        } else if rowTop + Double(lineHeight) > scrollY + visible {
+            scrollY = rowTop + Double(lineHeight) - visible
             ViewInvalidation.markDirty()
         }
         scrollY = min(max(0, scrollY), maxScrollY(lineHeight: lineHeight))

@@ -134,7 +134,7 @@ final class EditorPositionTests: XCTestCase {
         original.reveal(line: 700)
         settle(text: binding, controller: original, wraps: true)
         let node = try leaf()
-        node.scrollY += (FontStore.default?.lineHeight ?? 20) * 2.25
+        node.scrollY += Double(FontStore.default?.lineHeight ?? 20) * 2.25
         settle(text: binding, controller: original, wraps: true)
         let saved = try XCTUnwrap(original.position())
         XCTAssertGreaterThan(saved.topOffset ?? 0, 100_000)

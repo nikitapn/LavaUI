@@ -139,8 +139,8 @@ final class WrappedWindowTests: XCTestCase {
 
         let rows = leaf.editing.layout.rows
         let lineHeight = font.lineHeight
-        let first = max(0, Int(leaf.scrollY / lineHeight))
-        let last = min(rows.count - 1, Int((leaf.scrollY + leaf.viewportHeight) / lineHeight) + 1)
+        let first = max(0, Int(Float(leaf.scrollY) / lineHeight))
+        let last = min(rows.count - 1, Int((Float(leaf.scrollY) + leaf.viewportHeight) / lineHeight) + 1)
         XCTAssertGreaterThan(last, first, "nothing was visible to check")
         for row in first...last {
             XCTAssertTrue(
@@ -158,13 +158,13 @@ final class WrappedWindowTests: XCTestCase {
         let font = try XCTUnwrap(leaf.font ?? FontStore.default)
         let lineHeight = font.lineHeight
 
-        leaf.scrollY = Float(leaf.editing.layout.count / 2) * lineHeight
+        leaf.scrollY = Double(Float(leaf.editing.layout.count / 2) * lineHeight)
         leaf = try pass()
 
         let exact = Set(eagerRows(leaf, font: font))
         let rows = leaf.editing.layout.rows
-        let first = max(0, Int(leaf.scrollY / lineHeight))
-        let last = min(rows.count - 1, Int((leaf.scrollY + leaf.viewportHeight) / lineHeight) + 1)
+        let first = max(0, Int(Float(leaf.scrollY) / lineHeight))
+        let last = min(rows.count - 1, Int((Float(leaf.scrollY) + leaf.viewportHeight) / lineHeight) + 1)
         for row in first...last {
             XCTAssertTrue(
                 exact.contains(rows[row]),
@@ -204,9 +204,9 @@ final class WrappedWindowTests: XCTestCase {
         let font = try XCTUnwrap(leaf.font ?? FontStore.default)
         let lineHeight = font.lineHeight
 
-        leaf.scrollY = Float(leaf.editing.layout.count / 3) * lineHeight
+        leaf.scrollY = Double(Float(leaf.editing.layout.count / 3) * lineHeight)
         leaf = try pass()
-        let topLine = leaf.logicalLine(ofRow: Int(leaf.scrollY / lineHeight))
+        let topLine = leaf.logicalLine(ofRow: Int(Float(leaf.scrollY) / lineHeight))
 
         LeafNode.wrapBudget = 0.004
         var passes = 0
@@ -214,7 +214,7 @@ final class WrappedWindowTests: XCTestCase {
             leaf = try pass()
             passes += 1
             XCTAssertEqual(
-                leaf.logicalLine(ofRow: Int(leaf.scrollY / lineHeight)), topLine,
+                leaf.logicalLine(ofRow: Int(Float(leaf.scrollY) / lineHeight)), topLine,
                 "the top line moved on refinement pass \(passes)"
             )
         }
@@ -232,7 +232,7 @@ final class WrappedWindowTests: XCTestCase {
         LeafNode.wrapBudget = 0
         let leaf = try pass()
         let font = try XCTUnwrap(leaf.font ?? FontStore.default)
-        leaf.scrollY = Float(leaf.editing.layout.count / 2) * font.lineHeight
+        leaf.scrollY = Double(Float(leaf.editing.layout.count / 2) * font.lineHeight)
         _ = try pass()
         XCTAssertGreaterThan(leaf.wrapUnmeasured, 0)
         try insertNewlineWithoutJump(leaf)
@@ -241,28 +241,28 @@ final class WrappedWindowTests: XCTestCase {
     private func insertNewlineWithoutJump(_ leaf: LeafNode) throws {
         let font = try XCTUnwrap(leaf.font ?? FontStore.default)
         let line = leaf.wrapUnmeasured == 0 ? 600
-            : leaf.logicalLine(ofRow: Int(leaf.scrollY / font.lineHeight)) + 1
+            : leaf.logicalLine(ofRow: Int(Float(leaf.scrollY) / font.lineHeight)) + 1
         let row = leaf.firstRow(ofLine: line)
-        leaf.scrollY = Float(row - 2) * font.lineHeight + 0.25 * font.lineHeight
+        leaf.scrollY = Double(Float(row - 2) * font.lineHeight + 0.25 * font.lineHeight)
         leaf.editing.setCursor(leaf.editing.index(line: line, column: 0))
         leaf.focusSelf(binding: binding, onSubmit: nil)
         defer { FocusManager.resignFocus(leaf.id) }
-        let before = leaf.scrollY
+        let before = Float(leaf.scrollY)
         let top = topLine(leaf, font: font)
         let wrapsBefore = PerfCounters.lineWraps
 
         XCTAssertTrue(FocusManager.handle(KeyEvent(key: KeyCode.enter, mods: 0)))
-        XCTAssertEqual(leaf.scrollY, before, accuracy: 0.01,
+        XCTAssertEqual(Float(leaf.scrollY), before, accuracy: 0.01,
                        "Enter followed a logical line instead of a wrapped row")
         _ = try pass()
-        XCTAssertEqual(leaf.scrollY, before, accuracy: 0.01)
+        XCTAssertEqual(Float(leaf.scrollY), before, accuracy: 0.01)
         XCTAssertEqual(topLine(leaf, font: font), top)
         XCTAssertLessThanOrEqual(PerfCounters.lineWraps - wrapsBefore, 4,
                                 "the edit should only wrap the changed lines")
         let caret = leaf.editing.layout.rowIndex(ofOffset: leaf.editing.offset(of: leaf.editing.focus))
-        XCTAssertGreaterThanOrEqual(Float(caret) * font.lineHeight, leaf.scrollY)
+        XCTAssertGreaterThanOrEqual(Float(caret) * font.lineHeight, Float(leaf.scrollY))
         XCTAssertLessThanOrEqual(Float(caret + 1) * font.lineHeight,
-                                leaf.scrollY + leaf.viewportHeight - leaf.textInset * 2)
+                                Float(leaf.scrollY) + leaf.viewportHeight - leaf.textInset * 2)
     }
 
     // MARK: Edits on top of a half-wrapped plan
@@ -350,7 +350,7 @@ final class WrappedWindowTests: XCTestCase {
 
     /// Where a character is, in pixels below the top of the view.
     private func screenY(of offset: Int, in leaf: LeafNode, lineHeight: Float) -> Float {
-        Float(leaf.editing.layout.rowIndex(ofOffset: offset)) * lineHeight - leaf.scrollY
+        Float(leaf.editing.layout.rowIndex(ofOffset: offset)) * lineHeight - Float(leaf.scrollY)
     }
 
     /// Dragging a window edge is a width change per pointer move, and every
@@ -363,11 +363,11 @@ final class WrappedWindowTests: XCTestCase {
     func testResizingKeepsTheMiddleOfTheViewInPlace() throws {
         let leaf = try settleWrap()
         let lineHeight = try XCTUnwrap(FontStore.default).lineHeight
-        leaf.scrollY = Float(leaf.editing.layout.count / 2) * lineHeight
+        leaf.scrollY = Double(Float(leaf.editing.layout.count / 2) * lineHeight)
         _ = try pass(width: Self.viewport.w)  // the caret (offset 0) is far above
 
         let visible = leaf.viewportHeight - leaf.textInset * 2
-        let middleRow = Int((leaf.scrollY + visible / 2) / lineHeight)
+        let middleRow = Int((Float(leaf.scrollY) + visible / 2) / lineHeight)
         let held = leaf.editing.layout.rows[middleRow].lowerBound
         let heldY = screenY(of: held, in: leaf, lineHeight: lineHeight)
 
@@ -388,12 +388,12 @@ final class WrappedWindowTests: XCTestCase {
     func testResizingKeepsAVisibleCaretInPlace() throws {
         let leaf = try settleWrap()
         let lineHeight = try XCTUnwrap(FontStore.default).lineHeight
-        leaf.scrollY = Float(leaf.editing.layout.count / 3) * lineHeight
+        leaf.scrollY = Double(Float(leaf.editing.layout.count / 3) * lineHeight)
         _ = try pass(width: Self.viewport.w)
         // Two rows from the bottom of the view, so it is the caret and not
         // the middle that is being held.
         let visible = leaf.viewportHeight - leaf.textInset * 2
-        let row = Int((leaf.scrollY + visible) / lineHeight) - 2
+        let row = Int((Float(leaf.scrollY) + visible) / lineHeight) - 2
         let caret = leaf.editing.layout.rows[row].lowerBound + 3
         leaf.editing.setCursor(leaf.textIndex(atOffset: caret))
         let caretY = screenY(of: caret, in: leaf, lineHeight: lineHeight)
@@ -443,7 +443,7 @@ final class WrappedWindowTests: XCTestCase {
     func testTheFrameThatChangesWidthDrawsTheNewRows() throws {
         let leaf = try settleWrap()
         let lineHeight = try XCTUnwrap(FontStore.default).lineHeight
-        leaf.scrollY = Float(leaf.editing.layout.count / 2) * lineHeight
+        leaf.scrollY = Double(Float(leaf.editing.layout.count / 2) * lineHeight)
         _ = try drawnText(width: Self.viewport.w)
 
         for width: Float in [290, 270, 250, 275] {
@@ -465,11 +465,11 @@ final class WrappedWindowTests: XCTestCase {
     func testAResizeDoesNotMoveTheScrollbarBeforeTheRefinementCatchesUp() throws {
         let wide = try settleWrap()
         let lineHeight = try XCTUnwrap(FontStore.default).lineHeight
-        wide.scrollY = Float(wide.editing.layout.count / 2) * lineHeight
+        wide.scrollY = Double(Float(wide.editing.layout.count / 2) * lineHeight)
         _ = try pass(width: Self.viewport.w)
 
         func thumb(_ leaf: LeafNode) -> Float {
-            leaf.scrollY / max(1, Float(leaf.editing.layout.count) * lineHeight - leaf.viewportHeight)
+            Float(leaf.scrollY) / max(1, Float(leaf.editing.layout.count) * lineHeight - leaf.viewportHeight)
         }
 
         // One pass at the new width, breaking only what is on screen.
@@ -499,14 +499,14 @@ final class WrappedWindowTests: XCTestCase {
     func testAScrollBetweenResizesIsWhatTheNextResizeHolds() throws {
         let leaf = try settleWrap()
         let lineHeight = try XCTUnwrap(FontStore.default).lineHeight
-        leaf.scrollY = Float(leaf.editing.layout.count / 3) * lineHeight
+        leaf.scrollY = Double(Float(leaf.editing.layout.count / 3) * lineHeight)
         _ = try pass(width: 280)
 
         // Scrolled elsewhere, then resized again.
         let scrolled = try pass(width: 280)
-        scrolled.scrollY = Float(scrolled.editing.layout.count * 2 / 3) * lineHeight
+        scrolled.scrollY = Double(Float(scrolled.editing.layout.count * 2 / 3) * lineHeight)
         let visible = scrolled.viewportHeight - scrolled.textInset * 2
-        let middleRow = Int((scrolled.scrollY + visible / 2) / lineHeight)
+        let middleRow = Int((Float(scrolled.scrollY) + visible / 2) / lineHeight)
         let target = scrolled.editing.layout.rows[middleRow].lowerBound
         let targetY = screenY(of: target, in: scrolled, lineHeight: lineHeight)
 
@@ -543,7 +543,7 @@ final class WrappedWindowTests: XCTestCase {
     }
 
     private func topLine(_ leaf: LeafNode, font: UIFont) -> Int {
-        leaf.logicalLine(ofRow: max(0, Int(leaf.scrollY / font.lineHeight)))
+        leaf.logicalLine(ofRow: max(0, Int(Float(leaf.scrollY) / font.lineHeight)))
     }
 
     /// `scrollY` is pixels over *row* indices, and a row is not a fixed thing.
@@ -557,7 +557,7 @@ final class WrappedWindowTests: XCTestCase {
 
         // Somewhere well into the file, where wrapped rows and lines have
         // diverged enough for the bug to be unmissable.
-        leaf.scrollY = Float(leaf.editing.layout.count / 2) * font.lineHeight
+        leaf.scrollY = Double(Float(leaf.editing.layout.count / 2) * font.lineHeight)
         leaf = try pass(wraps: true)
         let before = topLine(leaf, font: font)
         XCTAssertGreaterThan(before, 100, "not deep enough into the file to be a test")
@@ -570,7 +570,7 @@ final class WrappedWindowTests: XCTestCase {
         var leaf = try pass(wraps: false)
         let font = try XCTUnwrap(leaf.font ?? FontStore.default)
 
-        leaf.scrollY = Float(600) * font.lineHeight
+        leaf.scrollY = Double(Float(600) * font.lineHeight)
         leaf = try pass(wraps: false)
         let before = topLine(leaf, font: font)
         XCTAssertEqual(before, 600)
@@ -595,7 +595,7 @@ final class WrappedWindowTests: XCTestCase {
     func testANarrowerBoxKeepsTheLineAtTheTop() throws {
         var leaf = try settleWrap()
         let font = try XCTUnwrap(leaf.font ?? FontStore.default)
-        leaf.scrollY = Float(leaf.editing.layout.count / 2) * font.lineHeight
+        leaf.scrollY = Double(Float(leaf.editing.layout.count / 2) * font.lineHeight)
         leaf = try pass(wraps: true)
         let before = topLine(leaf, font: font)
 

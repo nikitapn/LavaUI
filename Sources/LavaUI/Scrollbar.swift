@@ -131,9 +131,12 @@ extension LeafNode {
             ScrollbarDrag.begin(id, axis: .vertical)
             let apply = { [weak self] (windowY: Float) in
                 guard let self else { return }
-                self.scrollY = Scrollbar.offset(
-                    forAlong: windowY - originY - grab, travel: m.travel, maxOffset: maximum
-                )
+                // As a fraction of the way down, scaled in `Double`: the
+                // maximum of a long wrapped log is past a `Float`'s whole
+                // pixels. See `LeafNode.scrollY`.
+                self.scrollY = Double(Scrollbar.offset(
+                    forAlong: windowY - originY - grab, travel: m.travel, maxOffset: 1
+                )) * maximum
                 ViewInvalidation.markNeedsRedraw()
             }
             apply(originY + localY)

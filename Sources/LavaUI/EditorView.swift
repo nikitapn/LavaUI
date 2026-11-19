@@ -151,8 +151,9 @@ public struct EditorDecoration: Sendable, Equatable {
 public struct EditorPosition: Equatable, Sendable, Codable {
     /// Horizontal scroll offset, in pixels.
     public var scrollX: Float
-    /// Vertical scroll offset, in pixels.
-    public var scrollY: Float
+    /// Vertical scroll offset, in pixels. A `Double` because it is a document
+    /// coordinate, and a long wrapped log outgrows a `Float`'s whole pixels.
+    public var scrollY: Double
     /// Selection ends, in character offsets. Equal means a plain caret.
     public var anchor: Int
     /// The end of the selection the caret is at. See `anchor`.
@@ -165,7 +166,7 @@ public struct EditorPosition: Equatable, Sendable, Codable {
     public var topFraction: Float?
 
     /// Creates a position. The default is the top of the buffer with the caret at 0.
-    public init(scrollX: Float = 0, scrollY: Float = 0, anchor: Int = 0, focus: Int = 0,
+    public init(scrollX: Float = 0, scrollY: Double = 0, anchor: Int = 0, focus: Int = 0,
                 topOffset: Int? = nil, topFraction: Float? = nil) {
         self.scrollX = scrollX
         self.scrollY = scrollY
@@ -443,10 +444,10 @@ public struct EditorView: PrimitiveView {
         let nextFont = resolvedFont ?? FontStore.default
         let fontChanged = previousFont?.identity != nextFont?.identity
         if fontChanged, let previousFont, previousFont.lineHeight > 0 {
-            let rowPosition = max(0, leaf.scrollY / previousFont.lineHeight)
+            let rowPosition = max(0, leaf.scrollY / Double(previousFont.lineHeight))
             let rows = leaf.editing.layout.rows
             let row = min(Int(rowPosition), rows.count - 1)
-            leaf.pendingFontAnchor = (rows[row].lowerBound, rowPosition - Float(row))
+            leaf.pendingFontAnchor = (rows[row].lowerBound, Float(rowPosition - Double(row)))
             if let nextFont {
                 leaf.scrollX *= nextFont.pixelSize / previousFont.pixelSize
             }
@@ -462,7 +463,7 @@ public struct EditorView: PrimitiveView {
             // line the reader is looking at.
             if let f = previousFont, f.lineHeight > 0 {
                 leaf.pendingTopLine =
-                    leaf.logicalLine(ofRow: max(0, Int(leaf.scrollY / f.lineHeight)))
+                    leaf.logicalLine(ofRow: max(0, leaf.row(atScreenY: 0, lineHeight: f.lineHeight)))
             }
             // Rows are about to mean something different. Drop the staleness
             // marks both branches of `refreshVisualRows` keep, or the first
@@ -594,7 +595,7 @@ public struct EditorView: PrimitiveView {
                 }
             } else if let hit = leaf.index(
                 atLocalX: localX - leaf.gutterWidth + leaf.scrollX,
-                localY: localY + leaf.scrollY
+                localY: Double(localY) + leaf.scrollY
             ) {
                 let clicks = ClickCounter.register(x: originX + localX, y: originY + localY)
                 if clicks >= 2 {
@@ -606,7 +607,7 @@ public struct EditorView: PrimitiveView {
                         onMove: { [weak leaf] wx, wy in
                             guard let leaf else { return }
                             let lx = wx - originX - leaf.gutterWidth + leaf.scrollX
-                            let ly = wy - originY + leaf.scrollY
+                            let ly = Double(wy - originY) + leaf.scrollY
                             if let target = leaf.index(atLocalX: lx, localY: ly) {
                                 leaf.editing.setCursor(target, extending: true)
                                 // Selection lives on the retained node, not
@@ -634,16 +635,33 @@ extension LeafNode {
         // `charOffset` is anchored, so the second call walks only the distance
         // between the two ends rather than back to the start of the buffer.
         let height = (font ?? FontStore.default)?.lineHeight ?? 1
-        let rowPosition = max(0, scrollY / max(1, height))
+        let rowPosition = max(0, scrollY / Double(max(1, height)))
         let rows = editing.layout.rows
         let row = min(Int(rowPosition), max(0, rows.count - 1))
+        // Through the caches the draw path keeps, not `charOffset`. LavaEditor
+        // asks for this after every emit, scrolls included, and `charOffset`
+        // measures from the leaf's one index anchor — which the emitter keeps
+        // at the first visible row. With the caret at the top of a 200 MB log
+        // and the view at its end, that was a walk of the whole buffer to the
+        // caret and, the anchor having followed it, another back on the next
+        // frame. The caches answer for a caret that has not moved without
+        // touching the anchor at all.
+        let focus = focusOffset()
+        let anchor: Int
+        if editing.anchor == editing.focus {
+            anchor = focus
+        } else if let ends = selectionOffsets(editing.selectedRange) {
+            anchor = editing.anchor == editing.selectedRange.lowerBound ? ends.from : ends.to
+        } else {
+            anchor = charOffset(of: editing.anchor)
+        }
         return EditorPosition(
             scrollX: scrollX,
             scrollY: scrollY,
-            anchor: charOffset(of: editing.anchor),
-            focus: charOffset(of: editing.focus),
+            anchor: anchor,
+            focus: focus,
             topOffset: rows.isEmpty ? 0 : rows[row].lowerBound,
-            topFraction: rowPosition - rowPosition.rounded(.down)
+            topFraction: Float(rowPosition - rowPosition.rounded(.down))
         )
     }
 
@@ -695,10 +713,10 @@ extension LeafNode {
         let visibleHeight = viewportHeight > 0
             ? max(font.lineHeight, viewportHeight - textInset * 2)
             : Float(max(1, maxLines)) * font.lineHeight
-        let target = Float(row) * font.lineHeight
-            - max(0, (visibleHeight - font.lineHeight) / 2)
-        let contentHeight = Float(rows.count) * font.lineHeight
-        scrollY = min(max(0, target), max(0, contentHeight - visibleHeight))
+        let target = documentY(ofRow: row, lineHeight: font.lineHeight)
+            - Double(max(0, (visibleHeight - font.lineHeight) / 2))
+        let contentHeight = documentY(ofRow: rows.count, lineHeight: font.lineHeight)
+        scrollY = min(max(0, target), max(0, contentHeight - Double(visibleHeight)))
         scrollX = 0
     }
 
@@ -719,14 +737,15 @@ extension LeafNode {
         if to != from { editing.setCursor(textIndex(atOffset: to), extending: true) }
 
         let row = editing.layout.rowIndex(ofOffset: from)
-        let rowTop = Float(row) * font.lineHeight
+        let rowY = screenY(ofRow: row, lineHeight: font.lineHeight)
         let visible = viewportHeight > 0
             ? max(font.lineHeight, viewportHeight - textInset * 2)
             : Float(max(1, maxLines)) * font.lineHeight
-        if rowTop < scrollY || rowTop + font.lineHeight > scrollY + visible {
-            let target = rowTop - max(0, (visible - font.lineHeight) / 2)
-            let contentHeight = Float(rows.count) * font.lineHeight
-            scrollY = min(max(0, target), max(0, contentHeight - visible))
+        if rowY < 0 || rowY + font.lineHeight > visible {
+            let target = documentY(ofRow: row, lineHeight: font.lineHeight)
+                - Double(max(0, (visible - font.lineHeight) / 2))
+            let contentHeight = documentY(ofRow: rows.count, lineHeight: font.lineHeight)
+            scrollY = min(max(0, target), max(0, contentHeight - Double(visible)))
         }
         // A match far along a very long line is invisible without this, and a
         // no-wrap editor is exactly where that happens.
@@ -752,10 +771,9 @@ extension LeafNode {
     /// gesture. The gutter numbers lines, so clicking one selects a line, even
     /// where that line is drawn across several wrapped rows.
     func selectRow(atLocalY localY: Float) {
-        let y = localY + scrollY
         guard let f = font ?? FontStore.default else { return }
         let rows = editing.layout.rows
-        let row = max(0, min(rows.count - 1, Int((y - textInset) / f.lineHeight)))
+        let row = max(0, min(rows.count - 1, self.row(atScreenY: localY - textInset, lineHeight: f.lineHeight)))
         let r = logicalLineRange(ofRow: row)
         editing.setCursor(editing.index(atOffset: r.lowerBound))
         // Include the newline so a pasted replacement keeps the line structure.
@@ -767,11 +785,10 @@ extension LeafNode {
     /// `selectRow`, so a gutter click resolves to the same line either way.
     func decoration(atLocalY localY: Float) -> EditorDecoration? {
         guard !decorations.isEmpty else { return nil }
-        let y = localY + scrollY
         guard let f = font ?? FontStore.default else { return nil }
         let rows = editing.layout.rows
         guard !rows.isEmpty else { return nil }
-        let row = max(0, min(rows.count - 1, Int((y - textInset) / f.lineHeight)))
+        let row = max(0, min(rows.count - 1, self.row(atScreenY: localY - textInset, lineHeight: f.lineHeight)))
         let range = rows[row]
         return decorations.first { $0.range.overlaps(range) }
     }

@@ -2628,7 +2628,6 @@ extension DrawList {
         leaf.clampScroll(font: font)
 
         let textX = x + leaf.gutterWidth + inset - leaf.scrollX
-        let top = y + inset - leaf.scrollY
 
         // Both cached on `leaf` against the exact `focus`/`affinity` they
         // were computed from — see `LeafNode.focusOffset()`/`focusRow()`.
@@ -2650,9 +2649,20 @@ extension DrawList {
 
         // Only rows intersecting the viewport are emitted: a long buffer costs
         // a screenful of quads, not a file's worth.
-        let firstRow = max(0, Int(leaf.scrollY / lineH))
-        let lastRow = min(rows.count - 1, Int((leaf.scrollY + h) / lineH) + 1)
+        let firstRow = max(0, leaf.row(atScreenY: 0, lineHeight: lineH))
+        let lastRow = min(rows.count - 1, leaf.row(atScreenY: h, lineHeight: lineH) + 1)
         guard firstRow <= lastRow else { return }
+
+        // Rows are placed from the first one drawn, not from the top of the
+        // document. `Float(row) * lineH` is a document coordinate, and past
+        // 2^23 — row ~365k at 23 px — a Float holds only whole pixels, so each
+        // row rounded on its own and the gaps came out 22, 23, 22 px. The one
+        // large difference is taken in Double; what is added to it per row is
+        // a screenful at most.
+        let firstTop = y + inset + leaf.screenY(ofRow: firstRow, lineHeight: lineH)
+        @inline(__always) func rowTopOf(_ row: Int) -> Float {
+            firstTop + Float(row - firstRow) * lineH
+        }
 
         // Pass 1 — chrome that must not scroll horizontally. The gutter stays
         // pinned while text moves under it, which is the whole reason this is
@@ -2662,7 +2672,7 @@ extension DrawList {
             rect(x: x, y: y, w: leaf.gutterWidth, h: h, color: style.gutterBackground)
         }
         for row in firstRow...lastRow {
-            let rowTop = top + Float(row) * lineH
+            let rowTop = rowTopOf(row)
             if focused, row == caretRow, selection == nil {
                 rect(
                     x: x + leaf.gutterWidth, y: rowTop,
@@ -2739,7 +2749,7 @@ extension DrawList {
 
         for row in firstRow...lastRow {
             let range = rows[row]
-            let rowTop = top + Float(row) * lineH
+            let rowTop = rowTopOf(row)
 
             if range.lowerBound > cursorOffset {
                 cursor = state.text.index(cursor, offsetBy: range.lowerBound - cursorOffset)

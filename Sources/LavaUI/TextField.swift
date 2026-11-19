@@ -239,7 +239,7 @@ public struct TextField: PrimitiveView {
             // Through the slide: the glyph under the pointer is `scrollX` further
             // along the row than the pointer is along the box.
             let textX = localX + leaf.scrollX
-            let hit = leaf.index(atLocalX: textX, localY: localY)
+            let hit = leaf.index(atLocalX: textX, localY: Double(localY))
                 ?? run.index(atX: textX - leaf.textInset)
             let clicks = ClickCounter.register(x: originX + localX, y: originY + localY)
 
@@ -257,7 +257,7 @@ public struct TextField: PrimitiveView {
                         guard let leaf, let run = leaf.shapedRun() else { return }
                         let lx = wx - originX + leaf.scrollX
                         let ly = wy - originY
-                        let target = leaf.index(atLocalX: lx, localY: ly)
+                        let target = leaf.index(atLocalX: lx, localY: Double(ly))
                             ?? run.index(atX: lx - leaf.textInset)
                         leaf.editing.setCursor(target, extending: true)
                         // Past either edge the selection reaches text the box
@@ -376,7 +376,7 @@ extension LeafNode {
             restoreFontAnchor(font: f)
             if let resizing {
                 let row = editing.layout.rowIndex(ofOffset: resizing.offset)
-                scrollY = max(0, Float(row) * f.lineHeight - resizing.screenY)
+                scrollY = max(0, documentY(ofRow: row, lineHeight: f.lineHeight) - Double(resizing.screenY))
                 resizeAnchor = resizing
             }
             return
@@ -392,7 +392,7 @@ extension LeafNode {
         if let line = pendingTopLine {
             pendingTopLine = nil
             if let f = font ?? FontStore.default {
-                scrollY = max(0, Float(line) * f.lineHeight)
+                scrollY = max(0, documentY(ofRow: line, lineHeight: f.lineHeight))
             }
         }
         if let font = font ?? FontStore.default { restoreFontAnchor(font: font) }
@@ -418,19 +418,19 @@ extension LeafNode {
         // scrolling. A real scroll moves the held text away from its height.
         if let held = resizeAnchor {
             let row = editing.layout.rowIndex(ofOffset: held.offset)
-            let screenY = Float(row) * lineHeight - scrollY
+            let screenY = self.screenY(ofRow: row, lineHeight: lineHeight)
             if abs(screenY - held.screenY) < lineHeight { return held }
         }
         resizeAnchor = nil
 
         let caret = focusOffset()
         let caretRow = editing.layout.rowIndex(ofOffset: caret)
-        let caretY = Float(caretRow) * lineHeight - scrollY
+        let caretY = screenY(ofRow: caretRow, lineHeight: lineHeight)
         if caretY >= 0, caretY + lineHeight <= visible {
             return (caret, caretY)
         }
-        let middle = min(rows.count - 1, max(0, Int((scrollY + visible / 2) / lineHeight)))
-        return (rows[middle].lowerBound, Float(middle) * lineHeight - scrollY)
+        let middle = min(rows.count - 1, max(0, row(atScreenY: visible / 2, lineHeight: lineHeight)))
+        return (rows[middle].lowerBound, screenY(ofRow: middle, lineHeight: lineHeight))
     }
 
     /// The logical line a character offset is on.
@@ -450,7 +450,7 @@ extension LeafNode {
         guard let anchor = pendingFontAnchor else { return }
         pendingFontAnchor = nil
         let row = editing.layout.rowIndex(ofOffset: anchor.offset)
-        scrollY = max(0, (Float(row) + anchor.fraction) * font.lineHeight)
+        scrollY = max(0, (Double(row) + Double(anchor.fraction)) * Double(font.lineHeight))
     }
 
     // MARK: Soft wrap, one window at a time
@@ -683,7 +683,7 @@ extension LeafNode {
     private func breakWrapWindow(font: UIFont, inner: Float, anchor: WrapAnchor) {
         guard !wrapCacheRows.isEmpty else { return }
         let lineHeight = font.lineHeight
-        let anchorRow = max(0, Int(scrollY / lineHeight))
+        let anchorRow = max(0, row(atScreenY: 0, lineHeight: lineHeight))
 
         // Which line to keep at the top of the box, and how far into it.
         let held: (line: Int, sub: Int, fraction: Float)?
@@ -694,7 +694,7 @@ extension LeafNode {
             let line = wrapLine(containingRow: anchorRow)
             held = (
                 line, anchorRow - wrapFirstRow(ofLine: line),
-                scrollY - Float(anchorRow) * lineHeight
+                -screenY(ofRow: anchorRow, lineHeight: lineHeight)
             )
         case .line(let requested):
             // From the top of that line: the row the offset used to name
@@ -706,7 +706,7 @@ extension LeafNode {
         // the one the reader is about to be looking at rather than the one
         // they were.
         if let held {
-            scrollY = max(0, Float(wrapFirstRow(ofLine: held.line) + held.sub) * lineHeight)
+            scrollY = max(0, documentY(ofRow: wrapFirstRow(ofLine: held.line) + held.sub, lineHeight: lineHeight))
         }
         let anchorLine = held?.line ?? wrapLine(containingRow: anchorRow)
         guard wrapUnmeasured > 0 else {
@@ -759,7 +759,7 @@ extension LeafNode {
         guard let held, wrapCacheRows.indices.contains(held.line) else { return }
         let sub = min(held.sub, max(0, wrapCacheRows[held.line].count - 1))
         let row = wrapFirstRow(ofLine: held.line) + sub
-        scrollY = max(0, Float(row) * lineHeight + held.fraction)
+        scrollY = max(0, documentY(ofRow: row, lineHeight: lineHeight) + Double(held.fraction))
     }
 
     private func breakWrapLine(_ index: Int, font: UIFont, inner: Float) {
@@ -967,11 +967,16 @@ extension LeafNode {
 
     /// Index under a point in node-local coordinates, resolving the visual row
     /// first. Nil when there is no font to shape with.
-    func index(atLocalX x: Float, localY y: Float) -> String.Index? {
+    /// `y` is a document coordinate — below the top of the content, not of
+    /// the box — so a `Double`, as `scrollY` is.
+    func index(atLocalX x: Float, localY y: Double) -> String.Index? {
         guard let f = font ?? FontStore.default else { return nil }
         let inset = textInset
         let rows = editing.layout.rows
-        let row = max(0, min(rows.count - 1, Int((y - inset) / f.lineHeight)))
+        let row = max(0, min(
+            rows.count - 1,
+            Int(((y - Double(inset)) / Double(f.lineHeight)).rounded(.down))
+        ))
         let line = rowText(row)
         let local = EditorProbe.measure("text.shapeRow") {
             f.shapedRun(line).index(atX: x - inset)

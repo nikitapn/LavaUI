@@ -49,7 +49,7 @@ final class EditorZoomTests: XCTestCase {
         let leaf = try layout(font: font(16), wraps: true)
         XCTAssertTrue(ScrollRouter.deliver(to: leaf.id, dx: 0, dy: 0.5, mods: KeyMods.control))
         XCTAssertEqual(zoomNotches, 0.5)
-        XCTAssertEqual(leaf.scrollY, 0)
+        XCTAssertEqual(Float(leaf.scrollY), 0)
         XCTAssertFalse(ScrollRouter.deliver(to: leaf.id, dx: 0, dy: -1))
         XCTAssertEqual(zoomNotches, 0.5)
     }
@@ -58,11 +58,11 @@ final class EditorZoomTests: XCTestCase {
         text = (0..<100).map { "line \($0)" }.joined(separator: "\n")
         let leaf = try layout(font: font(16), wraps: false)
         XCTAssertTrue(ScrollRouter.deliver(to: leaf.id, dx: 0, dy: -1))
-        XCTAssertGreaterThan(leaf.scrollY, 0)
-        let before = leaf.scrollY
+        XCTAssertGreaterThan(Float(leaf.scrollY), 0)
+        let before = Float(leaf.scrollY)
         XCTAssertTrue(ScrollRouter.deliver(to: leaf.id, dx: 0, dy: 2, mods: KeyMods.control))
         XCTAssertEqual(zoomNotches, 2)
-        XCTAssertEqual(leaf.scrollY, before)
+        XCTAssertEqual(Float(leaf.scrollY), before)
     }
 
     func testFontChangePreservesTopTextInsideOneLongWrappedLine() throws {
@@ -71,7 +71,7 @@ final class EditorZoomTests: XCTestCase {
         let leaf = try layout(font: small, wraps: true)
         let rowsBefore = leaf.editing.layout.rows
         let top = rowsBefore.count / 2
-        leaf.scrollY = (Float(top) + 0.25) * small.lineHeight
+        leaf.scrollY = Double((Float(top) + 0.25) * small.lineHeight)
         let offset = rowsBefore[top].lowerBound
         leaf.editing.setCursor(leaf.editing.index(atOffset: offset + 2))
         let selection = leaf.editorPosition()
@@ -80,11 +80,11 @@ final class EditorZoomTests: XCTestCase {
         try layout(font: large, wraps: true)
         XCTAssertGreaterThan(leaf.editing.layout.count, rowsBefore.count,
                              "font changes must invalidate cached wrapping at the same width")
-        let newTop = Int(leaf.scrollY / large.lineHeight)
+        let newTop = Int(Float(leaf.scrollY) / large.lineHeight)
         let range = leaf.editing.layout.rows[newTop]
         XCTAssertLessThanOrEqual(range.lowerBound, offset)
         XCTAssertGreaterThan(range.upperBound, offset)
-        XCTAssertEqual(leaf.scrollY / large.lineHeight - Float(newTop), 0.25, accuracy: 0.001)
+        XCTAssertEqual(Float(leaf.scrollY) / large.lineHeight - Float(newTop), 0.25, accuracy: 0.001)
         XCTAssertEqual(leaf.editorPosition().focus, selection.focus)
         XCTAssertEqual(leaf.editorPosition().anchor, selection.anchor)
     }
@@ -93,9 +93,9 @@ final class EditorZoomTests: XCTestCase {
         text = (0..<200).map { "line \($0)" }.joined(separator: "\n")
         let small = try font(16)
         let leaf = try layout(font: small, wraps: false)
-        leaf.scrollY = 100.5 * small.lineHeight
+        leaf.scrollY = Double(100.5 * small.lineHeight)
         let large = try font(24)
         try layout(font: large, wraps: false)
-        XCTAssertEqual(leaf.scrollY / large.lineHeight, 100.5, accuracy: 0.001)
+        XCTAssertEqual(Float(leaf.scrollY) / large.lineHeight, 100.5, accuracy: 0.001)
     }
 }
