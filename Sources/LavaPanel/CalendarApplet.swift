@@ -2,26 +2,6 @@ import Foundation
 import LavaUI
 import Observation
 
-/// Clock label. The month grid is a popup of its own — the strip is 32pt,
-/// and a calendar does not fit there.
-struct CalendarApplet: View {
-    var clockText: String
-
-    var body: some View {
-        let theme = Theme.current
-
-        Text(
-            clockText,
-            color: theme.textPrimary,
-            onClick: { session.toggleCalendar() }
-        )
-        .padding(EdgeInsets(top: 6, leading: 4, bottom: 6, trailing: 4))
-        .hoverBackground(PanelChrome.style.titleHover)
-        .cornerRadius(6)
-        .agentId("applet.calendar")
-    }
-}
-
 /// Which month the calendar shows, shared with the year beside it: a month
 /// picked there turns this page. Reset to today whenever the calendar opens,
 /// so paging only lasts as long as the popup does.

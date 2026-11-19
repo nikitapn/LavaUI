@@ -421,6 +421,10 @@ Config Config::load(const std::string &path) {
       } else {
         known = false;
       }
+    } else if (section == "panel") {
+      // The panel's, read by LavaPanel itself (`PanelConfig`); listed here
+      // only so a valid key is not reported as a typo.
+      known = key == "style";
     } else if (section == "workspaces") {
       // `2 = Work`. A key that is not a number from 1 to 9 is reported like
       // any other unknown key, rather than naming a workspace nobody has.

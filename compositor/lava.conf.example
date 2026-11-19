@@ -147,6 +147,15 @@ menu = LavaContextMenu
 lock = LavaLock
 
 
+[panel]
+
+# How the top bar sits: `floating`, a glass pill held a few pixels off the top
+# and sides of the screen, or `docked`, a strip flush with the edge. Read by the
+# panel when it starts, so a change takes a panel restart (`pkill LavaPanel`;
+# the compositor starts it again). `LAVA_PANEL_STYLE` overrides it for one run.
+# style = floating
+
+
 [mouse]
 # libinput's settings, per kind of pointer; Settings → Mouse & Touchpad writes
 # them. Applied to every device as it is plugged in, and again on SIGHUP. A

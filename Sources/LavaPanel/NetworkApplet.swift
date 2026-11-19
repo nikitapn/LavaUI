@@ -4,45 +4,6 @@ import LavaNetworkCore
 import LavaUI
 import Observation
 
-/// Panel network control: a glyph for the link in use — Wi-Fi bars, a wired
-/// port, nothing — with a lock when a VPN is up, and a click for the network
-/// window. Talks to NetworkManager through `NetworkSession`, which is also
-/// the session's secret agent.
-struct NetworkApplet: View {
-    var network: NetworkSession
-
-    var body: some View {
-        // Read on the body path so Observation invalidates when the link
-        // changes (the paint closure alone is not tracked).
-        let status = network.status
-        let theme = Theme.current
-        HStack(
-            height: .pt(36),
-            padding: 0,
-            alignment: .center,
-            onPointer: { _, button in
-                guard button == PointerButton.left else { return }
-                session.toggleNetwork()
-            }) {
-            Canvas(
-                label: "network",
-                width: .pt(PanelChrome.statusGlyph),
-                height: .pt(PanelChrome.statusGlyph),
-                paint: { list, frame in
-                    NetworkGlyph.paintStatus(
-                        status, list: list, frame: frame,
-                        color: theme.textPrimary, accent: theme.accent
-                    )
-                }
-            )
-        }
-        .padding(2)
-        .hoverBackground(PanelChrome.style.titleHover)
-        .cornerRadius(6)
-        .agentId("applet.network")
-    }
-}
-
 /// The network window: Wi-Fi on or off and the networks in range, wired
 /// ports, then VPNs. A popup of this process, like the sound window, and
 /// sized the same way — from rows of stated heights.

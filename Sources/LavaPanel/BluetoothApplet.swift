@@ -4,45 +4,6 @@ import LavaBluetoothCore
 import LavaUI
 import Observation
 
-/// Panel Bluetooth control: the rune, dim when the radio is off and with a
-/// dot either side while something is connected, and a click for the
-/// Bluetooth window. Talks to BlueZ through `BluetoothSession`, which is
-/// also the session's pairing agent.
-struct BluetoothApplet: View {
-    var bluetooth: BluetoothSession
-
-    var body: some View {
-        // Read on the body path so Observation invalidates when it changes
-        // (the paint closure alone is not tracked).
-        let status = bluetooth.status
-        let theme = Theme.current
-        HStack(
-            height: .pt(36),
-            padding: 0,
-            alignment: .center,
-            onPointer: { _, button in
-                guard button == PointerButton.left else { return }
-                session.toggleBluetooth()
-            }) {
-            Canvas(
-                label: "bluetooth",
-                width: .pt(PanelChrome.statusGlyph),
-                height: .pt(PanelChrome.statusGlyph),
-                paint: { list, frame in
-                    BluetoothGlyph.paintStatus(
-                        status, list: list, frame: frame,
-                        color: theme.textPrimary, accent: theme.accent
-                    )
-                }
-            )
-        }
-        .padding(EdgeInsets(top: 2, leading: 2, bottom: 2, trailing: 2))
-        .hoverBackground(PanelChrome.style.titleHover)
-        .cornerRadius(6)
-        .agentId("applet.bluetooth")
-    }
-}
-
 /// The Bluetooth window: the radio, the devices this machine knows, and a
 /// way to add one. A popup of this process, sized from rows of stated
 /// heights, as the network window is.

@@ -2,64 +2,6 @@ import Foundation
 import LavaShell
 import LavaUI
 
-/// Panel sound control: speaker glyph, scroll to change volume, right click
-/// to mute, click for the sound window — outputs, inputs and applications.
-/// Talks to PulseAudio via `PulseSession`.
-///
-/// The window is a surface of this process, not a dropdown painted into the
-/// strip. The strip is 32pt; a slider does not fit there, and growing the
-/// panel to hold it is what made the top of the screen a transparent window.
-struct VolumeApplet: View {
-    var pulse: PulseSession
-
-    var body: some View {
-        // Read on the body path so Observation invalidates when Pulse posts
-        // a new level (the paint closure alone is not tracked).
-        let volume = pulse.volume
-        let muted = pulse.muted
-        let theme = Theme.current
-
-        // Presenter height must reach the strip bottom. A short 22pt canvas is
-        // centred in the 32pt bar, so a hit box that stopped at the glyph
-        // missed the padding around it.
-        HStack(
-            height: .pt(36),
-            padding: 0,
-            alignment: .center,
-            onPointer: { _, button in
-                if button == PointerButton.left {
-                    session.toggleVolume()
-                } else if button == PointerButton.right {
-                    pulse.toggleMute()
-                }
-            }) {
-            Canvas(
-                label: "volume",
-                width: .pt(PanelChrome.statusGlyph),
-                height: .pt(PanelChrome.statusGlyph),
-                onWheel: { _, dy, _, _ in
-                    // Positive dy = scroll up = louder. One notch ≈ 5%.
-                    let step: Float = dy > 0 ? 0.05 : -0.05
-                    pulse.adjustVolume(by: step)
-                    if pulse.muted && step > 0 { pulse.setMuted(false) }
-                },
-                paint: { list, frame in
-                    SoundGlyph.paint(
-                        .speaker, list: list, frame: frame,
-                        volume: volume, muted: muted,
-                        color: muted ? theme.textDim : theme.textPrimary,
-                        accent: theme.accent
-                    )
-                }
-            )
-        }
-        .padding(2)
-        .hoverBackground(PanelChrome.style.titleHover)
-        .cornerRadius(6)
-        .agentId("applet.volume")
-    }
-}
-
 /// The sound window. Same process as the panel, so it reads `PulseSession`
 /// directly — a second process would have to be told the level on every tick.
 ///

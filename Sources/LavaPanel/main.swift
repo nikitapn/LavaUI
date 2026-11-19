@@ -59,15 +59,34 @@ import Observation
 /// changes without anybody touching it.
 @Observable
 final class Clock {
-    var text = ""
+    /// "Thu 19 Nov", beside the time rather than run into it.
+    var date = ""
+    /// "23:55:08", in the bar's tabular face.
+    var time = ""
+
+    @ObservationIgnored private let dateFormat: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE d MMM"
+        return formatter
+    }()
+    @ObservationIgnored private let timeFormat: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }()
 
     func tick() {
         let now = Date()
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEE d MMM  HH:mm:ss"
-        text = formatter.string(from: now)
+        // Compared before assigning: an observed write that changes nothing
+        // still invalidates the body, and the date changes once a day.
+        let nextDate = dateFormat.string(from: now)
+        if nextDate != date { date = nextDate }
+        time = timeFormat.string(from: now)
     }
 }
+
+/// How the bar sits, from `[panel] style`, for the life of the process.
+let panelMetrics = PanelMetrics(style: PanelStyle.configured())
 
 nonisolated(unsafe) let clock = Clock()
 
@@ -175,9 +194,9 @@ final class MenuSession {
     /// The About window, if it is up. A second click does not open another.
     @ObservationIgnored var aboutWindow: WindowID?
     /// The volume window, if it is up. Clicking the speaker again closes it.
-    @ObservationIgnored var volumeWindow: WindowID?
+    var volumeWindow: WindowID?
     /// The network window, if it is up. Clicking the glyph again closes it.
-    @ObservationIgnored var networkWindow: WindowID?
+    var networkWindow: WindowID?
     /// The pane of every Wi-Fi network beside it, if that is up. Observed:
     /// the row that opens it shows whether it is open.
     var networkListWindow: WindowID?
@@ -185,7 +204,7 @@ final class MenuSession {
     /// typed into it.
     @ObservationIgnored var authWindows: [UInt64: (window: WindowID, draft: AuthDraft)] = [:]
     /// The Bluetooth window, if it is up. Clicking the rune again closes it.
-    @ObservationIgnored var bluetoothWindow: WindowID?
+    var bluetoothWindow: WindowID?
     /// The search pane beside it. Observed: the row that opens it shows
     /// whether it is open.
     var bluetoothSearchWindow: WindowID?
@@ -195,14 +214,14 @@ final class MenuSession {
     /// glance while typing it on a keyboard.
     @ObservationIgnored var codeFont: UIFont?
     /// The calendar window, if it is up. Clicking the clock again closes it.
-    @ObservationIgnored var calendarWindow: WindowID?
+    var calendarWindow: WindowID?
     /// The year beside it, if that is up. Observed: the month title it was
     /// opened from shows whether it is.
     var yearWindow: WindowID?
     /// The month the calendar shows, and the year the year window does.
     @ObservationIgnored let calendarModel = CalendarModel()
     /// The player window, if it is up.
-    @ObservationIgnored var playerWindow: WindowID?
+    var playerWindow: WindowID?
     /// The session confirmation or error popup, if it is up.
     @ObservationIgnored var sessionWindow: WindowID?
     var powerBusy = false
@@ -224,7 +243,7 @@ final class MenuSession {
 
     func attach(editor: Editor, brandIcon: UIImage) {
         self.editor = editor
-        self.brandIcon = MenuIcon(size: 18, path: brandIcon.path)
+        self.brandIcon = MenuIcon(size: 14, path: brandIcon.path)
         menus = PanelMenu(editor: editor)
         // Start on the desktop menu: nothing is focused yet.
         model = emptyBar()
@@ -522,6 +541,9 @@ final class MenuSession {
     /// Which workspace is on screen and what is on each, for the Workspaces
     /// menu. From `SubscribeWindows`, the dock's own feed.
     @ObservationIgnored var workspaces = DesktopMenus.Workspaces()
+    /// The same, observed: the dots on the bar redraw when it changes, and
+    /// the menu model above deliberately does not.
+    var workspaceDots = DesktopMenus.Workspaces()
     /// The compositor's shortcut modifier, for the shortcuts beside each
     /// workspace. Read at startup; the next panel start shows a change.
     @ObservationIgnored var modKey = "alt"
@@ -543,6 +565,7 @@ final class MenuSession {
         let next = DesktopMenus.Workspaces(current: current, windows: DesktopMenus.counts(windows))
         guard next != workspaces else { return }
         workspaces = next
+        workspaceDots = next
         // The empty bar is the only one that shows them. A dropdown already
         // open keeps the rows it was drawn with until it is opened again.
         if focusedSurface == 0 { refreshModel() }
@@ -1283,7 +1306,9 @@ final class MenuSession {
         let height = surfaceHeight()
         if height != appliedHeight {
             appliedHeight = height
-            LavaClient.setPanelThickness(height)
+            // Deeper than what is reserved: the surface also holds the
+            // bar's shadow and any notifications, both over the windows.
+            LavaClient.setPanelThickness(height, reserved: panelMetrics.reserved)
             if let editor {
                 let size = editor.framebufferSize()
                 let width = size.w > 1 ? size.w : 1920
@@ -1299,12 +1324,13 @@ final class MenuSession {
     }
 
     private func surfaceHeight() -> Float {
-        guard !toastIds.isEmpty else { return Self.stripHeight }
-        let estimate = Self.stripHeight + 16 + Float(toastIds.count) * 180
+        let base = panelMetrics.surfaceHeight
+        guard !toastIds.isEmpty else { return base }
+        let estimate = panelMetrics.reserved + 16 + Float(toastIds.count) * 180
         guard appliedHeight + 1 >= estimate,
               let frame = toastFrame(), frame.h > 40
         else { return max(appliedHeight, estimate) }
-        return max(Self.stripHeight, Float(frame.y) + Float(frame.h) + 8)
+        return max(base, Float(frame.y) + Float(frame.h) + 8)
     }
 
     /// The notification stack changed shape; the hit region follows it.
@@ -1335,11 +1361,15 @@ final class MenuSession {
     /// deliberately: the click that dismisses an open dropdown is the one that
     /// lands *outside* it, so the panel has to be the thing that receives it.
     private func syncInputRegion() {
-        // Width is the surface length; the compositor clamps. A large constant
-        // is fine — the panel is always full edge width.
-        let width: Float = 8192
-        var region = [InputRect(x: 0, y: 0, w: UInt32(width),
-                                h: UInt32(Self.stripHeight))]
+        // The bar itself — not its margins, and not the shadow under it, which
+        // falls over windows that should still take those clicks. The length
+        // is the surface's; before the first frame, a constant the
+        // compositor clamps.
+        let bar = barFrame()
+        var region = [InputRect(
+            x: Int32(bar.x.rounded(.down)), y: Int32(bar.y.rounded(.down)),
+            w: UInt32(bar.w.rounded(.up)), h: UInt32(bar.h.rounded(.up))
+        )]
         if let toasts = toastFrame() {
             region.append(toasts)
         }
@@ -1356,6 +1386,24 @@ final class MenuSession {
         a.count == b.count && zip(a, b).allSatisfy {
             $0.x == $1.x && $0.y == $1.y && $0.w == $1.w && $0.h == $1.h
         }
+    }
+
+    /// The bar as laid out, or where the metrics put it before the first
+    /// layout — at a length the compositor clamps.
+    private func barFrame() -> (x: Float, y: Float, w: Float, h: Float) {
+        if let frame = LavaApp.mainLayoutHost?.agentFrame(sid: "panel.bar"),
+           frame.w > 0, frame.h > 0 {
+            return (frame.x, frame.y, frame.w, frame.h)
+        }
+        let length = editor?.framebufferSize().w ?? 0
+        return panelMetrics.barFrame(surfaceWidth: length > 1 ? length : 8192)
+    }
+
+    /// The bar was laid out somewhere new — the first layout, or the screen
+    /// changed size. The input region follows it, a frame later, once the
+    /// layout that moved it has been committed.
+    func barMoved() {
+        FrameTasks.after { [self] in syncInputRegion() }
     }
 
     /// The notification stack's rectangle, as it was actually laid out, or nil
@@ -1379,7 +1427,7 @@ final class MenuSession {
         )
     }
 
-    @ObservationIgnored private var appliedHeight: Float = MenuSession.stripHeight
+    @ObservationIgnored private var appliedHeight: Float = panelMetrics.surfaceHeight
     @ObservationIgnored private var appliedRegion: [InputRect] = []
     /// Which notifications are up, so a pump that changed nothing costs a
     /// compare rather than a layout read and a round trip.
@@ -1408,11 +1456,25 @@ let bluetooth = BluetoothSession()
 enum PanelChrome {
     static var style: MenuBarStyle { .panel() }
 
-    /// Side of the square every status glyph (Bluetooth, network, sound) is
-    /// drawn in, with the same padding all round, so each sits centred in its
-    /// hover plate and the three line up. Each glyph centres its own ink in
-    /// the square.
-    static let statusGlyph: Float = 22
+    /// The bar's menu titles: chips the height of every other control on it,
+    /// round-ended, with the system menu's flame on an accent disc.
+    static func barStyle(metrics: PanelMetrics, palette: PanelPalette) -> MenuBarStyle {
+        var style = MenuBarStyle.panel()
+        let chip = metrics.control
+        style.titleHeight = chip
+        style.titlePadding = EdgeInsets(top: 0, leading: 10, bottom: 0, trailing: 10)
+        style.titleCornerRadius = chip / 2
+        style.titleHover = palette.chipHover
+        style.titleOpenFill = palette.chipOpen
+        // 14pt flame in a 26pt disc.
+        style.iconPadding = EdgeInsets(top: (chip - 14) / 2, leading: (chip - 14) / 2,
+                                       bottom: (chip - 14) / 2, trailing: (chip - 14) / 2)
+        style.iconFill = palette.accent
+        style.iconTint = palette.onAccent
+        style.iconHoverFill = palette.accentHover
+        style.iconCornerRadius = chip / 2
+        return style
+    }
 
     /// About, the volume card and the calendar, over the compositor's frost.
     ///
@@ -1432,119 +1494,116 @@ enum PanelChrome {
 }
 
 struct PanelView: View {
+    /// The flame, white, for the accent disc the system menu sits on.
     let brandIcon: UIImage
     let brandImage: UIImage
-    let menuFont: UIFont
+    let fonts: PanelFonts
     /// Running text in the About card. Open Sans at the UI size is a label
     /// face; this is a paragraph, so it gets a reading face at 14px.
     let bodyFont: UIFont
 
     var body: some View {
-        let chrome = PanelChrome.style
-        // The strip is what paints. The surface is the strip, and grows only
-        // while a notification stack needs the room under it. Transparent
-        // below the strip so the desktop shows through; the input region is
-        // the strip plus the cards, and nothing else.
+        let metrics = panelMetrics
+        let palette = PanelPalette.current
+        // The bar is what paints; the rest of the surface is transparent. It
+        // is deeper than the bar for two things that fall over the windows
+        // below — the bar's shadow, and a notification stack — and the input
+        // region is the bar plus the cards, nothing else.
         //
-        // Horizontal inset only: 10pt on every edge of a 32pt bar left
-        // 12pt for the icon and the titles overflowed the row.
-        // `spacing: 0` is load-bearing. The theme default is 8px, and a
-        // gap here is a hole between the painted strip and the work area
-        // — maximized windows start at `reserved` (the 32px strip) and
-        // that 8px is either empty desktop or a black band over them.
+        // `spacing: 0` is load-bearing. The theme default is 8px, and a gap
+        // here would move the bar off the margin `reserved` was computed for.
         return VStack(flexGrow: 1, padding: 0, spacing: 0) {
-            HStack(height: .pt(MenuSession.stripHeight), padding: 0,
-                   alignment: .center, spacing: 4) {
-                // The flame is a top-level menu title, not a separate
-                // picture: click it for Settings, the way a panel logo
-                // always is the system menu. Window titles follow it.
-                MenuBarStrip(
-                    model: session.model,
-                    openMenuID: openBinding,
-                    onActivate: { session.activate($0) },
-                    style: chrome,
-                    icons: [DesktopMenuID.root: brandIcon],
-                    externalMenus: true
-                )
-                .font(menuFont)
+            bar(metrics: metrics, palette: palette)
+                .padding(EdgeInsets(top: metrics.marginTop, leading: metrics.marginSide,
+                                    bottom: 0, trailing: metrics.marginSide))
 
-                // Pushes the clock (and tray) to the far end: an empty growing
-                // child is the spacer, since the stack distributes leftover
-                // space by flex.
-                HStack(flexGrow: 1, padding: 0) {}
-
-                if mpris.present {
-                    PlayerApplet(mpris: mpris)
-                }
-
-                trayStrip
-
-                // Bluetooth, network, then sound, before the clock. Each of
-                // the first two only while its daemon is there to ask —
-                // and Bluetooth only with an adapter: without one there is
-                // nothing to show and nothing to click through to.
-                //
-                // One cluster, with none of the strip's 10pt between them:
-                // two status glyphs read as a pair, and each box already
-                // carries the inset its hover needs.
-                HStack(padding: 0, alignment: .center, spacing: 4) {
-                    if bluetooth.status != .absent {
-                        BluetoothApplet(bluetooth: bluetooth)
-                    }
-                    if network.state.running {
-                        NetworkApplet(network: network)
-                    }
-                    // Native sound control — scroll, mute, window.
-                    VolumeApplet(pulse: pulse)
-                }
-
-                CalendarApplet(clockText: clock.text)
-                HStack(padding: 0, alignment: .center, onClick: {
-                    guard !session.powerBusy else { return }
-                    session.setDialog(.powerOff)
-                }) {
-                    Mark(.power, size: 16, color: session.powerBusy
-                         ? Theme.current.textDim : Theme.current.textPrimary)
-                }
-                .padding(6)
-                .hoverBackground(session.powerBusy ? .clear : chrome.titleHover)
-                .cornerRadius(6)
-                .agentId("applet.power")
-            }
-            .padding(.horizontal, 2)
-            .background(Theme.current.background)
-
-            // Fills the expanded surface so the strip stays top-aligned. Never
-            // painted (backdrop is none, no fill here) — but it is where the
-            // notification stack goes, pinned to the top right corner under
-            // the strip, which is the one part of this surface that is empty
-            // whether or not a menu is open.
+            // Where the notification stack goes, pinned to the top right
+            // under the bar. Never painted.
             HStack(flexGrow: 1, padding: 0, alignment: .start) {
                 Spacer()
                 if let notifications, !notifications.toasts.isEmpty {
                     ToastStack(notifications: notifications)
-                        .padding(EdgeInsets(top: 8, leading: 0, bottom: 0, trailing: 10))
+                        .padding(EdgeInsets(top: 8, leading: 0, bottom: 0,
+                                            trailing: 10 + metrics.marginSide))
                 }
             }
         }
+    }
+
+    private func bar(metrics: PanelMetrics, palette: PanelPalette) -> some View {
+        HStack(height: .pt(metrics.barHeight), padding: 0, alignment: .center, spacing: 6) {
+            // The flame is a top-level menu title, not a separate picture:
+            // click it for Settings, the way a panel logo always is the
+            // system menu. Window titles follow it.
+            MenuBarStrip(
+                model: session.model,
+                openMenuID: openBinding,
+                onActivate: { session.activate($0) },
+                style: PanelChrome.barStyle(metrics: metrics, palette: palette),
+                icons: [DesktopMenuID.root: brandIcon],
+                externalMenus: true
+            )
+            .font(fonts.label)
+
+            Canvas(label: "divider", width: .pt(13), height: .pt(18)) { list, frame in
+                list.rect(x: frame.x + 6, y: frame.y, w: 1, h: frame.h, color: palette.divider)
+            }
+
+            WorkspaceDots(workspaces: session.workspaceDots, metrics: metrics, palette: palette)
+
+            // Pushes the rest to the far end: an empty growing child is the
+            // spacer, since the stack distributes leftover space by flex.
+            HStack(flexGrow: 1, padding: 0) {}
+
+            if mpris.present {
+                NowPlayingChip(mpris: mpris, metrics: metrics, palette: palette, fonts: fonts)
+            }
+
+            trayStrip(palette: palette, metrics: metrics)
+
+            // Bluetooth, network and sound: Bluetooth only with an adapter,
+            // network only while NetworkManager is there to ask.
+            TrayCluster(metrics: metrics, palette: palette)
+
+            ClockChip(date: clock.date, time: clock.time, metrics: metrics,
+                      palette: palette, fonts: fonts)
+            PowerButton(metrics: metrics, palette: palette)
+        }
+        .padding(.horizontal, 3)
+        .background(palette.glass)
+        .border(metrics.style == .floating ? palette.glassBorder : .clear)
+        .cornerRadius(metrics.radius)
+        .backdropBlur(radius: 22, adaptation: 0)
+        .underlay {
+            Canvas(label: "bar-shadow", width: .pct(100), height: .pct(100)) { list, frame in
+                list.shadow(x: frame.x, y: frame.y + metrics.shadowOffset,
+                            w: frame.w, h: frame.h, cornerRadius: metrics.radius,
+                            blur: metrics.shadowBlur,
+                            color: palette.shadow.opacity(metrics.shadowAlpha), hollow: true)
+            }
+        }
+        .onFrame { _ in session.barMoved() }
+        .agentId("panel.bar")
     }
 
     /// StatusNotifier icons, left of the clock. Empty when no items or when
     /// another process owns the watcher.
     @ViewBuilder
-    private var trayStrip: some View {
+    private func trayStrip(palette: PanelPalette, metrics: PanelMetrics) -> some View {
         let items = tray?.items ?? []
         if !items.isEmpty {
-            HStack(padding: 0, alignment: .center, spacing: 6) {
+            HStack(padding: 0, alignment: .center, spacing: 2) {
                 ForEach(items) { item in
-                    trayIcon(item)
+                    trayIcon(item, palette: palette, size: metrics.control - 4)
                 }
             }
         }
     }
 
     @ViewBuilder
-    private func trayIcon(_ item: StatusNotifierTray.TrayItem) -> some View {
+    private func trayIcon(
+        _ item: StatusNotifierTray.TrayItem, palette: PanelPalette, size: Float
+    ) -> some View {
         // Stack owns the hit target so left and right both work. Both may end
         // in the item's DBusMenu. The panel does not draw it: `OpenMenu`
         // hands the rows to the compositor, the same way a right-click on
@@ -1566,20 +1625,22 @@ struct PanelView: View {
                 }
             }
         ) {
-            // Fixed 22pt so a large IconPixmap does not blow the strip height.
+            // Fixed size so a large IconPixmap does not blow the bar height;
+            // the same disc the built-in tray glyphs sit on.
             if let image = item.image {
                 Image(
                     image,
-                    width: .pt(22), height: .pt(22),
+                    width: .pt(size - 6), height: .pt(size - 6),
                     contentMode: .fit
                 )
+                .padding(3)
             } else {
-                Text(item.fallback, color: Theme.current.textPrimary)
-                    .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
+                Text(item.fallback, color: palette.text)
+                    .padding(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
             }
         }
-        .hoverBackground(PanelChrome.style.titleHover)
-        .cornerRadius(6)
+        .hoverBackground(palette.chipOpen)
+        .cornerRadius(size / 2)
         .agentId("tray.\(item.key)")
     }
 
@@ -1770,7 +1831,8 @@ WindowBackdrop.current = .none
 
 guard let editor = LavaClient.openPanel(
     title: "Lava Panel", edge: .top,
-    thickness: MenuSession.stripHeight, reserve: true
+    thickness: panelMetrics.surfaceHeight, reserve: true,
+    reserved: panelMetrics.reserved
 ) else { exit(1) }
 
 guard let brandIcon = ImageStore.loadAsset(
@@ -1805,14 +1867,19 @@ bluetooth.onPromptGone = { session.dropPairing($0) }
 // every clock tick, and a face that is never `registerWithEngine`'d
 // measures at 64px while the compositor rasterizes font id 0 — the
 // default 16px — which is the widely spaced "S e t t i n g s" look.
-guard let menuFont = UIFont.loadUI(assetsRoot: LavaResources.root, pixelSize: 12)
-else {
+guard let panelFonts = PanelFonts.load(into: editor) else {
     FileHandle.standardError.write(
-        Data("LavaPanel: could not load menu face\n".utf8)
+        Data("LavaPanel: could not load Figtree from LavaUI's fonts\n".utf8)
     )
     exit(1)
 }
-menuFont.registerWithEngine(editor)
+
+// The system menu's flame, white, for the accent disc it sits on.
+guard let flameIcon = ImageStore.loadAsset(named: "flame.svg", bundle: .module, into: editor)
+else {
+    FileHandle.standardError.write(Data("LavaPanel: could not load flame.svg\n".utf8))
+    exit(1)
+}
 
 guard let bodyFont = loadReadingFace(pixelSize: 14) else {
     FileHandle.standardError.write(
@@ -1884,7 +1951,7 @@ LavaClient.onMenuChoice { serial, chosen in
 
 LavaClient.run(editor: editor) {
     PanelView(
-        brandIcon: brandIcon, brandImage: brandImage,
-        menuFont: menuFont, bodyFont: bodyFont
+        brandIcon: flameIcon, brandImage: brandImage,
+        fonts: panelFonts, bodyFont: bodyFont
     )
 }
