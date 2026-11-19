@@ -1150,6 +1150,12 @@ final class LeafNode: YogaBoxNode {
     /// which drifts. Let go of as soon as the reader scrolls it away from
     /// that height, or an edit shifts the offsets under it.
     var resizeAnchor: (offset: Int, screenY: Float)?
+    /// The width `wrapCacheRows` was broken at, inside the gutter and insets:
+    /// what `charactersPerRow` scales its estimate from.
+    var wrapInner: Float = 0
+    /// The characters-per-row estimate made at `wrapInner`. Kept so an edit at
+    /// the same width re-plans with the estimate its unbroken rows came from.
+    var wrapPerRow: Double = 0
     /// False where `wrapCacheRows[i]` is that provisional row rather than a
     /// real break. See `refreshVisualRows`.
     var wrapMeasured: [Bool] = []

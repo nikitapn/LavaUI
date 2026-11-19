@@ -458,6 +458,10 @@ public struct EditorView: PrimitiveView {
             // The plan describes rows this editor no longer has, and holds a
             // line table for a buffer it may never look at again.
             leaf.wrapCacheRows = []
+            // And the rows-per-line estimate made for them: a new font fits a
+            // different number of characters in the same width.
+            leaf.wrapInner = 0
+            leaf.wrapPerRow = 0
             leaf.wrapPlanText = ""
             leaf.wrapMeasured = []
             leaf.wrapUnmeasured = 0

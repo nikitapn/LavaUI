@@ -455,6 +455,44 @@ final class WrappedWindowTests: XCTestCase {
         }
     }
 
+    /// The scrollbar is drawn from the row total and the scroll offset, and
+    /// both count rows — including the rows of lines a pass has not broken
+    /// yet. Counted as one row each, a resize left the document a few
+    /// hundred rows short until the refinement caught up, and since each
+    /// frame of a drag had broken a different share of it, the thumb swung
+    /// back and forth while the text itself stood still. Estimated, the
+    /// first pass is already close to where the refinement will settle.
+    func testAResizeDoesNotMoveTheScrollbarBeforeTheRefinementCatchesUp() throws {
+        let wide = try settleWrap()
+        let lineHeight = try XCTUnwrap(FontStore.default).lineHeight
+        wide.scrollY = Float(wide.editing.layout.count / 2) * lineHeight
+        _ = try pass(width: Self.viewport.w)
+
+        func thumb(_ leaf: LeafNode) -> Float {
+            leaf.scrollY / max(1, Float(leaf.editing.layout.count) * lineHeight - leaf.viewportHeight)
+        }
+
+        // One pass at the new width, breaking only what is on screen.
+        LeafNode.wrapBudget = 0
+        let first = try pass(width: 240)
+        XCTAssertGreaterThan(first.wrapUnmeasured, 0, "the test needs most of the file unbroken")
+        let firstRows = first.editing.layout.count
+        let firstThumb = thumb(first)
+
+        // And where it settles.
+        LeafNode.wrapBudget = 1
+        var settled = try pass(width: 240)
+        var passes = 0
+        while settled.wrapUnmeasured > 0, passes < 400 {
+            settled = try pass(width: 240)
+            passes += 1
+        }
+        let settledRows = settled.editing.layout.count
+        XCTAssertEqual(Float(firstRows), Float(settledRows), accuracy: Float(settledRows) * 0.03,
+                       "the estimated document height is far from the real one")
+        XCTAssertEqual(firstThumb, thumb(settled), accuracy: 0.02, "the scrollbar moved as the refinement landed")
+    }
+
     /// The anchor a drag holds is let go of the moment the reader scrolls, or
     /// the next resize would yank the view back to where the *previous* drag
     /// began.

@@ -357,7 +357,10 @@ extension LeafNode {
                 anchor = replanned ? .none : .hold
             }
             if replanned {
-                planWrap(text: textNow, previous: wrapPlanText, widthMoved: widthMoved)
+                planWrap(
+                    text: textNow, previous: wrapPlanText, widthMoved: widthMoved,
+                    inner: inner, font: f
+                )
             }
             // Break the destination before mapping a character offset into
             // visual rows, even deep inside one long logical line. The window
@@ -480,9 +483,12 @@ extension LeafNode {
     private static let wrapMargin = 64
 
     /// Rebuilds the per-line plan for a new buffer or a new width, breaking
-    /// nothing: every line that cannot be reused gets one provisional row
-    /// covering it whole, and is queued.
-    private func planWrap(text: String, previous: String, widthMoved: Bool) {
+    /// nothing: every line that cannot be reused gets provisional rows
+    /// covering it whole — as many as it is expected to break into — and is
+    /// queued.
+    private func planWrap(
+        text: String, previous: String, widthMoved: Bool, inner: Float, font: UIFont
+    ) {
         // One scan for both coordinate systems, and the one `afterEdit` has
         // just done when it is still current.
         let index = lastLogicalRowsText == text && !logicalLineIndex.rows.isEmpty
@@ -498,6 +504,15 @@ extension LeafNode {
             previous: previous, text: text, index: index,
             previousLines: reusableRows.count
         )
+
+        // Taken before the table it reads is replaced below. Only a new width
+        // makes a new estimate: at the same width an edit re-plans, and an
+        // estimate that changed under the lines it was not about would move
+        // every unbroken row above the view — which an edit does not anchor.
+        let perRow = abs(inner - wrapInner) < 0.5 && wrapPerRow > 0
+            ? wrapPerRow : charactersPerRow(inner: inner, font: font)
+        wrapInner = inner
+        wrapPerRow = perRow
 
         var rows: [[Range<Int>]] = []
         var measured: [Bool] = []
@@ -519,8 +534,16 @@ extension LeafNode {
             {
                 rows.append(reusableRows[reusedAt])
                 measured.append(true)
+            } else if let reusedAt, reusableRows.indices.contains(reusedAt),
+                      reusableMeasured.indices.contains(reusedAt)
+            {
+                // Unchanged and still unbroken: the same estimate as before,
+                // so its share of the rows above the view does not move.
+                rows.append(reusableRows[reusedAt])
+                measured.append(false)
+                unmeasured += 1
             } else {
-                rows.append([0..<ranges[line].count])
+                rows.append(Self.provisionalRows(length: ranges[line].count, perRow: perRow))
                 measured.append(false)
                 unmeasured += 1
             }
@@ -531,6 +554,52 @@ extension LeafNode {
         wrapUnmeasured = unmeasured
         wrapCursor = 0
         wrapPlanText = text
+    }
+
+    /// About how many characters a row holds at `inner`, for the lines a pass
+    /// has not broken yet.
+    ///
+    /// Those used to be one row each, so the document was as many rows short
+    /// as its unbroken lines had wraps. The text on screen never showed it —
+    /// the window is always broken exactly, and the anchor is placed in it —
+    /// but the scroll offset is counted in rows, so for as long as a resize
+    /// lasted the offset and the scrollbar's thumb swung by a few hundred
+    /// rows from one frame to the next, as each pass broke a different share
+    /// of the file. An estimate close to the real breaks keeps the total, and
+    /// the thumb, where they will settle.
+    ///
+    /// Measured from the table being replaced — its full rows, every row of a
+    /// wrapped line but the last — and scaled by the change in width; from
+    /// the font when there is nothing measured to go on.
+    private func charactersPerRow(inner: Float, font: UIFont) -> Double {
+        var characters = 0
+        var full = 0
+        if wrapInner > 0, wrapCacheRows.count == wrapMeasured.count {
+            // A sample, not the file: a couple of thousand full rows give the
+            // same average as all of them, and this runs on the frame a
+            // resize is already paying for.
+            for (line, broken) in wrapCacheRows.enumerated()
+            where wrapMeasured[line] && broken.count > 1 {
+                for row in broken.dropLast() { characters += row.count }
+                full += broken.count - 1
+                if full >= 2048 { break }
+            }
+        }
+        if full >= 8 {
+            return max(1, Double(characters) / Double(full) * Double(inner / wrapInner))
+        }
+        let sample = "the quick brown fox jumps over the lazy dog "
+        let advance = font.shapedRun(sample).width / Float(sample.count)
+        return max(1, Double(inner / max(1, advance)))
+    }
+
+    /// `length` characters cut into the number of rows `perRow` says they
+    /// will break into. Real text, every row of it — a row table cannot have
+    /// holes — just not real break points, which the pass supplies later.
+    static func provisionalRows(length: Int, perRow: Double) -> [Range<Int>] {
+        let count = max(1, Int((Double(length) / perRow).rounded(.up)))
+        guard count > 1 else { return [0..<length] }
+        return (0..<count).map { (length * $0 / count)..<(length * ($0 + 1) / count) }
     }
 
     /// How many lines at each end of the buffer kept the rows they had.
