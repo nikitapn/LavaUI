@@ -1,6 +1,6 @@
 {
-  "notes" : "Wheel arbitration: a node with its own wheel handler is declared to the renderer so an enclosing retained ScrollView stops swallowing its notches. Harness.emit now clears the draw list as a real frame does — drawCommands was previously the running total of every scenario benched before it, which is why it drops from thousands to a per-scenario figure. | 2026-10-22: term.ingest-* added from a release run on the same laptop (AMD Renoir), merged in rather than the whole file re-recorded. | 2026-11-19: editor.wrap-* added from a release run on an AMD Ryzen 7 5800H (Cezanne), merged in rather than the whole file re-recorded — the other rows were recorded on a different machine, and on this one several sit 40-50% faster and a few ~2x slower (text.delete-selection-mid-buffer delete, image.poster-scroll-thrash) at both the parent commit and this one.",
-  "recordedAt" : "2026-08-04T18:56:59Z",
+  "notes" : "Re-recorded in full on an AMD Ryzen 7 5800H (Cezanne), on a quiet machine, replacing a baseline from a different laptop (AMD Renoir) that several rows ran 40-50% faster than and two about 2x slower than here, identically at the commit before the soft-wrap work. Includes editor.wrap-* (soft wrap over 4 MB of prose, budget pinned).",
+  "recordedAt" : "2026-11-19T01:34:03Z",
   "scenarios" : {
     "editor.open-10mb" : {
       "counters" : {
@@ -10,9 +10,9 @@
         "shapeHits" : 53
       },
       "stages" : {
-        "body" : 9.32,
-        "emit" : 0.04,
-        "layout" : 19.346
+        "body" : 4.169,
+        "emit" : 0.048,
+        "layout" : 9.194
       }
     },
     "editor.open-10mb-decorated" : {
@@ -23,9 +23,9 @@
         "shapeHits" : 54
       },
       "stages" : {
-        "body" : 8.861,
-        "emit" : 0.063,
-        "layout" : 19.182
+        "body" : 4.108,
+        "emit" : 0.069,
+        "layout" : 8.928
       }
     },
     "editor.open-1mb" : {
@@ -36,9 +36,9 @@
         "shapeHits" : 53
       },
       "stages" : {
-        "body" : 0.907,
-        "emit" : 0.031,
-        "layout" : 3.351
+        "body" : 0.392,
+        "emit" : 0.042,
+        "layout" : 2.246
       }
     },
     "editor.open-200-lines" : {
@@ -48,9 +48,9 @@
         "shapeHits" : 53
       },
       "stages" : {
-        "body" : 0.015,
-        "emit" : 0.025,
-        "layout" : 0.085
+        "body" : 0.009,
+        "emit" : 0.037,
+        "layout" : 0.088
       }
     },
     "editor.redraw-10mb" : {
@@ -60,7 +60,7 @@
         "shapeHits" : 93
       },
       "stages" : {
-        "emit" : 0.026
+        "emit" : 0.037
       }
     },
     "editor.replace-buffer-10mb" : {
@@ -70,9 +70,9 @@
         "shapeHits" : 66
       },
       "stages" : {
-        "body" : 11.154,
-        "emit" : 0.048,
-        "layout" : 40.116
+        "body" : 5.025,
+        "emit" : 0.056,
+        "layout" : 26.962
       }
     },
     "editor.wrap-open-4mb" : {
@@ -83,9 +83,9 @@
         "shapeHits" : 191
       },
       "stages" : {
-        "body" : 0.948,
-        "emit" : 4.945,
-        "layout" : 0.008
+        "body" : 0.943,
+        "emit" : 4.827,
+        "layout" : 0.005
       }
     },
     "editor.wrap-resize-4mb" : {
@@ -96,9 +96,9 @@
         "shapes" : 196
       },
       "stages" : {
-        "body" : 0.008,
-        "emit" : 10.605,
-        "layout" : 0.006
+        "body" : 0.007,
+        "emit" : 9.712,
+        "layout" : 0.005
       }
     },
     "editor.wrap-settle-4mb" : {
@@ -109,9 +109,9 @@
         "shapes" : 11789
       },
       "stages" : {
-        "body" : 0.009,
-        "emit" : 574.443,
-        "layout" : 0.006
+        "body" : 0.007,
+        "emit" : 542.974,
+        "layout" : 0.005
       }
     },
     "editor.wrap-type-4mb" : {
@@ -122,16 +122,18 @@
         "shapes" : 1
       },
       "stages" : {
-        "body" : 0.015,
-        "edit" : 1.435,
-        "emit" : 1.951,
+        "body" : 0.011,
+        "edit" : 1.377,
+        "emit" : 1.858,
         "layout" : 0.006
       }
     },
     "image.poster-cache-hit" : {
-      "counters" : {},
+      "counters" : {
+
+      },
       "stages" : {
-        "lookup" : 0.016
+        "lookup" : 0.015
       }
     },
     "image.poster-decode-cold" : {
@@ -141,7 +143,7 @@
         "residentMB" : 13
       },
       "stages" : {
-        "decode" : 31.185
+        "decode" : 41.262
       }
     },
     "image.poster-scroll-thrash" : {
@@ -153,7 +155,7 @@
         "resident" : 32
       },
       "stages" : {
-        "scroll" : 0.28
+        "scroll" : 0.409
       }
     },
     "list.lazy-grid-500" : {
@@ -166,8 +168,8 @@
       },
       "stages" : {
         "body" : 0.003,
-        "emit" : 0.044,
-        "layout" : 0.244
+        "emit" : 0.07,
+        "layout" : 0.338
       }
     },
     "list.lazy-grid-5000" : {
@@ -180,8 +182,8 @@
       },
       "stages" : {
         "body" : 0.003,
-        "emit" : 0.05,
-        "layout" : 0.242
+        "emit" : 0.07,
+        "layout" : 0.315
       }
     },
     "term.ingest-plain-8mb" : {
@@ -189,7 +191,7 @@
         "bytes" : 8388632
       },
       "stages" : {
-        "feed" : 127.575
+        "feed" : 130.128
       }
     },
     "term.ingest-sgr-8mb" : {
@@ -197,7 +199,7 @@
         "bytes" : 8388666
       },
       "stages" : {
-        "feed" : 267.27
+        "feed" : 289.565
       }
     },
     "text.delete-selection-mid-buffer" : {
@@ -205,8 +207,8 @@
         "rows" : 132955
       },
       "stages" : {
-        "delete" : 1.133,
-        "reseed" : 7.977,
+        "delete" : 2.049,
+        "reseed" : 3.854,
         "select" : 0.001
       }
     },
@@ -216,7 +218,7 @@
       },
       "stages" : {
         "init" : 0.001,
-        "rows" : 8.762
+        "rows" : 4.096
       }
     },
     "text.logical-rows-10mb" : {
@@ -224,7 +226,7 @@
         "rows" : 147687
       },
       "stages" : {
-        "rows" : 9.046
+        "rows" : 4.352
       }
     },
     "text.logical-rows-10mb-unicode" : {
@@ -232,7 +234,7 @@
         "rows" : 147688
       },
       "stages" : {
-        "rows" : 147.833
+        "rows" : 4.426
       }
     },
     "text.search-10mb" : {
@@ -240,15 +242,17 @@
         "matches" : 29370
       },
       "stages" : {
-        "find" : 43.623
+        "find" : 41.77
       }
     },
     "text.select-all-delete-10mb" : {
-      "counters" : {},
+      "counters" : {
+
+      },
       "stages" : {
-        "delete" : 0.004,
+        "delete" : 0.003,
         "selectAll" : 0.001,
-        "undo" : 1.711
+        "undo" : 1.36
       }
     },
     "text.type-at-end-10mb" : {
@@ -256,7 +260,7 @@
         "chars" : 200
       },
       "stages" : {
-        "type" : 1.327
+        "type" : 1.201
       }
     },
     "traceloom.parse-10mb" : {
@@ -265,7 +269,7 @@
         "series" : 3
       },
       "stages" : {
-        "parse" : 437.654
+        "parse" : 422.724
       }
     }
   }
