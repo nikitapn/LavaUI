@@ -124,6 +124,24 @@ filling memory.
 overhead in the editor path and not anything size-dependent, which is a
 different bug with a different fix.
 
+`editor.wrap-*` is soft wrap, over 4 MB of prose (`Fixtures.prose` — most
+lines short, every few a paragraph that breaks into several rows; a log's
+52-byte lines do not wrap at all). The editor is laid out the way LavaEditor
+does it, filling a box whose size is fixed, because then Yoga never calls the
+measure function and the emitter's re-wrap is the only one; a self-sizing
+editor is re-wrapped by the measure pass first, which is what hid a stale-row
+bug during window drags from every test. A wrapping editor breaks what is on
+screen at once and the rest over later frames, a time budget per frame, so
+these pin that budget (`EditorView.softWrapFrameBudget`) — otherwise
+`lineWraps` would count how fast the machine is:
+
+| scenario | what it is | `lineWraps` |
+|---|---|---|
+| `editor.wrap-open-4mb` | the first frame of a wrapped document | the visible window and its margin, not the file |
+| `editor.wrap-resize-4mb` | one step of a window drag, mid-document | the same: a width change must not wrap the file in the frame that answers it |
+| `editor.wrap-settle-4mb` | the whole re-wrap a width change eventually costs, in one pass | every line |
+| `editor.wrap-type-4mb` | a keystroke mid-document (`edit` is the controller call, the rest the frame after it) | 1 — an edit re-breaks the line it touched |
+
 Some scenarios also assert. `text.select-all-delete-10mb` checks that no stale
 row table survives the delete; `image.poster-scroll-thrash` checks that the
 cache stays under budget and does not re-decode on every visit;

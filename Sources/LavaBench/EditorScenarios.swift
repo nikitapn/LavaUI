@@ -131,6 +131,154 @@ enum EditorScenarios {
             )
         )
 
+        scenarios += wrapScenarios()
+        return scenarios
+    }
+
+    // MARK: - Soft wrap
+
+    /// LavaEditor's shape: a wrapping editor growing to fill a box whose size
+    /// is fixed. That is the case where Yoga never calls the measure function
+    /// and the emitter's re-wrap is the only one — the layout that hid the
+    /// stale-row frame of a window drag from every test until one was built
+    /// this way.
+    ///
+    /// Sized by the harness's viewport, the way a window's content is sized
+    /// by the window: a resize is `harness.viewportW` changing.
+    private static func wrappedEditor(
+        _ box: TextBox, controller: EditorController? = nil
+    ) -> some View {
+        VStack(flexGrow: 1) {
+            EditorView(
+                text: box.binding, wraps: true, visibleLines: 24, controller: controller
+            )
+            .flexGrow(1)
+        }
+    }
+
+    /// Mounts at `width`, wraps the whole document, and scrolls the middle
+    /// line into view with the caret on it — all untimed: the state a reader
+    /// is in before they touch the window edge or a key.
+    private static func settleInTheMiddle(
+        _ harness: Harness, _ box: TextBox, controller: EditorController
+    ) {
+        EditorView.softWrapFrameBudget = .infinity
+        harness.mount(wrappedEditor(box, controller: controller))
+        harness.layout()
+        harness.emit()
+        let lines = controller.metrics()?.lines ?? 0
+        controller.reveal(line: max(1, lines / 2))
+        harness.mount(wrappedEditor(box, controller: controller))
+        harness.layout()
+        harness.emit()
+    }
+
+    /// Every scenario here pins the per-frame wrapping budget: what one frame
+    /// gets through otherwise depends on the machine, and `lineWraps` would
+    /// gate on how fast the laptop was.
+    private static func wrapScenarios() -> [Scenario] {
+        let defaultBudget = EditorView.softWrapFrameBudget
+        var scenarios: [Scenario] = []
+
+        // Opening a large document with wrap on. Only what is on screen is
+        // broken in the first frame, so this must stay small however big the
+        // file is; the rest is `editor.wrap-settle-4mb`.
+        scenarios.append(Scenario(
+            "editor.wrap-open-4mb",
+            detail: "mount + layout + emit a wrapping editor over 4 MB of prose (window only)",
+            iterations: 3,
+            body: { harness, rec in
+                let viewport = harness.viewportW
+                defer {
+                    EditorView.softWrapFrameBudget = defaultBudget
+                    harness.viewportW = viewport
+                }
+                EditorView.softWrapFrameBudget = 0
+                let box = TextBox(Fixtures.proseOfApproximately(megabytes: 4))
+                harness.frame(wrappedEditor(box), into: rec)
+                rec.counter("bufferKB", box.text.utf8.count / 1024)
+            }
+        ))
+
+        // One step of a window drag: the frame that has to answer a width
+        // change, mid-document. Re-plans every line, estimates the unbroken
+        // ones, breaks the window and places the text the reader was looking
+        // at. A drag is dozens of these a second.
+        scenarios.append(Scenario(
+            "editor.wrap-resize-4mb",
+            detail: "one frame at a new width, scrolled mid-document, everything wrapped before",
+            iterations: 5,
+            body: { harness, rec in
+                let viewport = harness.viewportW
+                defer {
+                    EditorView.softWrapFrameBudget = defaultBudget
+                    harness.viewportW = viewport
+                }
+                let box = TextBox(Fixtures.proseOfApproximately(megabytes: 4))
+                let controller = EditorController()
+                settleInTheMiddle(harness, box, controller: controller)
+                EditorView.softWrapFrameBudget = 0
+                PerfCounters.reset()
+                harness.viewportW = 1180
+                harness.frame(wrappedEditor(box, controller: controller), into: rec)
+            }
+        ))
+
+        // The rest of that width change: every line broken again, which a
+        // real editor spreads over the frames after the drag. In one pass so
+        // the total is one number.
+        scenarios.append(Scenario(
+            "editor.wrap-settle-4mb",
+            detail: "re-wrap the whole 4 MB document at a new width in one pass",
+            iterations: 3,
+            body: { harness, rec in
+                let viewport = harness.viewportW
+                defer {
+                    EditorView.softWrapFrameBudget = defaultBudget
+                    harness.viewportW = viewport
+                }
+                let box = TextBox(Fixtures.proseOfApproximately(megabytes: 4))
+                let controller = EditorController()
+                settleInTheMiddle(harness, box, controller: controller)
+                PerfCounters.reset()
+                harness.viewportW = 1180
+                harness.frame(wrappedEditor(box, controller: controller), into: rec)
+            }
+        ))
+
+        // A keystroke mid-document. The edit re-plans, keeps every line it
+        // did not touch, and breaks the one it did — so `lineWraps` here is
+        // the number to watch: it must not grow with the document.
+        scenarios.append(Scenario(
+            "editor.wrap-type-4mb",
+            detail: "one character typed mid-document, wrapped and settled before",
+            iterations: 5,
+            body: { harness, rec in
+                let viewport = harness.viewportW
+                defer {
+                    EditorView.softWrapFrameBudget = defaultBudget
+                    harness.viewportW = viewport
+                }
+                let box = TextBox(Fixtures.proseOfApproximately(megabytes: 4))
+                let controller = EditorController()
+                settleInTheMiddle(harness, box, controller: controller)
+                EditorView.softWrapFrameBudget = 0
+                // Through the controller, the way a key reaches the buffer,
+                // so the editor sees an edit rather than a replaced document.
+                // The edit re-plans and re-breaks on the spot — that is how
+                // the caret can follow it — so it is a stage of its own, and
+                // the frame after it is the rest of what a keystroke costs.
+                // One character replaced: `replace` skips an empty range, and
+                // the buffer is ASCII, so a byte offset is a character offset.
+                let at = box.text.utf8.count / 2
+                PerfCounters.reset()
+                var applied = 0
+                rec.stage("edit") { applied = controller.replace([at..<(at + 1)], with: "x") }
+                rec.require(applied == 1, "the keystroke did not reach the buffer")
+                harness.frame(wrappedEditor(box, controller: controller), into: rec)
+            }
+        ))
+
         return scenarios
     }
 }

@@ -320,6 +320,22 @@ public final class EditorController {
 /// correctness — is `TextEditingState`, unchanged and already tested. This
 /// type is presentation plus a gutter, which is why it is a component rather
 /// than a rewrite of `TextField`.
+extension EditorView {
+    /// Seconds a frame may spend wrapping lines it does not show yet, once the
+    /// lines it does show are wrapped. A soft-wrapped editor breaks what is on
+    /// screen at once and the rest of the document over the frames after it,
+    /// this much per frame (4 ms by default).
+    ///
+    /// For benchmarks: the share of the document one frame gets through then
+    /// depends on how fast the machine is, so a count of lines wrapped is
+    /// only reproducible with this pinned — 0 for exactly the frame a user
+    /// waits on, `.infinity` to wrap the whole document in one pass.
+    public static var softWrapFrameBudget: Double {
+        get { LeafNode.wrapBudget }
+        set { LeafNode.wrapBudget = newValue }
+    }
+}
+
 public struct EditorView: PrimitiveView {
     /// The text being edited.
     @Binding public var text: String

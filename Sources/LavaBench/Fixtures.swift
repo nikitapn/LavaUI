@@ -86,6 +86,46 @@ enum Fixtures {
         return log(lines: megabytes * 1_024 * 1_024 / bytesPerLine)
     }
 
+    // MARK: - Prose
+
+    nonisolated(unsafe) private static var proseCache: [Int: String] = [:]
+
+    /// Text that soft-wraps the way prose does: most lines short, every few a
+    /// paragraph long enough to break into several rows — the mix that makes
+    /// a wrapped document's height worth estimating. A log is the wrong
+    /// fixture here: its lines are about 52 bytes and do not wrap at any
+    /// window width worth benchmarking.
+    static func prose(paragraphs: Int) -> String {
+        if let hit = proseCache[paragraphs] { return hit }
+        var rng = Random(seed: 0x50F7_0_DA7A)
+        let words = [
+            "the", "quick", "brown", "fox", "jumps", "over", "a", "lazy", "dog",
+            "while", "seven", "wizards", "quietly", "brew", "potions", "under",
+            "pale", "moonlight", "near", "ancient", "stone", "walls",
+        ]
+        // Words per paragraph: a heading, a sentence, and three lengths of
+        // paragraph, so the rows per line vary from one to a dozen.
+        let lengths = [6, 12, 60, 90, 140]
+        var out = ""
+        out.reserveCapacity(paragraphs * 400)
+        for i in 0..<paragraphs {
+            out += "P\(i + 1):"
+            for _ in 0..<rng.pick(lengths) {
+                out += " "
+                out += rng.pick(words)
+            }
+            out += ".\n"
+        }
+        proseCache[paragraphs] = out
+        return out
+    }
+
+    static func proseOfApproximately(megabytes: Int) -> String {
+        let probe = prose(paragraphs: 2_000)
+        let bytesPerParagraph = max(1, probe.utf8.count / 2_000)
+        return prose(paragraphs: megabytes * 1_024 * 1_024 / bytesPerParagraph)
+    }
+
     // MARK: - Poster art
 
     /// Uncompressed 24-bit TGA. Chosen over PNG because the point of the
