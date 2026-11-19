@@ -116,8 +116,7 @@ public struct Theme: Equatable, Sendable {
         self.restingOutline = restingOutline
     }
 
-    /// The palette this app shipped with, kept as-is so the theme migration
-    /// changes nothing visually until someone chooses a different one.
+    /// The original cool-grey palette.
     public static let dark = Theme(
         textPrimary: Color(r: 0.90, g: 0.90, b: 0.90),
         textSecondary: Color(r: 0.55, g: 0.55, b: 0.60),
@@ -132,6 +131,23 @@ public struct Theme: Equatable, Sendable {
         hover: Color(r: 0.25, g: 0.27, b: 0.33),
         selectionFill: Color(r: 0.25, g: 0.40, b: 0.65),
         border: Color(r: 0.28, g: 0.30, b: 0.35)
+    )
+
+    /// Slate-blue chrome and a deeper inset for documents and fields.
+    public static let slate = Theme(
+        textPrimary: Color(rgb24: 0xe3_eb_f5),
+        textSecondary: Color(rgb24: 0xbe_cb_dd),
+        textMuted: Color(rgb24: 0xb2_c0_d3),
+        textDim: Color(rgb24: 0xa9_b7_ca),
+        accent: Color(rgb24: 0x8d_c6_ff),
+        selected: Color(r: 1.0, g: 0.85, b: 0.40),
+        background: Color(rgb24: 0x24_32_48),
+        panel: Color(rgb24: 0x32_43_5c),
+        inset: Color(rgb24: 0x15_1b_25),
+        canvas: Color(rgb24: 0x1c_27_37),
+        hover: Color(rgb24: 0x49_61_7f),
+        selectionFill: Color(rgb24: 0x35_58_84),
+        border: Color(rgb24: 0x53_69_85)
     )
 
     /// A light palette: dark text on pale surfaces.
@@ -285,6 +301,7 @@ public struct Theme: Equatable, Sendable {
     public static var builtIns: [BuiltIn] {
         [
             BuiltIn(name: "dark", title: "Dark", summary: "cool grey", theme: .dark),
+            BuiltIn(name: "slate", title: "Slate", summary: "slate blue", theme: .slate),
             BuiltIn(name: "light", title: "Light", summary: "daylight", theme: .light),
             BuiltIn(name: "nebula", title: "Nebula", summary: "indigo", theme: .nebula),
             BuiltIn(name: "ember", title: "Ember", summary: "warm charcoal", theme: .ember),

@@ -39,6 +39,10 @@ public struct Mark: View {
         case fitWidth
         /// Fit the whole page: a page inside four corner brackets.
         case fitPage
+        /// A document with a folded corner.
+        case document
+        /// Text wrapping to the next line.
+        case textWrap
     }
 
     /// Which symbol is drawn.
@@ -142,6 +146,25 @@ public struct Mark: View {
                 stroke(pw, -ph, pw, ph)
                 stroke(pw, ph, -pw, ph)
                 stroke(-pw, ph, -pw, -ph)
+            case .document:
+                let side = arm * 0.78
+                let fold = arm * 0.23
+                stroke(-side, -arm, fold, -arm)
+                stroke(fold, -arm, side, -fold)
+                stroke(side, -fold, side, arm)
+                stroke(side, arm, -side, arm)
+                stroke(-side, arm, -side, -arm)
+                stroke(fold, -arm, fold, -fold)
+                stroke(fold, -fold, side, -fold)
+            case .textWrap:
+                stroke(-arm, -arm * 0.65, arm, -arm * 0.65)
+                stroke(-arm, 0, arm * 0.65, 0)
+                stroke(arm * 0.65, 0, arm, arm * 0.25)
+                stroke(arm, arm * 0.25, arm * 0.65, arm * 0.55)
+                stroke(arm * 0.65, arm * 0.55, arm * 0.1, arm * 0.55)
+                stroke(arm * 0.1, arm * 0.55, arm * 0.33, arm * 0.3)
+                stroke(arm * 0.1, arm * 0.55, arm * 0.33, arm * 0.8)
+                stroke(-arm, arm * 0.55, -arm * 0.33, arm * 0.55)
             }
         }
     }

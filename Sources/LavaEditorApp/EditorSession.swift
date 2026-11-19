@@ -41,9 +41,11 @@ final class EditorSession {
     )
 
     var find = FindState()
+    var findQueryFocused = false
     /// Open, and what the user has typed into it, for `Go to Line`.
     var gotoOpen = false
     var gotoLine = ""
+    var gotoFocused = false
 
     /// One line under the toolbar. Not a toast: a write that failed should
     /// still be readable a minute later.
@@ -63,10 +65,12 @@ final class EditorSession {
     }
 
     /// Local document zoom; the tab strip and toolbars keep their UI font.
-    var documentFont: UIFont?
+    let fonts: EditorFonts
+    private var zoomedDocument: (regular: UIFont, bold: UIFont?)?
+    var documentFont: UIFont? { zoomedDocument?.regular ?? fonts.document }
+    var documentBoldFont: UIFont? { zoomedDocument == nil ? fonts.documentBold : zoomedDocument?.bold }
     @ObservationIgnored private weak var fontEditor: Editor?
-    @ObservationIgnored private var zoomBase: UIFont?
-    @ObservationIgnored private var zoomFonts: [Int: UIFont] = [:]
+    @ObservationIgnored private var zoomFonts: [Int: (regular: UIFont, bold: UIFont?)] = [:]
     @ObservationIgnored private var zoomRemainder: Float = 0
 
     let controller = EditorController()
@@ -92,6 +96,7 @@ final class EditorSession {
 
     init(editor: Editor? = nil) {
         fontEditor = editor
+        fonts = EditorFonts(editor: editor)
         wraps = AppSettings.bool(forKey: "wraps") ?? false
         showLineNumbers = AppSettings.bool(forKey: "lineNumbers") ?? true
         documents = [EditorDocument(id: takeID(), url: nil, text: "")]
@@ -109,7 +114,7 @@ final class EditorSession {
                            position: $0.position, isLoaded: false)
         }
         activeIndex = files.firstIndex { $0.path == saved.activePath } ?? 0
-        if let size = saved.fontSize, let base = FontStore.default {
+        if let size = saved.fontSize, let base = fonts.document ?? FontStore.default {
             zoom(by: Float(min(48, max(8, size))) - base.pixelSize.rounded())
         }
         controller.restore(active.position ?? .start)
@@ -133,8 +138,7 @@ final class EditorSession {
 
     func zoom(by notches: Float) {
         guard notches.isFinite, let editor = fontEditor,
-              let base = zoomBase ?? FontStore.default else { return }
-        zoomBase = base
+              let base = fonts.document ?? FontStore.default else { return }
         zoomRemainder += notches
         let steps = Int(min(40, max(-40, zoomRemainder.rounded(.towardZero))))
         guard steps != 0 else { return }
@@ -142,21 +146,32 @@ final class EditorSession {
         let current = Int((documentFont ?? base).pixelSize.rounded())
         let size = min(48, max(8, current + steps))
         guard size != current else { zoomRemainder = 0; return }
-        if let cached = zoomFonts[size] {
-            documentFont = cached
+        if Float(size) == base.pixelSize {
+            zoomedDocument = nil
             return
         }
-        guard let font = UIFont(path: base.path, pixelSize: Float(size),
-                                faceIndex: base.faceIndex, raster: base.raster),
-              font.registerWithEngine(editor) else {
+        if let cached = zoomFonts[size] {
+            zoomedDocument = cached
+            return
+        }
+        guard let font = EditorFonts.load("Regular", size: Float(size), document: true, editor: editor)
+                ?? fallbackDocumentFont(base, size: Float(size), editor: editor) else {
             notice = "Could not load the editor font at \(size) px."
             return
         }
+        let bold = EditorFonts.load("Bold", size: Float(size), document: true, editor: editor)
+        zoomFonts[size] = (font, bold)
+        zoomedDocument = (font, bold)
+    }
+
+    private func fallbackDocumentFont(_ base: UIFont, size: Float, editor: Editor) -> UIFont? {
+        guard let font = UIFont(path: base.path, pixelSize: size, faceIndex: base.faceIndex,
+                                raster: base.raster, lineHeightMultiple: 1.75),
+              font.registerWithEngine(editor) else { return nil }
         font.useFallbacks(base.fallbacks.map {
-            FontFallback(path: $0.path, pixelSize: Float(size))
+            FontFallback(path: $0.path, pixelSize: size)
         }, into: editor)
-        zoomFonts[size] = font
-        documentFont = font
+        return font
     }
 
     private func takeID() -> Int {
@@ -216,7 +231,7 @@ final class EditorSession {
         // The mounted editor has counted these already, for its gutter. Its
         // answer only counts if it is looking at *this* buffer: during a tab
         // switch it still holds the outgoing one for a frame.
-        if let metrics = controller.metrics(), metrics.bytes == bytes {
+        if let metrics = controller.metrics(forText: doc.text) {
             lineCountCache = (doc.id, bytes, revision, metrics.lines)
             return metrics.lines
         }
@@ -525,14 +540,18 @@ final class EditorSession {
     // MARK: - Find and replace
 
     func openFind(replace: Bool) {
+        FocusManager.clear()
         find.isOpen = true
         find.showsReplace = replace
+        findQueryFocused = true
         if !find.query.isEmpty { runSearch() }
     }
 
     func closeFind() {
         find.isOpen = false
+        findQueryFocused = false
         find.search = TextSearch()
+        controller.focus()
     }
 
     /// Recomputes matches against the buffer as it is now.
@@ -606,12 +625,20 @@ final class EditorSession {
     // MARK: - Go to line
 
     func openGoto() {
+        FocusManager.clear()
         gotoOpen = true
         gotoLine = ""
+        gotoFocused = true
+    }
+
+    func closeGoto() {
+        gotoOpen = false
+        gotoFocused = false
+        controller.focus()
     }
 
     func performGoto() {
-        defer { gotoOpen = false }
+        defer { closeGoto() }
         guard let line = Int(gotoLine.trimmingCharacters(in: .whitespaces)), line > 0 else {
             notice = "Not a line number: \(gotoLine)"
             return

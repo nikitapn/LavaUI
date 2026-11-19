@@ -17,6 +17,19 @@ public struct CodeStyle {
     public var currentSearchMatch: Color
     /// Indexed by `HighlightRule.styleIndex`; out-of-range falls back to `text`.
     public var palette: [Color]
+    /// Number colour for the caret's logical line. Also extends its highlight across the gutter.
+    public var activeGutterText: Color?
+    /// Optional emphasized face for the caret's line number.
+    public var activeGutterFont: UIFont?
+    /// Minimum width for a visible gutter, in points.
+    public var minimumGutterWidth: Float = 0
+    /// Custom indicator paint. Geometry and drag behavior are shared with the standard scrollbar.
+    public var scrollbarColor: Color?
+    public var scrollbarWidth: Float = 4
+    /// Extends the horizontal scrollbar across the gutter.
+    public var scrollbarSpansGutter = false
+    /// Hint painted over an empty buffer.
+    public var placeholder: String?
 
     /// Creates a palette. Colours left `nil` come from the current theme, apart
     /// from the two search fills, which have fixed amber defaults.
@@ -32,8 +45,8 @@ public struct CodeStyle {
         let theme = Environment.current.theme
         self.text = text
         self.gutterText = gutterText ?? theme.textSecondary
-        self.gutterBackground = gutterBackground ?? theme.panel
-        self.currentLine = currentLine ?? theme.hover
+        self.gutterBackground = gutterBackground ?? theme.canvas
+        self.currentLine = currentLine ?? theme.background
         self.searchMatch = searchMatch ?? Color(r: 0.45, g: 0.40, b: 0.15)
         self.currentSearchMatch = currentSearchMatch ?? Color(r: 0.70, g: 0.55, b: 0.15)
         self.palette = palette
@@ -191,7 +204,9 @@ public final class EditorController {
     private var revealRangeAction: ((Range<Int>) -> Bool)?
     private var captureAction: (() -> EditorPosition?)?
     private var replaceAction: (([Range<Int>], String) -> Int)?
-    private var metricsAction: (() -> (bytes: Int, lines: Int))?
+    private var metricsAction: ((String?) -> (bytes: Int, lines: Int)?)?
+    private var caretLineAction: (() -> Int?)?
+    private var focusAction: (() -> Void)?
     private var pendingLine: Int?
     private var pendingPosition: EditorPosition?
 
@@ -231,6 +246,12 @@ public final class EditorController {
     /// Where the editor is right now, or nil if it is not mounted.
     public func position() -> EditorPosition? { captureAction?() }
 
+    /// One-based logical line at the active end of the selection.
+    public func caretLine() -> Int? { caretLineAction?() }
+
+    /// Returns keyboard focus to the editor without moving the caret.
+    public func focus() { focusAction?() }
+
     /// Replaces `ranges` — character offsets, as `TextSearch.matches` gives
     /// them — with `replacement`, and returns how many were applied. Zero if
     /// the editor is not mounted.
@@ -268,12 +289,13 @@ public final class EditorController {
     /// For a status bar. The editor has counted the lines already — it needs
     /// the same number for the gutter — and a caller that recounts is scanning
     /// a multi-megabyte buffer to learn something a few pointers away. The
-    /// byte count comes back with it because the caller has to check: during a
-    /// document switch the editor still holds the outgoing buffer for a frame,
-    /// and a status bar that believed it would flash the wrong number.
+    /// caller can supply its text to detect an outgoing buffer still mounted
+    /// during a document switch.
     ///
     /// Nil when no editor is mounted.
-    public func metrics() -> (bytes: Int, lines: Int)? { metricsAction?() }
+    public func metrics(forText text: String? = nil) -> (bytes: Int, lines: Int)? {
+        metricsAction?(text)
+    }
 
     /// Puts the editor back at `position` on its next reconcile.
     ///
@@ -298,13 +320,17 @@ public final class EditorController {
         capture: @escaping () -> EditorPosition?,
         restore: @escaping (EditorPosition) -> Bool,
         replace: @escaping ([Range<Int>], String) -> Int,
-        metrics: @escaping () -> (bytes: Int, lines: Int)
+        metrics: @escaping (String?) -> (bytes: Int, lines: Int)?,
+        caretLine: @escaping () -> Int?,
+        focus: @escaping () -> Void
     ) {
         revealAction = reveal
         revealRangeAction = revealRange
         captureAction = capture
         replaceAction = replace
         metricsAction = metrics
+        caretLineAction = caretLine
+        focusAction = focus
         if let pendingPosition, restore(pendingPosition) {
             self.pendingPosition = nil
         }
@@ -535,9 +561,15 @@ public struct EditorView: PrimitiveView {
                 ViewInvalidation.markDirty()
                 return applied
             },
-            metrics: { [weak leaf] in
-                guard let leaf else { return (0, 0) }
+            metrics: { [weak leaf] text in
+                guard let leaf, text == nil || text == leaf.editing.text else { return nil }
                 return (leaf.editing.text.utf8.count, leaf.logicalLineCount)
+            },
+            caretLine: { [weak leaf] in
+                leaf.map { $0.logicalLine(ofRow: $0.focusRow()) + 1 }
+            },
+            focus: { [weak leaf] in
+                leaf?.focusSelf(binding: binding, onSubmit: nil)
             }
         )
 
@@ -764,7 +796,9 @@ extension LeafNode {
     func measuredGutterWidth(font: UIFont) -> Float {
         let digits = max(2, String(max(1, logicalLineCount)).count)
         let sample = String(repeating: "0", count: digits)
-        return font.shapedRun(sample).width + textInset * 3
+        let digitWidth = max(font.shapedRun(sample).width,
+                             codeStyle?.activeGutterFont?.shapedRun(sample).width ?? 0)
+        return max(codeStyle?.minimumGutterWidth ?? 0, digitWidth + textInset * 3)
     }
 
     /// Selects the whole logical line under `localY` — the gutter-click

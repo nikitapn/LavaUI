@@ -150,15 +150,15 @@ extension LeafNode {
            Scrollbar.hitsHorizontal(localY: localY, boxHeight: viewportHeight)
         {
             let maximum = maxScrollX(font: font)
-            // The gutter is not part of the horizontal track.
-            let trackX = localX - gutterWidth
+            let inset = horizontalScrollbarInset
+            let trackX = localX - inset
             let grab = trackX >= m.along && trackX < m.along + m.thumb
                 ? trackX - m.along : m.thumb / 2
             ScrollbarDrag.begin(id, axis: .horizontal)
             let apply = { [weak self] (windowX: Float) in
                 guard let self else { return }
                 self.scrollX = Scrollbar.offset(
-                    forAlong: windowX - originX - self.gutterWidth - grab,
+                    forAlong: windowX - originX - inset - grab,
                     travel: m.travel, maxOffset: maximum
                 )
                 ViewInvalidation.markNeedsRedraw()

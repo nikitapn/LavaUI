@@ -15,7 +15,9 @@ struct LavaEditorApp {
         // out of it in its initialiser.
         AppSettings.configure(appName: "LavaEditor")
 
-        guard let editor = LavaHost.open(title: "LavaEditor") else { exit(1) }
+        if !LavaHost.isClient { Theme.current = .paper }
+        guard let editor = LavaHost.open(title: "LavaEditor", width: 1040, height: 640) else { exit(1) }
+        LavaHost.setMinimumSize(editor: editor, width: 480, height: 280)
 
         let session = EditorSession(editor: editor)
         session.restoreSession()
@@ -116,7 +118,11 @@ struct LavaEditorApp {
                     }
                 }
             },
-            makeRoot: { LavaEditorView(session: session) }
+            makeRoot: {
+                let appearance = EditorAppearance(theme: Theme.current)
+                return LavaEditorView(session: session, appearance: appearance)
+                    .theme(appearance.theme)
+            }
         )
     }
 }

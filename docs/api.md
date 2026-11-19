@@ -1004,8 +1004,8 @@ future layers on the same scene command path.
 
 `Theme` contains semantic text colors, accent/selection colors, surfaces,
 border and corner geometry, control padding, caret width, and focus-ring
-configuration. Built-ins are listed on `Theme.builtIns` (`dark`, `light`,
-`nebula`, `ember`, `moss`, `paper`, `graphite`); the process-wide default
+configuration. Built-ins are listed on `Theme.builtIns` (`dark`, `slate`,
+`light`, `nebula`, `ember`, `moss`, `paper`, `graphite`). The process-wide default
 is `Theme.current`. The desktop pushes one of those names as the system
 theme; `Theme.named(_:)` is how a client wears it.
 

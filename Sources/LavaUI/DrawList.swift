@@ -2637,6 +2637,7 @@ extension DrawList {
         // the editor stayed focused.
         let caretOffset = leaf.focusOffset()
         let caretRow = leaf.focusRow()
+        let activeLine = style.activeGutterText.map { _ in leaf.logicalLine(ofRow: caretRow) }
         let selection = state.hasSelection ? state.selectedRange : nil
         // Once per emit rather than once per row a selection happens to span,
         // and cached per end on the leaf: a drag moves one end and leaves the
@@ -2673,10 +2674,11 @@ extension DrawList {
         }
         for row in firstRow...lastRow {
             let rowTop = rowTopOf(row)
-            if focused, row == caretRow, selection == nil {
+            if row == caretRow, activeLine != nil || (focused && selection == nil) {
+                let gutter = activeLine == nil ? leaf.gutterWidth : 0
                 rect(
-                    x: x + leaf.gutterWidth, y: rowTop,
-                    w: w - leaf.gutterWidth, h: lineH, color: style.currentLine
+                    x: x + gutter, y: rowTop,
+                    w: w - gutter, h: lineH, color: style.currentLine
                 )
             }
             if leaf.showsGutter, leaf.gutterWidth > 0 {
@@ -2686,12 +2688,17 @@ extension DrawList {
                 // has, and every number below the fold would be wrong.
                 if leaf.isLineStart(ofRow: row) {
                     // Right-aligned so numbers stay in a column as they widen.
-                    let label = String(leaf.logicalLine(ofRow: row) + 1)
-                    let labelW = font.shapedRun(label).width
+                    let logicalLine = leaf.logicalLine(ofRow: row)
+                    let label = String(logicalLine + 1)
+                    let isActive = logicalLine == activeLine
+                    let labelFont = isActive ? style.activeGutterFont ?? font : font
+                    let labelW = labelFont.shapedRun(label).width
                     text(
-                        label, x: x + leaf.gutterWidth - inset - labelW - 4, y: rowTop,
+                        label, x: x + leaf.gutterWidth - inset - labelW - 4,
+                        y: rowTop + (lineH - labelFont.lineHeight) / 2,
                         w: leaf.gutterWidth, h: lineH,
-                        color: style.gutterText, font: font
+                        color: isActive ? style.activeGutterText ?? style.gutterText : style.gutterText,
+                        font: labelFont
                     )
                 }
                 if !leaf.decorations.isEmpty {
@@ -2719,6 +2726,10 @@ extension DrawList {
             x: x + leaf.gutterWidth, y: y,
             w: max(0, w - leaf.gutterWidth), h: h
         )
+        if state.text.isEmpty, let placeholder = style.placeholder {
+            text(placeholder, x: textX - 4, y: firstTop,
+                 w: leaf.textViewportWidth, h: lineH, color: leaf.theme.textMuted, font: font)
+        }
 
         // A running cursor, advanced by *relative* offset row to row, instead
         // of `state.index(atOffset:)` per row: that walks from the start of
@@ -2865,7 +2876,7 @@ extension DrawList {
         // Pass 3 — the scrollbars, over everything and clipped by nothing:
         // they describe the content, so being scrolled or painted over by it
         // would be a contradiction.
-        emitEditorScrollbars(leaf, font: font, x: x, y: y, w: w, h: h)
+        emitEditorScrollbars(leaf, font: font, style: style, x: x, y: y, w: w, h: h)
     }
 
     /// The editor's own bars.
@@ -2876,23 +2887,22 @@ extension DrawList {
     /// inherits draws one. The geometry is shared even though the mechanism
     /// is not: see `Scrollbar`.
     private func emitEditorScrollbars(
-        _ leaf: LeafNode, font: UIFont, x: Float, y: Float, w: Float, h: Float
+        _ leaf: LeafNode, font: UIFont, style: CodeStyle, x: Float, y: Float, w: Float, h: Float
     ) {
         if let m = leaf.verticalScrollbar(font: font) {
             scrollbarThumb(
                 axis: .vertical, metrics: m, theme: leaf.theme,
                 active: ScrollbarDrag.isDragging(leaf.id, axis: .vertical),
-                x: x, y: y, w: w, h: h
+                x: x, y: y, w: w, h: h,
+                color: style.scrollbarColor, thickness: style.scrollbarWidth
             )
         }
         if let m = leaf.horizontalScrollbar(font: font) {
             scrollbarThumb(
                 axis: .horizontal, metrics: m, theme: leaf.theme,
                 active: ScrollbarDrag.isDragging(leaf.id, axis: .horizontal),
-                // The gutter does not scroll, so the horizontal track starts
-                // where the text does.
-                x: x + leaf.gutterWidth, y: y,
-                w: max(0, w - leaf.gutterWidth), h: h
+                x: x + leaf.horizontalScrollbarInset, y: y, w: m.track, h: h,
+                color: style.scrollbarColor, thickness: style.scrollbarWidth
             )
         }
     }
@@ -3056,11 +3066,13 @@ extension DrawList {
     /// took, right up until the content fails to move.
     func scrollbarThumb(
         axis: ScrollAxis, metrics m: Scrollbar.Metrics, theme: Theme,
-        active: Bool, x: Float, y: Float, w: Float, h: Float
+        active: Bool, x: Float, y: Float, w: Float, h: Float,
+        color customColor: Color? = nil, thickness: Float = Scrollbar.thickness
     ) {
         let base = theme.textSecondary
-        let color = Color(r: base.r, g: base.g, b: base.b, a: active ? 0.85 : 0.55)
-        let t = Scrollbar.thickness
+        let color = customColor.map { active ? base : $0 }
+            ?? base.opacity(active ? 0.85 : 0.55)
+        let t = min(Scrollbar.hitThickness - Scrollbar.margin, max(1, thickness))
         if axis == .vertical {
             roundedRect(
                 x: x + w - t - Scrollbar.margin, y: y + m.along,

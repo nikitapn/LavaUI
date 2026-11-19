@@ -5,23 +5,21 @@ import LavaUI
 /// The window: tabs, the editor, and the bars that come and go around it.
 struct LavaEditorView: View {
     @Bindable var session: EditorSession
+    let appearance: EditorAppearance
     /// Right-click menu on the status-bar path.
     @State private var pathMenuOpen = false
 
-    /// Height of the tab strip, which is also the title bar.
-    private static let barHeight: Float = 36
-
     var body: some View {
         VStack(flexGrow: 1, spacing: 0) {
-            tabStrip
+            EditorTabs(session: session, appearance: appearance)
             if session.pendingClose != nil { unsavedBar }
             if session.gotoOpen { gotoBar }
             if session.find.isOpen { findBar }
             if let notice = session.notice { noticeBar(notice) }
-            editor
-            statusBar
+            editor(appearance)
+            statusBar(appearance)
         }
-        .background(Environment.current.theme.background)
+        .background(appearance.theme.panel)
         .overlayLayer {
             Canvas(label: "session-checkpoint", width: .pct(100), height: .pct(100)) { _, _ in
                 session.checkpointSession()
@@ -31,32 +29,9 @@ struct LavaEditorView: View {
         .onDrop { urls in session.open(urls) }
     }
 
-    // MARK: - Tabs
-
-    /// A row of real tabs rather than a combo box: an editor's documents are
-    /// switched between constantly, and one click beats two. It scrolls
-    /// horizontally, because the answer to "twenty files" is a scrollbar and
-    /// not a menu.
-    ///
-    /// It is also the title bar. There is no separate strip above it: a
-    /// window whose whole job is the text should not spend two rows of it
-    /// saying so, and every browser reached the same conclusion about tabs.
-    private var tabStrip: some View {
-        HStack(height: .pt(Self.barHeight), alignment: .center, spacing: 0) {
-            if WindowBridge.drawsOwnChrome {
-                WindowControls()
-                    .padding(.horizontal, 8)
-            }
-            EditorTabs(session: session)
-                .flexGrow(1)
-                .flexShrink(1)
-        }
-        .background(Environment.current.theme.background)
-    }
-
     // MARK: - The editor
 
-    private var editor: some View {
+    private func editor(_ appearance: EditorAppearance) -> some View {
         VStack(flexGrow: 1, spacing: 0) {
             if let error = session.active.loadError {
                 // The file could not be read. Saying so beats an empty buffer,
@@ -71,7 +46,7 @@ struct LavaEditorView: View {
                     text: session.text,
                     isReadOnly: session.active.hasInvalidUTF8,
                     rules: session.active.language.rules,
-                    style: Language.codeStyle(),
+                    style: documentStyle(appearance),
                     font: session.documentFont,
                     showLineNumbers: session.showLineNumbers,
                     wraps: session.wraps,
@@ -81,9 +56,30 @@ struct LavaEditorView: View {
                     onZoom: { session.zoom(by: $0) }
                 )
                 .flexGrow(1)
+                .theme(appearance.documentTheme)
                 .agentId("editor")
             }
         }
+        .padding(.top, 6)
+        .background(appearance.theme.inset)
+    }
+
+    private func documentStyle(_ appearance: EditorAppearance) -> CodeStyle {
+        let theme = appearance.theme
+        var style = Language.codeStyle(theme: theme)
+        style.gutterText = appearance.usesPaper ? theme.textDim : theme.textSecondary
+        style.gutterBackground = theme.inset
+        style.currentLine = appearance.currentLine
+        style.activeGutterText = theme.accent
+        style.activeGutterFont = session.documentBoldFont
+        style.minimumGutterWidth = 68
+        style.scrollbarColor = appearance.thumb
+        style.scrollbarWidth = 7
+        style.scrollbarSpansGutter = true
+        if !session.active.hasInvalidUTF8 && session.active.isLoaded {
+            style.placeholder = "Empty file. Start typing."
+        }
+        return style
     }
 
     // MARK: - Bars
@@ -101,10 +97,13 @@ struct LavaEditorView: View {
                         set: { session.find.query = $0; session.runSearch() }
                     ),
                     placeholder: "search…",
+                    font: session.fonts.tab,
                     autoFocus: true,
+                    selectionOnFocus: .all,
                     onSubmit: { session.findNext() }
                 )
                 .flexGrow(1)
+                .focused($session.findQueryFocused)
                 .agentId("find-query")
                 Text(matchLabel, color: .dim).frame(width: .pt(90))
                 Text("Aa", color: session.find.caseSensitive ? .accent : .dim, onClick: {
@@ -126,6 +125,7 @@ struct LavaEditorView: View {
                     TextField(
                         text: Binding(get: { session.find.replacement }, set: { session.find.replacement = $0 }),
                         placeholder: "replacement…",
+                        font: session.fonts.tab,
                         onSubmit: { session.replaceCurrent() }
                     )
                     .flexGrow(1)
@@ -152,13 +152,15 @@ struct LavaEditorView: View {
             TextField(
                 text: Binding(get: { session.gotoLine }, set: { session.gotoLine = $0 }),
                 placeholder: "line number",
+                font: session.fonts.tab,
                 autoFocus: true,
                 onSubmit: { session.performGoto() }
             )
             .frame(width: .pt(120))
+            .focused($session.gotoFocused)
             .agentId("goto-line")
             Button("Go") { session.performGoto() }.agentId("goto-go")
-            Button("Cancel") { session.gotoOpen = false }.agentId("goto-cancel")
+            Button("Cancel") { session.closeGoto() }.agentId("goto-cancel")
         }
         .background(Environment.current.theme.panel)
     }
@@ -192,59 +194,103 @@ struct LavaEditorView: View {
         .background(Environment.current.theme.panel)
     }
 
-    private var statusBar: some View {
-        let theme = Environment.current.theme
-        // Each item carries a 4pt inset of its own rather than the bar a wider
-        // gap: the clickable ones light up, and the fill wants room round the
-        // word.
-        let inset = EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4)
-        return HStack(height: .pt(26), padding: 6, alignment: .center, spacing: 12) {
+    private func statusBar(_ appearance: EditorAppearance) -> some View {
+        let theme = appearance.theme
+        return HStack(height: .pt(46), padding: 0, alignment: .center, spacing: 6) {
             pathLabel(theme: theme)
             if session.active.hasInvalidUTF8, session.active.isLoaded {
-                Text("Read-only · invalid UTF-8", color: .accent)
-                    .padding(inset)
+                Text("Read-only · invalid UTF-8", color: theme.accent,
+                     font: session.fonts.status, lineLimit: 1)
+                    .flexShrink(1)
                     .agentId("status-invalid-utf8")
             }
-            if session.active.isModified {
-                Text("modified", color: .accent).padding(inset).agentId("status-modified")
-            }
-            Text("\(session.activeLineCount) lines", color: .dim)
-                .padding(inset).agentId("status-lines")
-            Text(session.active.language.title, color: .dim, onClick: { })
-                .padding(inset)
+            lineStatus(theme: theme)
+                .padding(.horizontal, 6)
+                .agentId("status-lines")
+            Text(session.active.language.title, color: appearance.languageText, font: session.fonts.status)
+                .padding(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
+                .background(appearance.languageFill)
+                .cornerRadius(12)
                 .agentId("status-language")
-            Text(session.wraps ? "wrap" : "no wrap", color: .dim, onClick: {
-                session.wraps.toggle()
-            })
-            .padding(inset)
-            .cursor(.pointer)
-            .agentId("status-wrap")
+            wrapButton(appearance)
         }
+        .padding(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 14))
         .background(theme.panel)
     }
 
-    /// Path slot: grows to fill, clips a long path, and hosts the context menu.
-    ///
-    /// The menu lives on an `HStack` rather than the `Text` so a short path
-    /// still has a hit target across the leftover status-bar space, and so a
-    /// right-click can be told apart from a left-click (`onPointer`).
+    private func lineStatus(theme: Theme) -> some View {
+        let count = session.activeLineCount
+        let formattedCount = count.formatted()
+        let font = session.fonts.status ?? FontStore.default
+        let widestDigit = (0...9).map(String.init).max {
+            (font?.shapedRun($0).width ?? 0) < (font?.shapedRun($1).width ?? 0)
+        } ?? "0"
+        let lineSample = formattedCount.map { $0.isNumber ? widestDigit : String($0) }.joined()
+        let width = font?.shapedRun("Ln \(lineSample) · \(formattedCount) lines").width ?? 126
+        // Caret moves already redraw the editor. Read its line at paint time so
+        // cursor navigation can update this label without rebuilding the window.
+        return Canvas(label: "Line status", width: .pt(width + 4),
+                      height: .pt(font?.lineHeight ?? 16)) { list, frame in
+            guard let font else { return }
+            let line = min(count, session.controller.caretLine() ?? 1)
+            let label = "Ln \(line.formatted()) · \(formattedCount) lines"
+            let labelWidth = font.shapedRun(label).width
+            list.text(label, x: frame.x + frame.w - labelWidth - 4, y: frame.y,
+                      w: frame.w, h: frame.h, color: theme.textSecondary, font: font)
+        }
+    }
+
+    private func wrapButton(_ appearance: EditorAppearance) -> some View {
+        let theme = appearance.theme
+        let color = session.wraps ? appearance.languageText : theme.textSecondary
+        return HStack(padding: 0, alignment: .center, spacing: 6, onClick: {
+            session.wraps.toggle()
+        }) {
+            Mark(.textWrap, size: 13, color: color, lineWidth: 1.55)
+            Text(session.wraps ? "Wrap" : "No wrap", color: color,
+                 font: session.fonts.statusEmphasis)
+        }
+        .padding(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+        .background(session.wraps ? appearance.languageFill : .clear)
+        .hoverBackground(theme.hover)
+        .cornerRadius(15)
+        .border(theme.border)
+        .cursor(.pointer)
+        .agentId("status-wrap")
+    }
+
+    /// The path owns the right-click menu and keeps the filename emphasized.
     private func pathLabel(theme: Theme) -> some View {
-        let hasPath = session.active.url != nil
+        let url = session.active.url
         return HStack(
             flexGrow: 1,
-            padding: 0,
+            padding: 3,
             alignment: .center,
+            spacing: 6,
             onPointer: { _, button in
                 guard button == PointerButton.right else { return }
                 pathMenuOpen = true
             }
         ) {
-            Text(session.active.url?.path ?? "unsaved", color: .dim, lineLimit: 1)
-                .padding(EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4))
+            Mark(.document, size: 14, color: theme.textSecondary, lineWidth: 1.55)
+                .flexShrink(0)
+            HStack(padding: 0, alignment: .center, spacing: 0) {
+                if let url {
+                    let directory = url.deletingLastPathComponent().path
+                    Text(directory == "/" ? directory : directory + "/",
+                         color: theme.textSecondary, font: session.fonts.status, lineLimit: 1)
+                        .flexShrink(2)
+                }
+                Text(url?.lastPathComponent ?? "Unsaved",
+                     color: theme.textPrimary, font: session.fonts.statusEmphasis, lineLimit: 1)
+                    .flexShrink(1)
+            }
+            .flexShrink(1)
         }
+        .flexShrink(1)
         .clipped()
         .hoverBackground(theme.hover)
-        .cornerRadius(3)
+        .cornerRadius(6)
         .cursor(.pointer)
         .agentId("status-path")
         .overlay(
@@ -256,7 +302,7 @@ struct LavaEditorView: View {
                 return style
             }()
         ) {
-            pathMenu(hasPath: hasPath, theme: theme)
+            pathMenu(hasPath: url != nil, theme: theme)
         }
     }
 

@@ -154,9 +154,9 @@ struct ThemeConfig {
 };
 
 inline bool isKnownThemeName(std::string_view name) {
-  return name == "dark" || name == "light" || name == "nebula" ||
-         name == "ember" || name == "moss" || name == "paper" ||
-         name == "graphite";
+  return name == "dark" || name == "slate" || name == "light" ||
+         name == "nebula" || name == "ember" || name == "moss" ||
+         name == "paper" || name == "graphite";
 }
 
 inline std::string canonicalThemeName(std::string_view name) {

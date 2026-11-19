@@ -69,12 +69,35 @@ public struct TabStrip<Content: View>: View {
 /// A tab whose title, dirty indicator and close target share one layout.
 /// The close target is separate from the title and remains visible for long names.
 public struct TabStripItem: View {
+    /// Optional chrome for a tab used outside the standard strip.
+    public struct Style {
+        let height: Float
+        let radius: Float
+        let font: UIFont?
+        let text: Color
+        let modified: Color
+        let closeHover: Color
+
+        public init(
+            height: Float, radius: Float, font: UIFont?, text: Color,
+            modified: Color, closeHover: Color
+        ) {
+            self.height = height
+            self.radius = radius
+            self.font = font
+            self.text = text
+            self.modified = modified
+            self.closeHover = closeHover
+        }
+    }
+
     private let title: String
     private let selected: Bool
     private let emphasized: Bool
     private let modified: Bool
     private let outlined: Bool
     private let fill: Color?
+    private let style: Style?
     private let closeID: String
     private let onSelect: () -> Void
     private let onClose: () -> Void
@@ -82,7 +105,7 @@ public struct TabStripItem: View {
     public init(
         _ title: String, selected: Bool, emphasized: Bool = true,
         modified: Bool = false, outlined: Bool = true, fill: Color? = nil,
-        closeID: String = "close-tab",
+        style: Style? = nil, closeID: String = "close-tab",
         onSelect: @escaping () -> Void, onClose: @escaping () -> Void
     ) {
         self.title = title
@@ -91,6 +114,7 @@ public struct TabStripItem: View {
         self.modified = modified
         self.outlined = outlined
         self.fill = fill
+        self.style = style
         self.closeID = closeID
         self.onSelect = onSelect
         self.onClose = onClose
@@ -98,36 +122,41 @@ public struct TabStripItem: View {
 
     public var body: some View {
         let theme = Theme.current
-        HStack(padding: 0, alignment: .center, spacing: 6, onPointer: { _, button in
+        let font = style?.font ?? Environment.current.font ?? FontStore.default
+        let text = style?.text ?? (selected && emphasized ? theme.textPrimary : theme.textSecondary)
+        let insets = style == nil
+            ? EdgeInsets(top: 5, leading: 10, bottom: 5, trailing: 4)
+            : EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 10)
+        return HStack(padding: 0, alignment: .center, spacing: style == nil ? 6 : 8, onPointer: { _, button in
             if button == PointerButton.middle { onClose() }
             else if button == PointerButton.left { onSelect() }
         }) {
-            if modified {
-                Canvas(label: "modified", width: .pt(6), height: .pt(6)) { list, frame in
-                    list.roundedRect(x: frame.x, y: frame.y, w: 6, h: 6,
-                                     color: theme.accent, radius: 3)
+            if modified || style != nil {
+                let size: Float = style == nil ? 6 : 7
+                Canvas(label: "modified", width: .pt(size), height: .pt(size)) { list, frame in
+                    if modified {
+                        list.roundedRect(x: frame.x, y: frame.y, w: size, h: size,
+                                         color: style?.modified ?? theme.accent, radius: size / 2)
+                    }
                 }
             }
-            Text(title, color: selected && emphasized ? theme.textPrimary : theme.textSecondary,
-                 lineLimit: 1)
-                .frame(width: .pt(min(200, max(60,
-                    (Environment.current.font ?? FontStore.default)?.measure(title).width ?? 120
-                ))))
+            Text(title, color: text, font: font, lineLimit: 1)
+                .frame(width: .pt(min(200, max(style == nil ? 60 : 0, font?.measure(title).width ?? 120))))
                 .clipped()
-            TabCloseButton(action: onClose)
-            .hoverBackground(theme.hover)
-            .cornerRadius(4)
+            TabCloseButton(color: style?.text ?? theme.textDim, size: style == nil ? 8 : 9, action: onClose)
+            .hoverBackground(style?.closeHover ?? theme.hover)
+            .cornerRadius(style == nil ? 4 : 11)
             .cursor(.pointer)
             .tooltip("Close Tab")
             .agentId(closeID)
         }
-        .padding(EdgeInsets(top: 5, leading: 10, bottom: 5, trailing: 4))
-        .frame(height: .pt(30))
+        .padding(insets)
+        .frame(height: .pt(style?.height ?? 30))
         .underlay {
             Canvas(label: "tab-shape", width: .pct(100), height: .pct(100)) { list, frame in
                 guard selected else { return }
                 TabOutline.paint(list, frame: frame, fill: fill ?? theme.panel,
-                                 line: outlined ? theme.border : .clear)
+                                 line: outlined ? theme.border : .clear, radius: style?.radius ?? 7)
             }
         }
         .hoverBackground(selected ? .clear : theme.hover)
@@ -140,9 +169,7 @@ public struct TabStripItem: View {
 }
 
 private enum TabOutline {
-    static let radius: Float = 7
-
-    static func paint(_ list: DrawList, frame: CanvasFrame, fill: Color, line: Color) {
+    static func paint(_ list: DrawList, frame: CanvasFrame, fill: Color, line: Color, radius: Float) {
         let r = min(radius, frame.w * 0.5, frame.h)
         // Rounded on top only: the plate runs a radius past the bottom and the
         // clip cuts its lower corners off square, flush with the toolbar.
@@ -151,7 +178,7 @@ private enum TabOutline {
             x: frame.x, y: frame.y, w: frame.w, h: frame.h + r, color: fill, radius: r
         )
         list.popClip()
-        list.polyline(points(frame: frame, radius: r), color: line)
+        if line.a > 0 { list.polyline(points(frame: frame, radius: r), color: line) }
     }
 
     /// Up the left side, round the top, down the right side, ending on the
@@ -184,11 +211,13 @@ private enum TabOutline {
 
 /// Keep the drawn mark, but use the same captured-release contract as Button.
 private struct TabCloseButton: PrimitiveView {
+    let color: Color
+    let size: Float
     let action: () -> Void
     var dumpDetail: String { "Close Tab" }
     private var content: some PrimitiveView {
         HStack(padding: 6, alignment: .center) {
-            Mark(.cross, size: 8, color: Theme.current.textDim)
+            Mark(.cross, size: size, color: color)
         }
     }
     func mountPrimitive() -> any AnyViewNode {

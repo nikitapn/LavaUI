@@ -182,11 +182,22 @@ enum Language: String, CaseIterable {
         ] + extra
     }
 
-    /// Colours for the style indices the rules above use. Read from the theme
-    /// so the editor restyles with everything else rather than staying dark
-    /// under a light window.
-    static func codeStyle() -> CodeStyle {
-        let theme = Environment.current.theme
+    /// Colours for the style indices the rules above use.
+    static func codeStyle(theme: Theme) -> CodeStyle {
+        if theme.inset.luminance > 0.5 {
+            return CodeStyle(
+                text: theme.textPrimary,
+                searchMatch: Color(rgb24: 0xf1_e0_ab),
+                currentSearchMatch: Color(rgb24: 0xf3_c9_a5),
+                palette: [
+                    Color(rgb24: 0x72_43_89),  // keyword
+                    Color(rgb24: 0x4b_61_31),  // string
+                    Color(rgb24: 0x6b_62_54),  // comment
+                    Color(rgb24: 0x8e_47_20),  // number
+                    Color(rgb24: 0x23_5c_73),  // type / key
+                ]
+            )
+        }
         return CodeStyle(
             text: theme.textPrimary,
             palette: [

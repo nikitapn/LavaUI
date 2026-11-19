@@ -486,6 +486,7 @@ var targets: [Target] = [
     .executableTarget(
         name: "LavaEditorApp",
         dependencies: ["LavaUI", "LavaHost", "LavaText"],
+        resources: [.copy("Fonts")],
         swiftSettings: interopCxx
     ),
     .executableTarget(

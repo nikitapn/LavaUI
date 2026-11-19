@@ -911,10 +911,17 @@ final class LeafNode: YogaBoxNode {
     /// is nothing to scroll to — see `maxScrollX`.
     func horizontalScrollbar(font: UIFont) -> Scrollbar.Metrics? {
         let maximum = maxScrollX(font: font)
+        let track = codeStyle?.scrollbarSpansGutter == true
+            ? max(0, viewportWidth - 2 * Scrollbar.margin)
+            : textViewportWidth
         return Scrollbar.metrics(
-            track: textViewportWidth, content: textViewportWidth + maximum,
+            track: track, content: track + maximum,
             offset: scrollX, maxOffset: maximum
         )
+    }
+
+    var horizontalScrollbarInset: Float {
+        codeStyle?.scrollbarSpansGutter == true ? Scrollbar.margin : gutterWidth
     }
 
     /// Where a row starts in the document, in pixels — in `Double`, like

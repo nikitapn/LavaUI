@@ -9,7 +9,7 @@ final class ThemeCatalogTests: XCTestCase {
     func testBuiltInsCoverEveryNamedPalette() {
         XCTAssertEqual(
             Theme.builtIns.map(\.name),
-            ["dark", "light", "nebula", "ember", "moss", "paper", "graphite"]
+            ["dark", "slate", "light", "nebula", "ember", "moss", "paper", "graphite"]
         )
         for entry in Theme.builtIns {
             XCTAssertEqual(Theme.named(entry.name), entry.theme)

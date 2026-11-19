@@ -158,15 +158,17 @@ public final class UIFont: @unchecked Sendable {
     /// - pixelSize: The size, in pixels. Stored at 1/64 pixel precision.
     /// - faceIndex: Which face of a collection; 0 for a single-face file.
     /// - raster: Hinting selection.
+    /// - lineHeightMultiple: Optional baseline spacing in ems, with extra leading split above and below the glyphs.
     public init?(
         path: String, pixelSize: Float = 16, faceIndex: UInt32 = 0,
-        raster: FontRasterFlags = .default
+        raster: FontRasterFlags = .default, lineHeightMultiple: Float? = nil
     ) {
         self.path = path
         self.pixelSize = pixelSize
         self.faceIndex = faceIndex
         self.raster = raster
-        self.identity = "\(path)#\(faceIndex)@\(pixelSize)/\(raster.raw)"
+        let faceIdentity = "\(path)#\(faceIndex)@\(pixelSize)/\(raster.raw)"
+        self.identity = lineHeightMultiple.map { "\(faceIdentity):\($0)" } ?? faceIdentity
         var f = canvas.Font()
         let size26_6 = UInt32((pixelSize * 64).rounded())
         let ok = f.loadFace(std.string(path), size26_6, faceIndex, raster.raw)
@@ -175,9 +177,12 @@ public final class UIFont: @unchecked Sendable {
         self.raw = f
         // Probe metrics via empty measure.
         let m = self.raw.measure(std.string(""))
-        self.lineHeight = m.height > 0 ? m.height : pixelSize * 1.2
-        self.ascent = m.ascent
-        self.descent = m.descent
+        let naturalHeight = m.height > 0 ? m.height : pixelSize * 1.2
+        let height = max(naturalHeight, (lineHeightMultiple ?? 0) * pixelSize)
+        let leading = (height - naturalHeight) / 2
+        self.lineHeight = height
+        self.ascent = m.ascent + leading
+        self.descent = m.descent + leading
     }
 
     /// Prefer OpenSans, fall back to LiberationSerif.
