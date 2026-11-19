@@ -83,6 +83,8 @@ struct PopupFonts {
     let body14Bold: UIFont
     let small13: UIFont
     let small13Semi: UIFont
+    /// A level beside its slider: "25%", without the width shifting.
+    let small13SemiTabular: UIFont
     let caption12: UIFont
     /// Times on a seek bar, ISO week numbers: figures that hold their width.
     let caption12Tabular: UIFont
@@ -117,6 +119,7 @@ struct PopupFonts {
               let body14Bold = face("Figtree-Bold", 14),
               let small13 = face("Figtree-Regular", 13),
               let small13Semi = face("Figtree-SemiBold", 13),
+              let small13SemiTabular = face("Figtree-SemiBold", 13, features: ["tnum"]),
               let caption12 = face("Figtree-Regular", 12),
               let caption12Tabular = face("Figtree-Regular", 12, features: ["tnum"]),
               let week10 = face("Figtree-Regular", 10.5, features: ["tnum"]),
@@ -128,6 +131,7 @@ struct PopupFonts {
             heading18: heading18, heading19: heading19, heading22: heading22,
             title15: title15, body14: body14, body14Semi: body14Semi,
             body14Bold: body14Bold, small13: small13, small13Semi: small13Semi,
+            small13SemiTabular: small13SemiTabular,
             caption12: caption12, caption12Tabular: caption12Tabular, week10: week10,
             kicker: kicker, weekday: weekday, tag: tag)
     }

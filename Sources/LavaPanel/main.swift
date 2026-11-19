@@ -864,18 +864,7 @@ final class MenuSession {
             return
         }
         closeMenu()
-        let panelW = editor?.framebufferSize().w ?? 1280
-        // The speaker, in this panel. Missing — the first frame has not
-        // laid out yet — is the right-hand end of the strip, which is
-        // where the icon lives.
-        let anchor: LavaApp.SurfaceAnchor
-        if let icon = LavaApp.mainLayoutHost?.agentFrame(sid: "applet.volume") {
-            anchor = LavaApp.SurfaceAnchor(icon)
-        } else {
-            anchor = LavaApp.SurfaceAnchor(
-                x: panelW - 48, y: 0, w: 40, h: Self.stripHeight
-            )
-        }
+        let anchor = popupAnchor(under: "tray", width: SoundBlock.width)
         var opened: WindowID?
         // Sized to what is there when it opens. Something that starts
         // playing while it is up makes the list scroll rather than the
@@ -891,9 +880,8 @@ final class MenuSession {
                 }
             }
         ) {
+            // The card frosts itself, at its own corner radius.
             VolumeWindow(pulse: pulse)
-                .backdropBlur(radius: PanelChrome.popupBlurRadius)
-                .glassEffect(magnification: PanelChrome.popupMagnification)
         }
         volumeWindow = opened
     }
@@ -907,15 +895,7 @@ final class MenuSession {
         }
         closeMenu()
         network.scan()
-        let panelW = editor?.framebufferSize().w ?? 1280
-        let anchor: LavaApp.SurfaceAnchor
-        if let icon = LavaApp.mainLayoutHost?.agentFrame(sid: "applet.network") {
-            anchor = LavaApp.SurfaceAnchor(icon)
-        } else {
-            anchor = LavaApp.SurfaceAnchor(
-                x: panelW - 88, y: 0, w: 34, h: Self.stripHeight
-            )
-        }
+        let anchor = popupAnchor(under: "tray", width: NetworkBlock.width)
         var opened: WindowID?
         // Sized to what is there when it opens; a scan that finds more
         // makes the list scroll, as the sound window's does.
@@ -932,9 +912,8 @@ final class MenuSession {
                 }
             }
         ) {
+            // The card frosts itself, at its own corner radius.
             NetworkWindow(network: network)
-                .backdropBlur(radius: PanelChrome.popupBlurRadius)
-                .glassEffect(magnification: PanelChrome.popupMagnification)
         }
         networkWindow = opened
     }
@@ -956,18 +935,15 @@ final class MenuSession {
             title: "Wi-Fi Networks",
             width: width,
             height: NetworkBlock.height(of: NetworkBlock.listBlocks(network)),
-            anchor: .leftOf(parent, width: width),
+            anchor: .leftOf(parent, width: width, gap: 10),
             onClose: {
                 if let id = opened, session.networkListWindow == id {
                     session.networkListWindow = nil
                 }
             }
         ) {
+            // The card frosts itself, at its own corner radius.
             NetworkWindow(network: network, isList: true)
-                // The plate's bend, which the open call used to give it. The
-                // rim is the plate's (lit where it bends); this fill has none.
-                .backdropBlur(radius: PanelChrome.popupBlurRadius)
-                .glassEffect(magnification: PanelChrome.popupMagnification)
         }
         networkListWindow = opened
     }
@@ -1031,15 +1007,7 @@ final class MenuSession {
             return
         }
         closeMenu()
-        let panelW = editor?.framebufferSize().w ?? 1280
-        let anchor: LavaApp.SurfaceAnchor
-        if let icon = LavaApp.mainLayoutHost?.agentFrame(sid: "applet.bluetooth") {
-            anchor = LavaApp.SurfaceAnchor(icon)
-        } else {
-            anchor = LavaApp.SurfaceAnchor(
-                x: panelW - 120, y: 0, w: 28, h: Self.stripHeight
-            )
-        }
+        let anchor = popupAnchor(under: "tray", width: BluetoothBlock.width)
         var opened: WindowID?
         opened = LavaApp.openPopup(
             title: "Bluetooth",
@@ -1053,9 +1021,8 @@ final class MenuSession {
                 }
             }
         ) {
+            // The card frosts itself, at its own corner radius.
             BluetoothWindow(bluetooth: bluetooth)
-                .backdropBlur(radius: PanelChrome.popupBlurRadius)
-                .glassEffect(magnification: PanelChrome.popupMagnification)
         }
         bluetoothWindow = opened
     }
@@ -1075,7 +1042,7 @@ final class MenuSession {
             title: "Add a Device",
             width: width,
             height: BluetoothBlock.searchHeight,
-            anchor: .leftOf(parent, width: width),
+            anchor: .leftOf(parent, width: width, gap: 10),
             onClose: {
                 if let id = opened, session.bluetoothSearchWindow == id {
                     session.bluetoothSearchWindow = nil
@@ -1083,9 +1050,8 @@ final class MenuSession {
                 }
             }
         ) {
+            // The card frosts itself, at its own corner radius.
             BluetoothWindow(bluetooth: bluetooth, isSearch: true)
-                .backdropBlur(radius: PanelChrome.popupBlurRadius)
-                .glassEffect(magnification: PanelChrome.popupMagnification)
         }
         bluetoothSearchWindow = opened
         if opened == nil { bluetooth.setSearching(false) }
@@ -1223,15 +1189,8 @@ final class MenuSession {
             LavaApp.closeWindow(id)
             return
         }
-        let panelW = editor?.framebufferSize().w ?? 1280
-        let anchor: LavaApp.SurfaceAnchor
-        if let chip = LavaApp.mainLayoutHost?.agentFrame(sid: "applet.player") {
-            anchor = LavaApp.SurfaceAnchor(chip)
-        } else {
-            anchor = LavaApp.SurfaceAnchor(
-                x: panelW * 0.5, y: 0, w: 120, h: Self.stripHeight
-            )
-        }
+        let anchor = popupAnchor(under: "applet.player", width: PlayerWindow.width,
+                                 rightOverhang: 24)
         var opened: WindowID?
         opened = LavaApp.openPopup(
             title: "Player",
@@ -1244,9 +1203,8 @@ final class MenuSession {
                 }
             }
         ) {
+            // The card frosts itself, at its own corner radius.
             PlayerWindow(mpris: mpris)
-                .backdropBlur(radius: PanelChrome.popupBlurRadius)
-                .glassEffect(magnification: PanelChrome.popupMagnification)
         }
         playerWindow = opened
     }

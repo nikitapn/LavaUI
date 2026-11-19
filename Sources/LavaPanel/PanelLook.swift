@@ -349,6 +349,7 @@ struct TrayCluster: View {
         .padding(2)
         .background(palette.chip)
         .cornerRadius((size + 4) / 2)
+        .agentId("tray")
     }
 
     static func bluetoothIcon(_ status: BluetoothStatus) -> String {

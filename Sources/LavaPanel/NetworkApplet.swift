@@ -5,8 +5,8 @@ import LavaUI
 import Observation
 
 /// The network window: Wi-Fi on or off and the networks in range, wired
-/// ports, then VPNs. A popup of this process, like the sound window, and
-/// sized the same way — from rows of stated heights.
+/// ports, then VPNs. A popup of this process, sized from rows of stated
+/// heights so it opens at the size of what is in it.
 struct NetworkWindow: View {
     var network: NetworkSession
     /// The pane beside it: every network in range, instead of the window's
@@ -15,53 +15,42 @@ struct NetworkWindow: View {
 
     var body: some View {
         let blocks = isList ? NetworkBlock.listBlocks(network) : NetworkBlock.blocks(network)
-        ScrollView(showsIndicator: true) {
-            VStack(padding: NetworkBlock.padding, spacing: 0) {
-                ForEach(blocks) { block in
-                    row(block).frame(height: .pt(block.height))
+        return PopupCard(padding: 0) {
+            ScrollView(showsIndicator: true) {
+                VStack(padding: NetworkBlock.padding, spacing: 0) {
+                    ForEach(blocks) { block in
+                        row(block).frame(height: .pt(block.height))
+                    }
                 }
             }
         }
-        .background(PanelChrome.popupWash)
         .agentId(isList ? "network.list" : "network.window")
     }
 
     @ViewBuilder
     private func row(_ block: NetworkBlock) -> some View {
-        let theme = Theme.current
+        let palette = PopupPalette.current
+        let fonts = popupFonts!
         switch block {
         case .wifiHeader:
-            HStack(padding: 0, alignment: .center, spacing: 8) {
-                Text("Wi-Fi", color: theme.textSecondary)
-                    .padding(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 0))
-                if network.state.scanning {
-                    Text("Scanning…", color: theme.textDim)
-                }
-                Spacer()
-                Toggle(isOn: network.wirelessBinding, isEnabled: network.state.wirelessHardwareEnabled)
-                    .agentId("network.wifi-toggle")
-            }
+            wifiHeader(palette: palette)
         case .header(let title):
             HStack(padding: 0, alignment: .end) {
-                Text(title, color: theme.textSecondary)
-                    .padding(EdgeInsets(top: 0, leading: 4, bottom: 4, trailing: 0))
+                Kicker(text: title)
             }
         case .divider:
-            HStack(padding: 0, alignment: .center) {
-                VStack(height: .pt(1)) {}
-                    .flexGrow(1)
-                    .background(theme.border)
-            }
+            CardDivider()
+                .padding(EdgeInsets(top: 10, leading: 0, bottom: 10, trailing: 0))
         case .note(let text, _):
             HStack(padding: 0, alignment: .center) {
-                Text(text, color: theme.textDim, lineLimit: 1)
-                    .padding(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 0))
+                Text(text, color: palette.bar.textSoft, font: fonts.small13, lineLimit: 1)
+                    .padding(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 0))
                     .flexShrink(1)
             }
         case .error(let text):
             HStack(padding: 0, alignment: .center) {
-                Text(text, color: theme.accent, lineLimit: 2)
-                    .padding(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
+                Text(text, color: palette.bar.accentInk, font: fonts.small13, lineLimit: 2)
+                    .padding(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
                     .flexShrink(1)
             }
             .agentId("network.error")
@@ -72,95 +61,132 @@ struct NetworkWindow: View {
                 showsDisconnect: !isList
             )
         case .more(let count):
-            moreRow(count)
+            moreRow(count, palette: palette)
         case .listHeader:
             HStack(padding: 0, alignment: .center, spacing: 8) {
-                Text("Wi-Fi networks", color: theme.textSecondary)
-                    .padding(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 0))
+                Text("Wi-Fi networks", color: palette.bar.text, font: fonts.title15)
+                    .padding(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 0))
                 if network.state.scanning {
-                    Text("Scanning…", color: theme.textDim)
+                    Spinner(color: palette.bar.textSoft)
                 }
                 Spacer()
             }
         case .wired(let wired):
-            wiredRow(wired)
+            wiredRow(wired, palette: palette)
         case .vpn(let vpn):
-            vpnRow(vpn)
+            vpnRow(vpn, palette: palette)
         }
+    }
+
+    /// The radio: its disc, its name, what it is doing, its switch.
+    private func wifiHeader(palette: PopupPalette) -> some View {
+        let fonts = popupFonts!
+        let state = network.state
+        let on = state.wirelessEnabled && state.wirelessHardwareEnabled
+        let connected = network.wifi.contains { $0.isConnected }
+        let sub = !state.wirelessHardwareEnabled ? "Off at the hardware switch"
+            : !state.wirelessEnabled ? "Off"
+            : state.scanning ? "Scanning…"
+            : connected ? "Connected" : "On"
+        return HStack(padding: 0, alignment: .center, spacing: 10) {
+            IconDisc(icon: [.path(PanelIcons.wifi)], size: 30, glyph: 15,
+                     fill: on ? palette.bar.accent : palette.neutral300,
+                     color: on ? palette.bar.onAccent : palette.bar.textSoft, strokeWidth: 2.5)
+            VStack(flexGrow: 1, padding: 0, spacing: 1) {
+                Text("Wi-Fi", color: palette.bar.text, font: fonts.title15)
+                HStack(padding: 0, alignment: .center, spacing: 6) {
+                    if on && state.scanning {
+                        Spinner(color: palette.bar.textSoft)
+                    }
+                    Text(sub, color: palette.bar.textSoft, font: fonts.caption12)
+                }
+            }
+            Toggle(isOn: network.wirelessBinding, style: PopupStyles.toggle(palette),
+                   isEnabled: state.wirelessHardwareEnabled)
+                .agentId("network.wifi-toggle")
+        }
+        .padding(EdgeInsets(top: 2, leading: 8, bottom: 0, trailing: 4))
     }
 
     /// Every network in range, in the pane beside this one. A scan in a
     /// city is dozens of names, and listed here they pushed the wired port
     /// and the VPNs — what a click here is usually for — off the bottom.
-    private func moreRow(_ count: Int) -> some View {
-        let theme = Theme.current
+    private func moreRow(_ count: Int, palette: PopupPalette) -> some View {
+        let fonts = popupFonts!
         let open = session.networkListWindow.map { LavaApp.isWindowOpen($0) } ?? false
         return HStack(
-            padding: 0, alignment: .center, spacing: 8,
+            padding: 0, alignment: .center, spacing: 10,
             onClick: { session.toggleNetworkList() }
         ) {
-            Text("All Wi-Fi networks", color: theme.textPrimary, lineLimit: 1)
+            Text("All Wi-Fi networks", color: palette.bar.text, font: fonts.body14Semi,
+                 lineLimit: 1)
                 .flexShrink(1)
             Spacer()
-            Text("\(count)", color: theme.textDim, lineLimit: 1)
-                .flexShrink(0)
-            Text("‹", color: open ? theme.accent : theme.textDim)
-                .flexShrink(0)
+            TagLabel(text: "\(count)", tone: .neutral)
+            Icon(open ? PanelIcons.chevronLeft : PanelIcons.chevronRight, size: 14,
+                 color: palette.neutral700, strokeWidth: 2.75)
         }
-        .padding(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
-        .hoverBackground(theme.hover)
-        .cornerRadius(6)
+        .padding(EdgeInsets(top: 0, leading: 14, bottom: 0, trailing: 10))
+        .background(open ? palette.rowHover : .clear)
+        .hoverBackground(palette.rowHover)
+        .cornerRadius(14)
         .cursor(.pointer)
         .tooltip("Every network in range, beside this window")
         .agentId("network.all")
     }
 
-    private func wiredRow(_ wired: WiredRow) -> some View {
-        let theme = Theme.current
-        return HStack(padding: 0, alignment: .center, spacing: 8) {
-            Canvas(label: "port", width: .pt(18), height: .pt(16)) { list, frame in
-                NetworkGlyph.paintWired(
-                    list: list, frame: frame,
-                    color: wired.device.isConnected ? theme.accent : theme.textDim
-                )
+    private func wiredRow(_ wired: WiredRow, palette: PopupPalette) -> some View {
+        let fonts = popupFonts!
+        let on = wired.device.isConnected
+        return HStack(padding: 0, alignment: .center, spacing: 10) {
+            Icon(PanelIcons.ethernet, size: 16, color: on ? palette.sage700 : palette.neutral700,
+                 strokeWidth: 2.25)
+            VStack(flexGrow: 1, padding: 0, spacing: 0) {
+                Text(wired.active?.id ?? wired.device.iface, color: palette.bar.text,
+                     font: on ? fonts.body14Semi : fonts.body14, lineLimit: 1)
+                Text(wired.status, color: on ? palette.sage800 : palette.bar.textSoft,
+                     font: fonts.caption12, lineLimit: 1)
             }
-            .flexShrink(0)
-            Text(wired.active?.id ?? wired.device.iface, color: theme.textPrimary, lineLimit: 1)
-                .flexShrink(1)
-            Spacer()
-            Text(wired.status, color: theme.textDim, lineLimit: 1)
-                .flexShrink(0)
+            .clipped()
         }
-        .padding(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
+        .padding(EdgeInsets(top: 0, leading: 10, bottom: 0, trailing: 6))
+        .background(on ? palette.sage100 : .clear)
+        .cornerRadius(14)
+        .padding(EdgeInsets(top: 0, leading: 0, bottom: 4, trailing: 0))
         .agentId("network.wired." + wired.device.iface)
     }
 
-    private func vpnRow(_ vpn: VPNRow) -> some View {
-        let theme = Theme.current
-        return HStack(padding: 0, alignment: .center, spacing: 8) {
-            Canvas(label: "lock", width: .pt(18), height: .pt(16)) { list, frame in
-                NetworkGlyph.paintLock(
-                    list: list, frame: frame, color: vpn.isOn ? theme.accent : theme.textDim
-                )
+    private func vpnRow(_ vpn: VPNRow, palette: PopupPalette) -> some View {
+        let fonts = popupFonts!
+        let on = vpn.isOn && !vpn.isConnecting
+        return HStack(padding: 0, alignment: .center, spacing: 10) {
+            Icon(PanelIcons.shield, size: 16, color: vpn.isOn ? palette.sage700 : palette.neutral700,
+                 strokeWidth: 2.25)
+            VStack(flexGrow: 1, padding: 0, spacing: 0) {
+                Text(vpn.connection.id, color: palette.bar.text,
+                     font: on ? fonts.body14Semi : fonts.body14, lineLimit: 1)
+                if vpn.isConnecting {
+                    Text("Connecting…", color: palette.bar.textSoft, font: fonts.caption12)
+                } else if on {
+                    Text("Connected", color: palette.sage800, font: fonts.caption12)
+                }
             }
-            .flexShrink(0)
-            Text(vpn.connection.id, color: theme.textPrimary, lineLimit: 1)
-                .flexShrink(1)
-            Spacer()
-            if vpn.isConnecting {
-                Text("Connecting…", color: theme.textDim, lineLimit: 1)
-                    .flexShrink(0)
-            }
-            Toggle(isOn: network.vpnBinding(vpn))
+            .clipped()
+            Toggle(isOn: network.vpnBinding(vpn), style: PopupStyles.toggle(palette))
                 .agentId("network.vpn-toggle." + vpn.connection.id)
         }
-        .padding(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
+        .padding(EdgeInsets(top: 0, leading: 10, bottom: 0, trailing: 6))
+        .background(vpn.isOn ? palette.sage100 : .clear)
+        .cornerRadius(14)
+        .padding(EdgeInsets(top: 0, leading: 0, bottom: 4, trailing: 0))
         .agentId("network.vpn." + vpn.connection.id)
     }
 }
 
-/// One Wi-Fi network: bars, name, lock, what it is doing. In the network
-/// window and in the pane of every network beside it.
+/// One Wi-Fi network. The one in use is a card of its own — its name, that
+/// it is connected and secured, and the way off it; the rest are a row each,
+/// the fan cut to their strength. In the network window and in the pane of
+/// every network beside it.
 struct WifiRow: View {
     var network: NetworkSession
     var wifi: WifiNetwork
@@ -172,60 +198,114 @@ struct WifiRow: View {
     var showsDisconnect = true
 
     var body: some View {
-        let theme = Theme.current
+        let palette = PopupPalette.current
+        if wifi.isConnected, showsDisconnect {
+            connectedCard(palette: palette)
+        } else {
+            plainRow(palette: palette)
+        }
+    }
+
+    private func connectedCard(palette: PopupPalette) -> some View {
+        let fonts = popupFonts!
+        let wifi = wifi
+        let network = network
+        let secured = wifi.security.showsLock
+        return HStack(padding: 0, alignment: .center, spacing: 10) {
+            IconDisc(icon: TrayCluster.networkIcon(NetworkStatus(link: .wifi(bars: NetworkRows.bars(wifi.strength)))),
+                     size: 32, glyph: 15, fill: palette.bar.accent, color: palette.bar.onAccent,
+                     strokeWidth: 2.75)
+            VStack(flexGrow: 1, padding: 0, spacing: 1) {
+                Text(wifi.ssid, color: palette.bar.text, font: fonts.body14Bold, lineLimit: 1)
+                HStack(padding: 0, alignment: .center, spacing: 5) {
+                    Text("Connected", color: palette.bar.accentInk, font: fonts.caption12)
+                    if secured {
+                        Icon(PanelIcons.lock, size: 10, color: palette.bar.accentInk, strokeWidth: 3)
+                        Text("Secured", color: palette.bar.accentInk, font: fonts.caption12)
+                    }
+                }
+            }
+            .clipped()
+            if let active = wifi.active {
+                PillButton(title: "Disconnect", agentId: "network.disconnect") {
+                    network.disconnect(active)
+                }
+            }
+        }
+        .padding(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
+        .background(palette.accent100)
+        .cornerRadius(16)
+        .padding(EdgeInsets(top: 0, leading: 0, bottom: 4, trailing: 0))
+        .agentId("network.wifi." + wifi.ssid)
+    }
+
+    private func plainRow(palette: PopupPalette) -> some View {
+        let fonts = popupFonts!
         let wifi = wifi
         let network = network
         let onConnect = onConnect
-        let showsDisconnect = showsDisconnect
         let enterprise = wifi.security == .enterprise
         let busy = wifi.isConnected || wifi.isConnecting
-        let colour = enterprise ? theme.textDim : theme.textPrimary
+        let ink = enterprise ? palette.neutral600 : palette.bar.text
         let status = wifi.isConnected ? "Connected" : wifi.isConnecting ? "Connecting…" : ""
         let bars = NetworkRows.bars(wifi.strength)
         return HStack(
-            padding: 0, alignment: .center, spacing: 8,
+            padding: 0, alignment: .center, spacing: 10,
             onClick: busy || enterprise ? nil : {
                 network.connect(wifi)
                 onConnect?()
             }
         ) {
-            Canvas(label: "bars", width: .pt(18), height: .pt(16)) { list, frame in
-                NetworkGlyph.paintBars(
-                    bars, list: list, frame: frame,
-                    color: wifi.isConnected ? theme.accent : colour
-                )
-            }
-            .flexShrink(0)
-            Text(wifi.ssid, color: colour, lineLimit: 1)
+            Icon(TrayCluster.networkIcon(NetworkStatus(link: .wifi(bars: bars))), size: 17,
+                 color: wifi.isConnected ? palette.bar.accent : palette.bar.textSoft,
+                 strokeWidth: 2.25)
+            Text(wifi.ssid, color: ink, font: fonts.body14, lineLimit: 1)
                 .flexShrink(1)
             Spacer()
             if !status.isEmpty {
-                Text(status, color: theme.textDim, lineLimit: 1)
+                Text(status, color: palette.bar.textSoft, font: fonts.caption12, lineLimit: 1)
                     .flexShrink(0)
             }
             if wifi.security.showsLock {
-                Canvas(label: "lock", width: .pt(10), height: .pt(12)) { list, frame in
-                    NetworkGlyph.paintLock(list: list, frame: frame, color: theme.textDim)
-                }
-                .flexShrink(0)
-            }
-            if showsDisconnect, let active = wifi.active {
-                Text(
-                    "Disconnect", color: theme.textSecondary,
-                    hoverFill: theme.hover, cornerRadius: 4,
-                    onClick: { network.disconnect(active) }
-                )
-                .padding(EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6))
-                .flexShrink(0)
-                .agentId("network.disconnect")
+                Icon(PanelIcons.lock, size: 12, color: palette.neutral700, strokeWidth: 2.75)
             }
         }
-        .padding(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
-        .hoverBackground(busy || enterprise ? Color.clear : theme.hover)
-        .cornerRadius(6)
+        .padding(EdgeInsets(top: 0, leading: 14, bottom: 0, trailing: 10))
+        .hoverBackground(busy || enterprise ? Color.clear : palette.rowHover)
+        .cornerRadius(14)
         .cursor(busy || enterprise ? .arrow : .pointer)
         .tooltip(enterprise ? "Enterprise network — set it up with nm-connection-editor" : wifi.ssid)
         .agentId("network.wifi." + wifi.ssid)
+    }
+}
+
+/// An arc turning, for "Scanning…": Lucide's loader, a turn a second, at
+/// fifteen frames a second while it is on screen.
+struct Spinner: View {
+    var color: Color
+    var size: Float = 11
+
+    var body: some View {
+        let color = color, size = size
+        return Canvas(label: "spinner", width: .pt(size), height: .pt(size)) { list, frame in
+            let turn = Float(Date().timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1))
+            let cx = frame.x + size / 2, cy = frame.y + size / 2
+            let r = size / 2 - 1.2
+            let start = turn * 2 * .pi
+            let steps = 14
+            var previous: (Float, Float)?
+            for i in 0...steps {
+                // Three quarters of a turn, as the icon's arc is.
+                let a = start + Float(i) / Float(steps) * 1.5 * .pi
+                let point = (cx + r * cos(a), cy + r * sin(a))
+                if let p = previous {
+                    list.line(x1: p.0, y1: p.1, x2: point.0, y2: point.1, color: color,
+                              width: 3 * size / 24)
+                }
+                previous = point
+            }
+            FrameScheduler.requestRedraw(in: 1.0 / 15)
+        }
     }
 }
 
@@ -267,12 +347,15 @@ enum NetworkBlock: Identifiable {
 
     var height: Float {
         switch self {
-        case .wifiHeader: return 32
-        case .header: return 26
-        case .divider: return 13
-        case .note: return 28
+        case .wifiHeader: return 34
+        case .header: return 23
+        case .divider: return 21
+        case .note: return 30
         case .error: return 44
-        case .wifi, .more, .listHeader, .wired, .vpn: return 32
+        case .wifi(let wifi): return wifi.isConnected ? 52 : 34
+        case .more: return 36
+        case .listHeader: return 34
+        case .wired, .vpn: return 38
         }
     }
 
@@ -285,6 +368,7 @@ enum NetworkBlock: Identifiable {
         }
         if state.hasWifi {
             out.append(.wifiHeader)
+            out.append(.divider("wifi"))
             if !state.wirelessHardwareEnabled {
                 out.append(.note("Wi-Fi is off at the hardware switch", id: "rfkill"))
             } else if !state.wirelessEnabled {

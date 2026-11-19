@@ -15,63 +15,53 @@ struct BluetoothWindow: View {
 
     var body: some View {
         let blocks = isSearch ? BluetoothBlock.searchBlocks(bluetooth) : BluetoothBlock.blocks(bluetooth)
-        ScrollView(showsIndicator: true) {
-            VStack(padding: BluetoothBlock.padding, spacing: 0) {
-                ForEach(blocks) { block in
-                    row(block).frame(height: .pt(block.height))
+        return PopupCard(padding: 0) {
+            ScrollView(showsIndicator: true) {
+                VStack(padding: BluetoothBlock.padding, spacing: 0) {
+                    ForEach(blocks) { block in
+                        row(block).frame(height: .pt(block.height))
+                    }
                 }
             }
         }
-        .background(PanelChrome.popupWash)
         .agentId(isSearch ? "bluetooth.search" : "bluetooth.window")
     }
 
     @ViewBuilder
     private func row(_ block: BluetoothBlock) -> some View {
-        let theme = Theme.current
+        let palette = PopupPalette.current
+        let fonts = popupFonts!
         switch block {
         case .powerHeader:
-            let adapter = bluetooth.state.adapter
-            HStack(padding: 0, alignment: .center, spacing: 8) {
-                Text("Bluetooth", color: theme.textSecondary)
-                    .padding(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 0))
-                if adapter?.isChanging == true {
-                    Text(adapter?.powered == true ? "Turning off…" : "Turning on…", color: theme.textDim)
-                }
-                Spacer()
-                Toggle(isOn: bluetooth.poweredBinding, isEnabled: adapter?.isBlocked == false)
-                    .agentId("bluetooth.power")
-            }
+            powerHeader(palette: palette)
         case .searchHeader:
             HStack(padding: 0, alignment: .center, spacing: 8) {
-                Text("Add a device", color: theme.textSecondary)
-                    .padding(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 0))
+                Text("Add a device", color: palette.bar.text, font: fonts.title15)
+                    .padding(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 0))
                 Spacer()
                 if let adapter = bluetooth.state.adapter, adapter.powered, adapter.discovering {
-                    Text("Searching…", color: theme.textDim)
+                    Spinner(color: palette.bar.textSoft)
+                    Text("Searching…", color: palette.bar.textSoft, font: fonts.caption12)
+                        .padding(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 4))
                 }
             }
         case .header(let title):
             HStack(padding: 0, alignment: .end) {
-                Text(title, color: theme.textSecondary)
-                    .padding(EdgeInsets(top: 0, leading: 4, bottom: 4, trailing: 0))
+                Kicker(text: title)
             }
         case .divider:
-            HStack(padding: 0, alignment: .center) {
-                VStack(height: .pt(1)) {}
-                    .flexGrow(1)
-                    .background(theme.border)
-            }
+            CardDivider()
+                .padding(EdgeInsets(top: 10, leading: 0, bottom: 10, trailing: 0))
         case .note(let text, _):
             HStack(padding: 0, alignment: .center) {
-                Text(text, color: theme.textDim, lineLimit: 2)
-                    .padding(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
+                Text(text, color: palette.bar.textSoft, font: fonts.body14, lineLimit: 2)
+                    .padding(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
                     .flexShrink(1)
             }
         case .error(let text):
             HStack(padding: 0, alignment: .center) {
-                Text(text, color: theme.accent, lineLimit: 2)
-                    .padding(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
+                Text(text, color: palette.bar.accentInk, font: fonts.small13, lineLimit: 2)
+                    .padding(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
                     .flexShrink(1)
             }
             .agentId("bluetooth.error")
@@ -80,90 +70,129 @@ struct BluetoothWindow: View {
         case .found(let device):
             FoundDeviceRow(bluetooth: bluetooth, device: device)
         case .add:
-            addRow()
+            addRow(palette: palette)
         }
+    }
+
+    /// The radio: its disc, how many devices are connected, its switch.
+    private func powerHeader(palette: PopupPalette) -> some View {
+        let fonts = popupFonts!
+        let adapter = bluetooth.state.adapter
+        let on = adapter?.powered == true && adapter?.isBlocked == false
+        let connected = bluetooth.known.filter(\.connected).count
+        let sub: String = {
+            if adapter?.isChanging == true {
+                return adapter?.powered == true ? "Turning off…" : "Turning on…"
+            }
+            if adapter?.isBlocked == true { return "Off at the radio switch" }
+            guard on else { return "Off" }
+            return connected == 0 ? "On" : "\(connected) connected"
+        }()
+        return HStack(padding: 0, alignment: .center, spacing: 10) {
+            IconDisc(icon: [.path(PanelIcons.bluetooth)], size: 30, glyph: 15,
+                     fill: on ? palette.bar.accent : palette.neutral300,
+                     color: on ? palette.bar.onAccent : palette.bar.textSoft, strokeWidth: 2.5)
+            VStack(flexGrow: 1, padding: 0, spacing: 1) {
+                Text("Bluetooth", color: palette.bar.text, font: fonts.title15)
+                Text(sub, color: palette.bar.textSoft, font: fonts.caption12)
+            }
+            Toggle(isOn: bluetooth.poweredBinding, style: PopupStyles.toggle(palette),
+                   isEnabled: adapter?.isBlocked == false)
+                .agentId("bluetooth.power")
+        }
+        .padding(EdgeInsets(top: 2, leading: 8, bottom: 0, trailing: 4))
     }
 
     /// Opens the pane that searches. Searching is the radio shouting for
     /// as long as it lasts, so it runs while the pane is open and no longer.
-    private func addRow() -> some View {
-        let theme = Theme.current
+    private func addRow(palette: PopupPalette) -> some View {
+        let fonts = popupFonts!
         let open = session.bluetoothSearchWindow.map { LavaApp.isWindowOpen($0) } ?? false
         return HStack(
-            padding: 0, alignment: .center, spacing: 8,
+            padding: 0, alignment: .center, spacing: 10,
             onClick: { session.toggleBluetoothSearch() }
         ) {
-            Text("Add a device…", color: theme.textPrimary, lineLimit: 1)
+            IconDisc(icon: [.path(PanelIcons.plus)], size: 22, glyph: 12,
+                     fill: palette.bar.accentSoft, color: palette.bar.accentInk, strokeWidth: 3)
+            Text("Add a device…", color: palette.bar.text, font: fonts.body14Semi, lineLimit: 1)
                 .flexShrink(1)
             Spacer()
-            Canvas(label: "chevron", width: .pt(10), height: .pt(14)) { list, frame in
-                BluetoothGlyph.paintChevronLeft(
-                    list: list, frame: frame, color: open ? theme.accent : theme.textDim
-                )
-            }
-            .flexShrink(0)
+            Icon(open ? PanelIcons.chevronLeft : PanelIcons.chevronRight, size: 14,
+                 color: palette.neutral700, strokeWidth: 2.75)
         }
-        .padding(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
-        .hoverBackground(theme.hover)
-        .cornerRadius(6)
+        .padding(EdgeInsets(top: 0, leading: 10, bottom: 0, trailing: 10))
+        .background(open ? palette.rowHover : .clear)
+        .hoverBackground(palette.rowHover)
+        .cornerRadius(14)
         .cursor(.pointer)
         .tooltip("Search for devices in pairing mode, beside this window")
         .agentId("bluetooth.add")
     }
 }
 
-/// A device this machine knows. Click to connect or disconnect; the cross
-/// forgets it.
+extension BtDevice {
+    /// The design's glyph for what the device is.
+    var iconPath: String {
+        switch kind {
+        case .headphones: return PanelIcons.headphones
+        case .speaker: return PanelIcons.speaker
+        case .mouse: return PanelIcons.mouse
+        case .keyboard: return PanelIcons.keyboard
+        case .gamepad: return PanelIcons.gamepad
+        case .phone, .tablet: return PanelIcons.phone
+        case .computer, .other: return PanelIcons.device
+        }
+    }
+}
+
+/// A device this machine knows: its disc, its name, what it is doing and
+/// its battery. Click to connect or disconnect; the cross forgets it.
 struct KnownDeviceRow: View {
     var bluetooth: BluetoothSession
     var device: BtDevice
 
     var body: some View {
-        let theme = Theme.current
+        let palette = PopupPalette.current
+        let fonts = popupFonts!
         let device = device
         let bluetooth = bluetooth
         let busy = device.busy != .idle
         let status = BluetoothRows.status(device)
+        let connected = device.connected
         return HStack(
-            padding: 0, alignment: .center, spacing: 8,
+            padding: 0, alignment: .center, spacing: 10,
             onClick: busy ? nil : { bluetooth.toggle(device) }
         ) {
-            Canvas(label: "kind", width: .pt(18), height: .pt(16)) { list, frame in
-                BluetoothGlyph.paintDevice(
-                    device.kind, list: list, frame: frame,
-                    color: device.connected ? theme.accent : theme.textDim
-                )
-            }
-            .flexShrink(0)
-            Text(device.name, color: theme.textPrimary, lineLimit: 1)
-                .flexShrink(1)
-            Spacer()
-            if let battery = device.battery {
-                BatteryLevel(percent: battery)
-                    .flexShrink(0)
-            }
-            if !status.isEmpty, busy || device.battery == nil {
-                Text(status, color: theme.textDim, lineLimit: 1)
-                    .flexShrink(0)
-            }
-            // A click of its own inside the row's, as the network window's
-            // Disconnect is: the innermost handler takes it.
-            HStack(padding: 0, alignment: .center, onClick: { bluetooth.forget(device) }) {
-                Canvas(label: "forget", width: .pt(16), height: .pt(16)) { list, frame in
-                    BluetoothGlyph.paintCross(list: list, frame: frame, color: theme.textDim)
+            IconDisc(icon: [.path(device.iconPath)], size: 32, glyph: 16,
+                     fill: connected ? palette.bar.accentSoft : palette.neutral200,
+                     color: connected ? palette.bar.accentInk : palette.bar.textSoft)
+            VStack(flexGrow: 1, padding: 0, spacing: 1) {
+                Text(device.name, color: palette.bar.text, font: fonts.body14Semi, lineLimit: 1)
+                HStack(padding: 0, alignment: .center, spacing: 6) {
+                    Text(status.isEmpty ? (connected ? "Connected" : "Paired") : status,
+                         color: palette.bar.textSoft, font: fonts.caption12, lineLimit: 1)
+                    if let battery = device.battery {
+                        BatteryLevel(percent: battery)
+                    }
                 }
             }
-            .hoverBackground(theme.hover)
-            .cornerRadius(4)
+            .clipped()
+            // A click of its own inside the row's, as the network window's
+            // Disconnect is: the innermost handler takes it.
+            CardIconButton(icon: [.path(PanelIcons.close)], size: 28, glyph: 12,
+                           color: palette.bar.textSoft, hover: palette.bar.accentSoft,
+                           agentId: "bluetooth.forget." + device.address) {
+                bluetooth.forget(device)
+            }
             .tooltip("Forget \(device.name)")
-            .flexShrink(0)
-            .agentId("bluetooth.forget." + device.address)
         }
         .padding(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 6))
-        .hoverBackground(busy ? Color.clear : theme.hover)
-        .cornerRadius(6)
+        .background(connected ? palette.rowHover.opacity(0.9) : .clear)
+        .hoverBackground(busy ? Color.clear : palette.rowHover)
+        .cornerRadius(14)
         .cursor(busy ? .arrow : .pointer)
-        .tooltip(device.connected ? "Disconnect \(device.name)" : "Connect \(device.name)")
+        .tooltip(connected ? "Disconnect \(device.name)" : "Connect \(device.name)")
+        .padding(EdgeInsets(top: 0, leading: 0, bottom: 4, trailing: 0))
         .agentId("bluetooth.device." + device.address)
     }
 }
@@ -175,59 +204,67 @@ struct FoundDeviceRow: View {
     var device: BtDevice
 
     var body: some View {
-        let theme = Theme.current
+        let palette = PopupPalette.current
+        let fonts = popupFonts!
         let device = device
         let bluetooth = bluetooth
         let busy = device.busy != .idle
         let bars = BluetoothRows.bars(device.rssi)
+        let textSoft = palette.bar.textSoft
         return HStack(
-            padding: 0, alignment: .center, spacing: 8,
+            padding: 0, alignment: .center, spacing: 10,
             onClick: busy ? nil : { bluetooth.pair(device) }
         ) {
-            Canvas(label: "kind", width: .pt(18), height: .pt(16)) { list, frame in
-                BluetoothGlyph.paintDevice(device.kind, list: list, frame: frame, color: theme.textDim)
-            }
-            .flexShrink(0)
-            Text(device.name, color: theme.textPrimary, lineLimit: 1)
+            IconDisc(icon: [.path(device.iconPath)], size: 28, glyph: 14,
+                     fill: palette.neutral200, color: palette.bar.textSoft)
+            Text(device.name, color: palette.bar.text, font: fonts.body14, lineLimit: 1)
                 .flexShrink(1)
             Spacer()
             if busy {
-                Text(BluetoothRows.status(device), color: theme.textDim, lineLimit: 1)
+                Text(BluetoothRows.status(device), color: palette.bar.textSoft,
+                     font: fonts.caption12, lineLimit: 1)
                     .flexShrink(0)
             } else {
                 Canvas(label: "signal", width: .pt(14), height: .pt(12)) { list, frame in
-                    BluetoothGlyph.paintSignal(
-                        bars, list: list, frame: frame, color: theme.textDim
-                    )
+                    BluetoothGlyph.paintSignal(bars, list: list, frame: frame, color: textSoft)
                 }
                 .flexShrink(0)
             }
         }
-        .padding(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
-        .hoverBackground(busy ? Color.clear : theme.hover)
-        .cornerRadius(6)
+        .padding(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 10))
+        .hoverBackground(busy ? Color.clear : palette.rowHover)
+        .cornerRadius(14)
         .cursor(busy ? .arrow : .pointer)
         .tooltip("Pair with \(device.name)")
         .agentId("bluetooth.found." + device.address)
     }
 }
 
-/// "80%" beside a small battery, red-ish when it is low enough to matter.
+/// "80%" beside a small battery, the fill in the sage; the accent's ink
+/// when it is low enough to matter.
 struct BatteryLevel: View {
     var percent: Int
 
     var body: some View {
-        let theme = Theme.current
+        let palette = PopupPalette.current
         let percent = percent
         let low = percent <= 15
-        HStack(padding: 0, alignment: .center, spacing: 4) {
+        let outline = palette.bar.textSoft
+        let fill = low ? palette.bar.accent : palette.sage600
+        return HStack(padding: 0, alignment: .center, spacing: 4) {
             Canvas(label: "battery", width: .pt(16), height: .pt(10)) { list, frame in
-                BluetoothGlyph.paintBattery(
-                    percent, list: list, frame: frame,
-                    color: theme.textDim, fill: low ? theme.accent : theme.textSecondary
-                )
+                // The design's: a rounded body, a fill to the level, a nub.
+                let s = frame.w / 26
+                list.strokedRect(x: frame.x + 1 * s, y: frame.y + 1 * s, w: 21 * s, h: 12 * s,
+                                 color: outline, radius: 3 * s, width: 1.8 * s)
+                list.roundedRect(x: frame.x + 3.5 * s, y: frame.y + 3.5 * s,
+                                 w: max(1, 16 * s * Float(percent) / 100), h: 7 * s,
+                                 color: fill, radius: 1.5 * s)
+                list.roundedRect(x: frame.x + 23 * s, y: frame.y + 5 * s, w: 2.2 * s, h: 4 * s,
+                                 color: outline, radius: 1 * s)
             }
-            Text("\(percent)%", color: low ? theme.accent : theme.textDim, lineLimit: 1)
+            Text("\(percent)%", color: low ? palette.bar.accentInk : palette.bar.textSoft,
+                 font: popupFonts.caption12Tabular, lineLimit: 1)
         }
     }
 }
@@ -267,12 +304,15 @@ enum BluetoothBlock: Identifiable {
 
     var height: Float {
         switch self {
-        case .powerHeader, .searchHeader: return 32
-        case .header: return 26
-        case .divider: return 13
+        case .powerHeader: return 34
+        case .searchHeader: return 32
+        case .header: return 23
+        case .divider: return 21
         case .note: return 40
         case .error: return 44
-        case .known, .found, .add: return 34
+        case .known: return 48
+        case .found: return 38
+        case .add: return 40
         }
     }
 
@@ -284,6 +324,7 @@ enum BluetoothBlock: Identifiable {
             return out + [.note("No Bluetooth adapter", id: "absent")]
         }
         out.append(.powerHeader)
+        out.append(.divider("power"))
         if adapter.isBlocked {
             return out + [.note("Off at the radio switch", id: "blocked")]
         }
