@@ -67,11 +67,13 @@ struct LavaEditorApp {
                         MenuSeparator()
                         MenuItem(
                             "Save", id: "file.save",
-                            shortcut: KeyShortcut(KeyCode.s, .primary)
+                            shortcut: KeyShortcut(KeyCode.s, .primary),
+                            isEnabled: session.active.saveUnavailable == nil
                         ) { session.save() }
                         MenuItem(
                             "Save As…", id: "file.save-as",
-                            shortcut: KeyShortcut(KeyCode.s, [.primary, .shift])
+                            shortcut: KeyShortcut(KeyCode.s, [.primary, .shift]),
+                            isEnabled: session.active.saveUnavailable == nil
                         ) { session.saveAs() }
                         MenuItem("Reload from Disk", id: "file.reload") { session.reload() }
                         MenuSeparator()
@@ -87,7 +89,8 @@ struct LavaEditorApp {
                         ) { session.openFind(replace: false) }
                         MenuItem(
                             "Find and Replace…", id: "search.replace",
-                            shortcut: KeyShortcut(KeyCode.h, .primary)
+                            shortcut: KeyShortcut(KeyCode.h, .primary),
+                            isEnabled: session.active.saveUnavailable == nil
                         ) { session.openFind(replace: true) }
                         MenuItem(
                             "Find Next", id: "search.next",

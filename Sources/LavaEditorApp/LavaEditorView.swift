@@ -69,6 +69,7 @@ struct LavaEditorView: View {
             } else {
                 EditorView(
                     text: session.text,
+                    isReadOnly: session.active.hasInvalidUTF8,
                     rules: session.active.language.rules,
                     style: Language.codeStyle(),
                     font: session.documentFont,
@@ -119,7 +120,7 @@ struct LavaEditorView: View {
                 Button("›") { session.findNext() }.agentId("find-next")
                 Button("Done") { session.closeFind() }.agentId("find-close")
             }
-            if session.find.showsReplace {
+            if session.find.showsReplace, !session.active.hasInvalidUTF8 {
                 HStack(alignment: .center, spacing: 6) {
                     Text("Replace", color: .muted).frame(width: .pt(56))
                     TextField(
@@ -199,6 +200,11 @@ struct LavaEditorView: View {
         let inset = EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4)
         return HStack(height: .pt(26), padding: 6, alignment: .center, spacing: 12) {
             pathLabel(theme: theme)
+            if session.active.hasInvalidUTF8, session.active.isLoaded {
+                Text("Read-only · invalid UTF-8", color: .accent)
+                    .padding(inset)
+                    .agentId("status-invalid-utf8")
+            }
             if session.active.isModified {
                 Text("modified", color: .accent).padding(inset).agentId("status-modified")
             }

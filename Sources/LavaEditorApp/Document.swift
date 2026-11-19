@@ -34,6 +34,13 @@ struct EditorDocument: Identifiable {
     /// Why the last read failed. Kept so the tab can say so instead of showing
     /// an empty buffer, which looks exactly like an empty file.
     var loadError: String?
+    /// Invalid UTF-8 was replaced for display, so this buffer cannot round-trip.
+    private(set) var hasInvalidUTF8 = false
+
+    var saveUnavailable: String? {
+        guard isLoaded else { return loadError ?? "The file has not been loaded." }
+        return hasInvalidUTF8 ? "This file is read-only because it contains invalid UTF-8." : nil
+    }
 
     /// What the tab and the title bar call it.
     var name: String { url?.lastPathComponent ?? "Untitled \(id)" }
@@ -48,20 +55,14 @@ struct EditorDocument: Identifiable {
     /// Reads the file into `text`. Returns false and fills `loadError` on
     /// failure, leaving the buffer alone.
     ///
-    /// Anything that is not valid UTF-8 is refused rather than repaired.
-    /// Guessing an encoding and guessing wrong writes a file back with its
-    /// non-ASCII bytes silently replaced, and the user finds out much later —
-    /// so a file this cannot read is a file it will not offer to save.
+    /// Invalid UTF-8 is displayed with replacement characters in read-only mode.
     mutating func load() -> Bool {
         guard let url else { return true }
         do {
             let data = try Data(contentsOf: url)
-            guard let decoded = String(data: data, encoding: .utf8) else {
-                loadError = "Not valid UTF-8 — this editor cannot open it safely"
-                isLoaded = false
-                return false
-            }
-            text = decoded
+            let decoded = String(data: data, encoding: .utf8)
+            hasInvalidUTF8 = decoded == nil
+            text = decoded ?? String(decoding: data, as: UTF8.self)
             isLoaded = true
             isModified = false
             loadError = nil
@@ -79,6 +80,7 @@ struct EditorDocument: Identifiable {
     /// truncated file: the failure mode of a plain write is losing the version
     /// that was already safe on disk.
     mutating func save(to target: URL) -> String? {
+        if let saveUnavailable { return saveUnavailable }
         do {
             try Data(text.utf8).write(to: target, options: .atomic)
             url = target

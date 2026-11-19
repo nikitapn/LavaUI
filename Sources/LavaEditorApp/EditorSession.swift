@@ -182,6 +182,7 @@ final class EditorSession {
             get: { [weak self] in self?.active.text ?? "" },
             set: { [weak self] newValue in
                 guard let self, self.documents.indices.contains(self.activeIndex) else { return }
+                guard self.documents[self.activeIndex].saveUnavailable == nil else { return }
                 guard self.documents[self.activeIndex].text != newValue else { return }
                 self.documents[self.activeIndex].text = newValue
                 self.documents[self.activeIndex].isModified = true
@@ -377,6 +378,10 @@ final class EditorSession {
     @discardableResult
     func saveAs() -> Bool {
         guard documents.indices.contains(activeIndex) else { return false }
+        if let error = documents[activeIndex].saveUnavailable {
+            notice = "Could not save \(documents[activeIndex].name): \(error)"
+            return false
+        }
         guard let target = FileDialog.saveFile(
             title: "Save As", defaultName: documents[activeIndex].name
         ) else { return false }
