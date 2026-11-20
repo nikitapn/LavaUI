@@ -244,7 +244,6 @@ struct WifiRow: View {
         let onConnect = onConnect
         let enterprise = wifi.security == .enterprise
         let busy = wifi.isConnected || wifi.isConnecting
-        let ink = enterprise ? palette.neutral600 : palette.bar.text
         let status = wifi.isConnected ? "Connected" : wifi.isConnecting ? "Connecting…" : ""
         let bars = NetworkRows.bars(wifi.strength)
         return HStack(

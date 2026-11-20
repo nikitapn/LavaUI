@@ -1762,7 +1762,6 @@ private struct FileRow: View {
 
     /// What rows and tiles have in common, around whichever they are.
     private func decorated<Content: View>(_ content: Content) -> some View {
-        let theme = Theme.current
         let menuX = session.menuX
         let menuY = session.menuY
         let paneID = self.paneID
@@ -1877,7 +1876,6 @@ private struct FileContextMenu: View {
     let entry: FileEntry
 
     var body: some View {
-        let theme = Theme.current
         let handlers = session.handlers(for: entry)
         let defaultId = session.defaultHandlerId(for: entry)
         return MenuDropdownPanel(
