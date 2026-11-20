@@ -1118,6 +1118,7 @@ public enum LavaClient {
         let id = callingSurface()
         updateBackdrop(id) { backdrop in
             backdrop.viewRadius = plate?.radius ?? 0
+            backdrop.viewSaturation = plate?.saturation ?? 1
             backdrop.viewGlass = plate?.glass.map {
                 PlateGlass(
                     refraction: $0.refraction, frost: $0.frost,
@@ -1162,6 +1163,8 @@ public enum LavaClient {
         var viewRadius: Float = 0
         /// The same view's glass. Takes precedence over `glass`.
         var viewGlass: PlateGlass?
+        /// The same view's saturation; 1 is unchanged.
+        var viewSaturation: Float = 1
         /// Rectangles a frame asked to frost — popup dropdowns. While there
         /// are any they replace the whole-surface plate.
         var regionRadius: Float = 0
@@ -1178,6 +1181,8 @@ public enum LavaClient {
         var cornerRadius: Float = 0
         var radius: Float
         var glass: PlateGlass
+        /// CSS `saturate()` on the frost; 1 is unchanged and is not sent.
+        var saturation: Float = 1
     }
 
     static func plates(of backdrop: SurfaceBackdrop) -> [Plate] {
@@ -1196,13 +1201,15 @@ public enum LavaClient {
                 return Plate(
                     x: rect.x, y: rect.y, w: rect.w, h: rect.h,
                     cornerRadius: rect.cornerRadius,
-                    radius: backdrop.regionRadius, glass: own
+                    radius: backdrop.regionRadius, glass: own,
+                    saturation: rect.saturation
                 )
             }
         }
         let radius = backdrop.viewRadius > 0 ? backdrop.viewRadius : backdrop.radius
         guard radius > 0 else { return [] }
-        return [Plate(radius: radius, glass: glass)]
+        return [Plate(radius: radius, glass: glass,
+                      saturation: backdrop.viewRadius > 0 ? backdrop.viewSaturation : 1)]
     }
 
     private static func updateBackdrop(
@@ -1269,6 +1276,11 @@ public enum LavaClient {
         )))
         if plate.glass.frost > 0 {
             effects.append(.frost(BackdropFrost(grain: plate.glass.frost)))
+        }
+        // Only when asked for: a compositor that predates the arm skips it,
+        // but there is no reason to send it one it would have to skip.
+        if abs(plate.saturation - 1) > 0.001 {
+            effects.append(.saturation(BackdropSaturation(amount: plate.saturation)))
         }
         return LavaIDL.BackdropPlate(
             x: plate.x, y: plate.y, w: plate.w, h: plate.h,

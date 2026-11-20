@@ -250,6 +250,8 @@ struct CompositorHost {
     /// How much larger the desktop under it is drawn, about its centre; 1 is
     /// none.
     float magnification = 1.f;
+    /// How much colour the frost keeps, CSS `saturate()`; 1 is unchanged.
+    float saturation = 1.f;
   };
 
   /// The desktop behind this surface (`SetBackdrop`), one plate per rect. A

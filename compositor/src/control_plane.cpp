@@ -2111,6 +2111,9 @@ class CompositorImpl final : public ICompositor_Servant {
         case BackdropEffect::Kind::frost:
           rect.frost = effect.value_frost().grain();
           break;
+        case BackdropEffect::Kind::saturation:
+          rect.saturation = effect.value_saturation().amount();
+          break;
         default:
           // An effect from a newer client. Skipped rather than refused: the
           // plate is still worth drawing with the effects this side knows,

@@ -1067,12 +1067,13 @@ public final class DrawList {
     /// it. It travels as the command colour's alpha.
     public func beginBackdropBlur(
         x: Float, y: Float, w: Float, h: Float, radius: Float,
-        cornerRadius: Float = 0, adaptation: Float = 1
+        cornerRadius: Float = 0, adaptation: Float = 1, saturation: Float = 1
     ) {
         guard w > 0, h > 0, radius > 0 else { return }
         appendBackdropBlur(
             x: x, y: y, w: w, h: h, radius: radius,
-            cornerRadius: cornerRadius, adaptation: adaptation
+            cornerRadius: cornerRadius, adaptation: adaptation,
+            saturation: saturation
         )
     }
 
@@ -1080,13 +1081,23 @@ public final class DrawList {
     /// capture, which means something only to glass held in front of it.
     private func appendBackdropBlur(
         x: Float, y: Float, w: Float, h: Float, radius: Float,
-        cornerRadius: Float, adaptation: Float
+        cornerRadius: Float, adaptation: Float, saturation: Float = 1
     ) {
+        // Saturation rides in the red byte (`canvas::encodeSaturation`):
+        // white, which every older producer sends, is unchanged.
         append(
             kind: .beginBackdropBlur, x: x, y: y, w: w, h: h,
-            color: Color(r: 1, g: 1, b: 1, a: min(max(adaptation, 0), 1)),
+            color: Color(r: Self.saturationByte(saturation) / 255, g: 1, b: 1,
+                         a: min(max(adaptation, 0), 1)),
             param: UInt32(max(0, cornerRadius.rounded())), aux: max(0, radius)
         )
+    }
+
+    /// Mirrors `canvas::encodeSaturation`: 255 is unchanged, anything else the
+    /// factor times 64.
+    static func saturationByte(_ factor: Float) -> Float {
+        guard factor >= 0, abs(factor - 1) > 0.001 else { return 255 }
+        return min(254, (factor * 64).rounded())
     }
 
     /// Frost the *desktop* under this rect, when a compositor is there to do
@@ -1200,6 +1211,7 @@ public final class DrawList {
         x: Float, y: Float, w: Float, h: Float,
         cornerRadius: Float = 0,
         adaptation: Float? = nil,
+        saturation: Float? = nil,
         glass: GlassEffect? = nil,
         fillsOver: Bool = false,
         plateRefraction: Float = 0,
@@ -1240,7 +1252,7 @@ public final class DrawList {
            x <= 0.5, y <= 0.5, w >= viewport.w - 1, h >= viewport.h - 1
         {
             windowBackdrop = BackdropBridge.WindowPlate(
-                radius: backdropRadius ?? 0, glass: glass
+                radius: backdropRadius ?? 0, glass: glass, saturation: saturation ?? 1
             )
             // Nothing of this window is behind its whole extent, so there is
             // nothing of its own to capture and bend: the plate does that. The
@@ -1257,7 +1269,8 @@ public final class DrawList {
                     x: x, y: y, w: w, h: h, cornerRadius: cornerRadius,
                     refraction: glass?.refraction ?? plateRefraction,
                     frost: glass?.frost ?? 0,
-                    magnification: glass?.magnification ?? 1
+                    magnification: glass?.magnification ?? 1,
+                    saturation: saturation ?? 1
                 )
             )
             desktopFrostRadius = max(desktopFrostRadius, radius)
@@ -1274,7 +1287,8 @@ public final class DrawList {
             withGlass(glass, rim: fillsOver ? 0 : nil) {
                 appendBackdropBlur(
                     x: x, y: y, w: w, h: h, radius: backdropRadius ?? 0,
-                    cornerRadius: cornerRadius, adaptation: adaptation ?? 1
+                    cornerRadius: cornerRadius, adaptation: adaptation ?? 1,
+                    saturation: saturation ?? 1
                 )
             }
             body()
@@ -1697,6 +1711,7 @@ public final class DrawList {
                     x: x, y: y, w: w, h: h,
                     cornerRadius: styled.cornerRadius,
                     adaptation: styled.backdropAdaptation,
+                    saturation: styled.backdropSaturation,
                     glass: styled.glass,
                     fillsOver: styled.fillGradient != nil || styled.fillColor != nil
                 ) {
@@ -1755,6 +1770,7 @@ public final class DrawList {
                     x: x, y: y, w: w, h: h,
                     cornerRadius: stack.cornerRadius,
                     adaptation: stack.backdropAdaptation,
+                    saturation: stack.backdropSaturation,
                     glass: stack.glass,
                     fillsOver: stack.fillGradient != nil || stack.fillColor != nil
                 ) {
@@ -1807,6 +1823,7 @@ public final class DrawList {
                     x: x, y: y, w: w, h: h,
                     cornerRadius: leaf.cornerRadius,
                     adaptation: leaf.backdropAdaptation,
+                    saturation: leaf.backdropSaturation,
                     // A picture is what its glass bends; capturing what is
                     // behind it would only be covered by it.
                     glass: leaf.kind == .image ? nil : leaf.glass,

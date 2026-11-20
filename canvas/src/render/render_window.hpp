@@ -601,7 +601,8 @@ class RenderWindow {
   /// 0 leaves it square.
   void pushBlurComposite(float x, float y, float w, float h, float viewW,
                          float viewH, float radius, float cornerRadius = 0.f,
-                         QuadRenderer::Glass glass = {}, float adapt = 0.f);
+                         QuadRenderer::Glass glass = {}, float adapt = 0.f,
+                         float saturation = 1.f);
   /// Whether this frame's sharp glass bends a window-sized capture, decided
   /// before replay so the composite and the capture agree.
   bool sharpGlass_ = false;

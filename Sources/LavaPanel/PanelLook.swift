@@ -112,9 +112,10 @@ struct PanelPalette {
             // The design says 58%, in CSS terms. The bar is its own surface,
             // though, and wlroots blends surfaces in linear light, where
             // 0.58 of cream over green comes out as 0.74 would in a browser.
-            // Tuned by eye against the design's own wallpaper; see
+            // Tuned by eye (with saturation 1.7 on the frost) against the
+            // design's own wallpaper; see
             // docs/colour-and-blending.md before changing it by arithmetic.
-            glass = neutral.opacity(0.40)
+            glass = neutral.opacity(0.34)
             glassStrong = neutral.opacity(0.62)
             glassBorder = Color(r: 1, g: 1, b: 1, a: 0.55)
             chip = Color(r: 1, g: 1, b: 1, a: 0.35)

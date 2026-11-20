@@ -656,6 +656,12 @@ message BackdropFrost {
   grain: f32;
 }
 
+/// How much colour the frost keeps, as CSS's `saturate()`: 1 leaves it, 0 is
+/// grey, 1.7 is the panel's glass. Applied after the blur.
+message BackdropSaturation {
+  amount: f32;
+}
+
 /// One thing a plate does to the desktop under it. They stack: a plate is
 /// blurred, then bent and lit, then grained, whatever order they are listed
 /// in. Named one of a list rather than fields of the plate because a message
@@ -666,6 +672,8 @@ alias BackdropEffect = one of {
   blur: BackdropBlur;
   glass: BackdropGlass;
   frost: BackdropFrost;
+  /// Last, so the arms before it keep their indices.
+  saturation: BackdropSaturation;
 };
 
 /// A frosted rectangle of the desktop behind a surface, and what it does.

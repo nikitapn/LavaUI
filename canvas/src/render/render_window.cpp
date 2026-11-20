@@ -1520,7 +1520,8 @@ void RenderWindow::setViewTransform(float zoom, float panX, float panY)
 void RenderWindow::pushBlurComposite(float x, float y, float w, float h,
                                      float viewW, float viewH, float radius,
                                      float cornerRadius,
-                                     QuadRenderer::Glass glass, float adapt)
+                                     QuadRenderer::Glass glass, float adapt,
+                                     float saturation)
 {
   if (w <= 0.f || h <= 0.f || viewW <= 0.f || viewH <= 0.f) return;
   const vec2 uv = blur_.uvScaleFor(radius);
@@ -1528,7 +1529,7 @@ void RenderWindow::pushBlurComposite(float x, float y, float w, float h,
     {x, y}, {w, h},
     {x / viewW * uv.x, y / viewH * uv.y},
     {(x + w) / viewW * uv.x, (y + h) / viewH * uv.y}, cornerRadius,
-    0xffffffffu, glass, adapt, radius <= 0.f && sharpGlass_);
+    0xffffffffu, glass, adapt, radius <= 0.f && sharpGlass_, saturation);
 }
 
 namespace {
@@ -2233,7 +2234,9 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       // Adaptive strength is the colour's alpha byte (R is the low byte).
       pushBlurComposite(cmd.x + ox, cmd.y + oy, cmd.w, cmd.h, viewW, viewH,
                         radius, static_cast<float>(cmd.param), glass,
-                        static_cast<float>(cmd.color >> 24) / 255.f);
+                        static_cast<float>(cmd.color >> 24) / 255.f,
+                        canvas::decodeSaturation(
+                          static_cast<uint8_t>(cmd.color & 0xffu)));
       break;
     }
     case canvas::DrawCommandKind::EndBackdropBlur:
@@ -2297,7 +2300,10 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
                          .rim = std::clamp(cmd.y, 0.f, 1.f),
                          .frost = std::clamp(cmd.w, 0.f, 1.f),
                          .magnify = std::clamp(cmd.x, 1.f, 4.f)},
-                        static_cast<float>(std::min(cmd.param, 255u)) / 255.f);
+                        static_cast<float>(std::min(cmd.param, 255u)) / 255.f,
+                        // The plate's saturation, in the End's `h`: 0 from
+                        // anything that does not set it, which is unchanged.
+                        cmd.h > 0.f ? std::min(cmd.h, 4.f) : 1.f);
       break;
     }
     }

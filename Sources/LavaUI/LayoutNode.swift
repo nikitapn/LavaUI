@@ -187,6 +187,9 @@ class YogaBoxNode: AnyViewNode {
     /// From `.backdropBlur(radius:adaptation:)`: how far a bright backdrop is
     /// compressed under the frost. `nil` is the default, full strength.
     var backdropAdaptation: Float?
+    /// From `.backdropBlur(radius:adaptation:saturation:)`: CSS `saturate()`
+    /// on the frost. `nil` is unchanged.
+    var backdropSaturation: Float?
     /// Content blur radius from `.blur(radius:)`. Same bookends, different
     /// subject: the engine renders this node's own paint offscreen and blurs
     /// that, rather than blurring what was already behind it.

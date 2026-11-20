@@ -43,8 +43,10 @@ enum class DrawCommandKind : uint32_t {
   ///
   /// `color`'s alpha byte = adaptive strength, 0…255: how far a bright
   /// backdrop is compressed toward light grey so the glass still reads over a
-  /// white page. RGB is ignored. A producer that predates this sends white,
-  /// which is full strength — the intended default.
+  /// white page. A producer that predates this sends white, which is full
+  /// strength — the intended default. The red byte is the saturation the
+  /// frost takes after the blur, `encodeSaturation`; white is unchanged. G and
+  /// B are ignored.
   BeginBackdropBlur = 8,
   /// Closes a blur scope (bookkeeping / future nesting). No GPU work yet.
   EndBackdropBlur = 9,
@@ -288,6 +290,26 @@ enum class DrawCommandKind : uint32_t {
 /// In a `Shadow` command's `param`: the bit that makes it hollow. The blur
 /// is the low bits; nobody blurs by two billion pixels.
 inline constexpr uint32_t kShadowHollow = 0x80000000u;
+
+/// Backdrop saturation, as one byte: what CSS's `saturate()` does to the
+/// frost after the blur. 255 is "unchanged" — it is what every producer that
+/// predates this sends, the colour of an in-window backdrop blur being white —
+/// and anything else is the factor times 64, so up to just under 4. Shared by
+/// the in-window blur (`BeginBackdropBlur`'s red byte) and the composite
+/// instance (`color1`'s red byte), so the two cannot drift.
+inline constexpr uint8_t kSaturationUnchanged = 255;
+
+constexpr uint8_t encodeSaturation(float factor) {
+  if (!(factor >= 0.f) || (factor > 0.999f && factor < 1.001f)) {
+    return kSaturationUnchanged;
+  }
+  const float scaled = factor * 64.f + 0.5f;
+  return static_cast<uint8_t>(scaled >= 254.f ? 254.f : scaled);
+}
+
+constexpr float decodeSaturation(uint8_t byte) {
+  return byte == kSaturationUnchanged ? 1.f : static_cast<float>(byte) / 64.f;
+}
 
 
 /// Bits in `NodeAnimate.color` — which properties the command states.

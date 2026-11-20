@@ -7,6 +7,7 @@
 #include <mutex>
 
 #include "render/quad_renderer.hpp"
+#include "render/draw_command.hpp"
 #include "render/shaders.hpp"
 #include "render/render_device.hpp"
 #include "render/render_window.hpp"
@@ -1343,7 +1344,8 @@ void QuadRenderer::closeSegment() {
 void QuadRenderer::pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0,
                                          vec2 uv1, float cornerRadius,
                                          uint32_t rgba, Glass glass,
-                                         float adapt, bool sharp)
+                                         float adapt, bool sharp,
+                                         float saturation)
 {
   if (size.x <= 0.0f || size.y <= 0.0f) {
     return;
@@ -1362,11 +1364,17 @@ void QuadRenderer::pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0,
   // a knob tuned by eye.
   const uint32_t adaptBits =
       static_cast<uint32_t>(std::clamp(adapt, 0.f, 1.f) * 255.f + 0.5f) << 24;
+  // And the saturation in the same colour's red byte, which is 255 —
+  // unchanged — for every composite that does not ask (see
+  // `canvas::encodeSaturation`).
+  const uint8_t saturationByte = canvas::encodeSaturation(saturation);
+  const bool saturates = saturationByte != canvas::kSaturationUnchanged;
+  const uint32_t color1 = adaptBits | saturationByte;
 
   // Stated for this quad alone, whatever a draw-list prefix left set.
   const Glass saved = glass_;
   glass_ = glass;
-  if (r <= 0.f && adaptBits == 0 && !glass.active()) {
+  if (r <= 0.f && adaptBits == 0 && !glass.active() && !saturates) {
     glass_ = {};
     appendInstance(topLeft, size, {0.f,0.f}, 0.f, rgba, Kind::Image,
                    0.f, uv0, uv1);
@@ -1376,7 +1384,7 @@ void QuadRenderer::pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0,
     // antialias.
     appendInstance(topLeft, size, {size.x * 0.5f, size.y * 0.5f}, 0.f, rgba,
                    Kind::BlurComposite, 0.f, uv0, uv1);
-    instances_.back().color1 = adaptBits;
+    instances_.back().color1 = color1;
   } else {
     // A pixel of bleed for the SDF to antialias into, exactly as `pushBox`
     // takes. The UV rect is extended by the same pixel in texture units so
@@ -1392,7 +1400,7 @@ void QuadRenderer::pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0,
 
     appendInstance({center.x-ext.x, center.y-ext.y}, {ext.x*2.f,ext.y*2.f},
                    half, r, rgba, Kind::BlurComposite, 0.f, u0, u1);
-    instances_.back().color1 = adaptBits;
+    instances_.back().color1 = color1;
   }
   glass_ = saved;
   flushBatch();

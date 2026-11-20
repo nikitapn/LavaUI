@@ -165,7 +165,7 @@ struct PopupCard<Content: View>: View {
             .background(palette.bar.glassStrong)
             .border(palette.rim)
             .cornerRadius(Self.radius)
-            .backdropBlur(radius: 22, adaptation: 0)
+            .backdropBlur(radius: 22, adaptation: 0, saturation: 1.7)
         }
     }
 }

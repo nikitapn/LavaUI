@@ -88,6 +88,9 @@ public struct ViewStyle: Equatable {
     /// How far a bright backdrop is pulled toward light grey under the frost,
     /// 0…1. `nil` = full strength. See `View.backdropBlur(radius:adaptation:)`.
     public var backdropAdaptation: Float?
+    /// How much colour the frost keeps, CSS `saturate()`: 1 leaves it. `nil`
+    /// = unchanged. See `View.backdropBlur(radius:adaptation:saturation:)`.
+    public var backdropSaturation: Float?
     /// Content blur radius in pixels. `nil` = off. Blurs this node's own paint,
     /// the way SwiftUI's `.blur()` does, rather than what is behind it.
     public var contentBlurRadius: Float?
@@ -149,6 +152,7 @@ public struct ViewStyle: Equatable {
         out.flexShrink = flexShrink ?? base.flexShrink
         out.backdropBlurRadius = backdropBlurRadius ?? base.backdropBlurRadius
         out.backdropAdaptation = backdropAdaptation ?? base.backdropAdaptation
+        out.backdropSaturation = backdropSaturation ?? base.backdropSaturation
         out.contentBlurRadius = contentBlurRadius ?? base.contentBlurRadius
         out.glass = glass ?? base.glass
         out.clipsContent = clipsContent ?? base.clipsContent
@@ -300,6 +304,7 @@ extension YogaBoxNode {
             base.flexShrink = flexShrink
             base.backdropBlurRadius = backdropBlurRadius
             base.backdropAdaptation = backdropAdaptation
+            base.backdropSaturation = backdropSaturation
             base.contentBlurRadius = contentBlurRadius
             base.glass = glass
             base.clipsContent = clipsContent
@@ -322,6 +327,7 @@ extension YogaBoxNode {
         // fall back through the baseline so removing `.blur()` actually turns it off.
         backdropBlurRadius = style.backdropBlurRadius ?? base.backdropBlurRadius
         backdropAdaptation = style.backdropAdaptation ?? base.backdropAdaptation
+        backdropSaturation = style.backdropSaturation ?? base.backdropSaturation
         contentBlurRadius = style.contentBlurRadius ?? base.contentBlurRadius
         glass = style.glass ?? base.glass
         clipsContent = style.clipsContent ?? base.clipsContent ?? false
@@ -672,12 +678,17 @@ extension View {
     /// grey, pixel by pixel from the blurred sample, so a panel straddling a
     /// white window and a dark one adapts on each side. Mid-tones and darks
     /// are left alone. 0 is plain frost.
+    ///
+    /// `saturation` is CSS's `saturate()` on the frost, after the blur: 1
+    /// leaves the colour, 0 is grey, 1.7 is the panel's glass — what
+    /// `backdrop-filter: blur() saturate(170%)` asks for. Up to 3.9.
     public func backdropBlur(
-        radius: Float = 8, adaptation: Float = 1
+        radius: Float = 8, adaptation: Float = 1, saturation: Float = 1
     ) -> ModifiedView<Self> {
         styled {
             $0.backdropBlurRadius = max(0.5, radius)
             $0.backdropAdaptation = min(max(adaptation, 0), 1)
+            $0.backdropSaturation = min(max(saturation, 0), 3.9)
         }
     }
 
@@ -888,11 +899,12 @@ extension ModifiedView {
 
     /// See `View.backdropBlur(radius:adaptation:)`.
     public func backdropBlur(
-        radius: Float = 8, adaptation: Float = 1
+        radius: Float = 8, adaptation: Float = 1, saturation: Float = 1
     ) -> ModifiedView<Content> {
         adding {
             $0.backdropBlurRadius = max(0.5, radius)
             $0.backdropAdaptation = min(max(adaptation, 0), 1)
+            $0.backdropSaturation = min(max(saturation, 0), 3.9)
         }
     }
 

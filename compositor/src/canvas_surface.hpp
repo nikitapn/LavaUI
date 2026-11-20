@@ -305,7 +305,7 @@ class CanvasSurface {
                      float radius, const std::string &key,
                      float cornerRadius = 0.f, float refractPx = 0.f,
                      float frost = 0.f, float rim = 0.f,
-                     float magnification = 1.f);
+                     float magnification = 1.f, float saturation = 1.f);
 
   /// Same frost, but the pixels stay on the GPU: `src` is the wlroots
   /// capture's dma-buf, cropped to `srcX,srcY,srcW,srcH`. False if the
@@ -314,7 +314,8 @@ class CanvasSurface {
                        int srcW, int srcH, float radius,
                        const std::string &key, float cornerRadius = 0.f,
                        float refractPx = 0.f, float frost = 0.f,
-                       float rim = 0.f, float magnification = 1.f);
+                       float rim = 0.f, float magnification = 1.f,
+                       float saturation = 1.f);
 
   /// Renders whatever another process publishes into the arena named `id`.
   ///
@@ -456,9 +457,11 @@ class CanvasSurface {
   /// grain of frosted glass. See `BackdropGlass` and `BackdropFrost`.
   /// `rim` (0…1) lights the plate's edge; `magnification` draws the desktop
   /// under it that much larger, about its centre. See `BackdropGlass`.
+  /// `saturation` is what CSS's `saturate()` does to the frost after the
+  /// blur; 1 leaves it.
   bool frostWithTexture(int id, float radius, float cornerRadius,
                         float refractPx, float frost, float rim,
-                        float magnification);
+                        float magnification, float saturation = 1.f);
 
   /// The second half of `resize` and `setScale`, once canvas has resized:
   /// picks up the window's image, which is a new one only if it outgrew the

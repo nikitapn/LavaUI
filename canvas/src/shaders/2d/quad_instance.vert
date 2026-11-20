@@ -50,6 +50,10 @@ layout(location = 10) flat out vec4 vGlass;
 /// which are undefined in the non-uniform branches and after the discards the
 /// fragment shader reaches it through.
 layout(location = 11) flat out vec2 vUvPerPx;
+/// A composite's saturation (CSS `saturate()`), 1 for unchanged. Packed in
+/// `color1`'s red byte by `canvas::encodeSaturation`: 255 is unchanged,
+/// anything else the factor times 64.
+layout(location = 12) flat out float vSaturate;
 
 void main() {
   const vec2 corners[6] = vec2[6](
@@ -78,6 +82,8 @@ void main() {
   vColor = mix(inColor, inColor1, t);
   vDither = dot(inGradAxis, inGradAxis) > 0.0 ? 1.0 : 0.0;
   vAdapt = inKind == 6u ? inColor1.a : 0.0;
+  float satByte = floor(inColor1.r * 255.0 + 0.5);
+  vSaturate = inKind == 6u && satByte < 254.5 ? satByte / 64.0 : 1.0;
   vKind = inKind;
   vAux = inAux;
   vUv = mix(inUv0, inUv1, corner);

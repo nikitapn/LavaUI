@@ -382,7 +382,8 @@ class QuadRenderer {
                            uint32_t rgba = 0xffffffffu,
                            Glass glass = {},
                            float adapt = 0.f,
-                           bool sharp = false);
+                           bool sharp = false,
+                           float saturation = 1.f);
 
   void end();
 

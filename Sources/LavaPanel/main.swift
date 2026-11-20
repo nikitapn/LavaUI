@@ -1524,7 +1524,7 @@ struct PanelView: View {
         .background(palette.glass)
         .border(metrics.style == .floating ? palette.glassBorder : .clear)
         .cornerRadius(metrics.radius)
-        .backdropBlur(radius: 22, adaptation: 0)
+        .backdropBlur(radius: 22, adaptation: 0, saturation: 1.7)
         .underlay {
             Canvas(label: "bar-shadow", width: .pct(100), height: .pct(100)) { list, frame in
                 list.shadow(x: frame.x, y: frame.y + metrics.shadowOffset,

@@ -31,6 +31,8 @@ layout(location = 8) flat in float vDither;
 layout(location = 9) flat in float vAdapt;
 layout(location = 10) flat in vec4 vGlass;
 layout(location = 11) flat in vec2 vUvPerPx;
+/// See quad_instance.vert: CSS `saturate()` on the frost, 1 for none.
+layout(location = 12) flat in float vSaturate;
 layout(binding = 0) uniform sampler2D textures[];
 layout(location = 0) out vec4 outColor;
 
@@ -312,6 +314,15 @@ void main() {
     // Luma of sRGB-encoded values, deliberately: blending happens in encoded
     // space (see quad.frag), so this is the brightness the eye is shown.
     vec3 rgb = sampled.rgb;
+    // Saturation first, as CSS's `backdrop-filter: blur() saturate()` orders
+    // them, and before the compression so that sees the colour shown. Its
+    // matrix is exactly `luma + s·(c − luma)` with these weights, applied to
+    // encoded values as browsers do; clamped to the alpha, since the sample
+    // is premultiplied (and opaque, for a capture).
+    if (vSaturate != 1.0) {
+      float l = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+      rgb = clamp(vec3(l) + vSaturate * (rgb - vec3(l)), vec3(0.0), vec3(sampled.a));
+    }
     float hi = 0.0;
     float luma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
     if (vAdapt > 0.0 && luma > kAdaptKnee) {

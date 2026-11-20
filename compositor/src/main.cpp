@@ -2098,6 +2098,8 @@ struct ClientSurface {
     float rim = 0.f;
     /// How much larger the desktop under it is drawn; 1 is none.
     float magnification = 1.f;
+    /// How much colour the frost keeps after the blur; 1 is unchanged.
+    float saturation = 1.f;
     std::unique_ptr<lava::CanvasSurface> canvas;
     wlr_scene_buffer *node = nullptr;
     std::string key;
@@ -5296,7 +5298,8 @@ class SurfaceRegistry : public lava::CompositorHost {
       if (srcX >= 0 && srcY >= 0 && wlr_buffer_get_dmabuf(captured, &attribs)) {
         frosted = plate.canvas->frostFromDmabuf(
             attribs, srcX, srcY, srcW, srcH, plate.radius, plate.key, frost,
-            plate.refraction, plate.frost, plate.rim, plate.magnification);
+            plate.refraction, plate.frost, plate.rim, plate.magnification,
+            plate.saturation);
       }
       if (!frosted) {
         // The CPU path uploads through the ordinary texture cache, which would
@@ -5313,7 +5316,7 @@ class SurfaceRegistry : public lava::CompositorHost {
                               static_cast<uint32_t>(srcH),
                               plate.radius, plate.key, frost,
                               plate.refraction, plate.frost, plate.rim,
-                              plate.magnification);
+                              plate.magnification, plate.saturation);
       }
       if (!frosted) continue;
       plate.ready = true;
@@ -6593,6 +6596,8 @@ class SurfaceRegistry : public lava::CompositorHost {
         plate.radius = std::clamp(rects[i].radius, 0.f, 64.f);
         plate.rim = std::clamp(rects[i].rim, 0.f, 1.f);
         plate.magnification = std::clamp(rects[i].magnification, 1.f, 4.f);
+        // Up to 3.9: what `canvas::encodeSaturation` can carry.
+        plate.saturation = std::clamp(rects[i].saturation, 0.f, 3.9f);
       }
     }
     wlr_log(WLR_INFO, "surface %u: backdrop blur %.0f over %zu rect(s)", id,

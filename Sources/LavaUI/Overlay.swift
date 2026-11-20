@@ -352,11 +352,14 @@ public enum BackdropBridge {
         /// How much larger the desktop under this plate is drawn — a view's
         /// `.glassEffect(magnification:)`. 1 is none.
         public var magnification: Float
+        /// CSS `saturate()` on this plate's frost; 1 is unchanged.
+        public var saturation: Float
 
         /// Creates a rectangle to frost.
         public init(
             x: Float, y: Float, w: Float, h: Float, cornerRadius: Float,
-            refraction: Float = -1, frost: Float = 0, magnification: Float = 1
+            refraction: Float = -1, frost: Float = 0, magnification: Float = 1,
+            saturation: Float = 1
         ) {
             self.x = x
             self.y = y
@@ -366,6 +369,7 @@ public enum BackdropBridge {
             self.refraction = refraction
             self.frost = frost
             self.magnification = magnification
+            self.saturation = saturation
         }
     }
 
@@ -382,10 +386,13 @@ public enum BackdropBridge {
     public struct WindowPlate: Sendable, Equatable {
         public var radius: Float
         public var glass: GlassEffect?
+        /// CSS `saturate()` on the frost; 1 is unchanged.
+        public var saturation: Float
 
-        public init(radius: Float, glass: GlassEffect?) {
+        public init(radius: Float, glass: GlassEffect?, saturation: Float = 1) {
             self.radius = radius
             self.glass = glass
+            self.saturation = saturation
         }
     }
 
