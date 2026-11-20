@@ -2753,9 +2753,42 @@ extension DrawList {
         if leaf.showsGutter, leaf.gutterWidth > 0 {
             rect(x: x, y: y, w: leaf.gutterWidth, h: h, color: style.gutterBackground)
         }
+        let marks = leaf.lineMarks
+        // Where the bar and the notch sit: the gutter's inner edge, clear of
+        // the right-aligned numbers, or the box's own edge with no gutter.
+        let barX = leaf.showsGutter && leaf.gutterWidth > 0 ? x + leaf.gutterWidth - 6 : x
         for row in firstRow...lastRow {
             let rowTop = rowTopOf(row)
-            if row == caretRow, activeLine != nil || (focused && selection == nil) {
+            var filled = false
+            if !marks.isEmpty {
+                let logical = leaf.logicalLine(ofRow: row)
+                if let mark = Self.lineMark(covering: logical, in: marks) {
+                    if let fill = mark.fill {
+                        rect(
+                            x: x + leaf.gutterWidth, y: rowTop,
+                            w: max(0, w - leaf.gutterWidth), h: lineH, color: fill
+                        )
+                        filled = true
+                    }
+                    if let bar = mark.bar {
+                        rect(x: barX, y: rowTop, w: 3, h: lineH, color: bar)
+                    }
+                }
+                // Removed lines have no row of their own, so they are a notch
+                // on the boundary they were taken from: the top of the line
+                // that now follows, or the bottom of the last line.
+                if leaf.isLineStart(ofRow: row) {
+                    for gap in Self.removals(at: logical, in: marks) {
+                        rect(x: barX - 3, y: rowTop - 2, w: 9, h: 4, color: gap)
+                    }
+                }
+                if row == rows.count - 1 {
+                    for gap in Self.removals(at: leaf.logicalLineCount, in: marks) {
+                        rect(x: barX - 3, y: rowTop + lineH - 2, w: 9, h: 4, color: gap)
+                    }
+                }
+            }
+            if !filled, row == caretRow, activeLine != nil || (focused && selection == nil) {
                 let gutter = activeLine == nil ? leaf.gutterWidth : 0
                 rect(
                     x: x + gutter, y: rowTop,
@@ -3064,6 +3097,42 @@ extension DrawList {
                 w: 10_000, h: h, color: style.text, font: font
             )
         }
+    }
+
+    /// The non-empty mark containing logical line `line`, if any. `marks` is
+    /// sorted by first line; marks do not overlap in any use this has, and
+    /// where they do the later-starting one wins.
+    static func lineMark(covering line: Int, in marks: [EditorLineMark]) -> EditorLineMark? {
+        var lo = 0, hi = marks.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if marks[mid].lines.lowerBound <= line { lo = mid + 1 } else { hi = mid }
+        }
+        var i = lo - 1
+        while i >= 0 {
+            let mark = marks[i]
+            if !mark.lines.isEmpty {
+                return mark.lines.contains(line) ? mark : nil
+            }
+            i -= 1
+        }
+        return nil
+    }
+
+    /// Bar colours of the empty marks — removals — sitting above line `line`.
+    static func removals(at line: Int, in marks: [EditorLineMark]) -> [Color] {
+        var lo = 0, hi = marks.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if marks[mid].lines.lowerBound < line { lo = mid + 1 } else { hi = mid }
+        }
+        var out: [Color] = []
+        var i = lo
+        while i < marks.count, marks[i].lines.lowerBound == line {
+            if marks[i].lines.isEmpty, let bar = marks[i].bar { out.append(bar) }
+            i += 1
+        }
+        return out
     }
 
     /// Draws one line of code coloured by `spans`, the way `EditorView` draws

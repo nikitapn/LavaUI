@@ -340,6 +340,32 @@ public final class EditorController {
     }
 }
 
+/// Whole lines an app wants marked: a bar down the gutter, a fill behind the
+/// text, or both — what a gutter shows for lines changed since the last
+/// commit, or a run of lines a tool wants to point at.
+///
+/// Lines rather than `EditorDecoration`'s character range because what is
+/// marked is the line, not text on it: a fill reaches the right edge however
+/// short the line is, and a wrapped line is marked on every row it takes.
+public struct EditorLineMark: Sendable, Equatable {
+    /// Logical lines, from 0. Empty marks the gap *above* `lines.lowerBound`
+    /// — where lines were removed — with a short notch across the gutter
+    /// instead of a bar; at the line count, below the last line.
+    public var lines: Range<Int>
+    /// Colour of the bar at the gutter's inner edge, or `nil` for none.
+    public var bar: Color?
+    /// Colour behind the marked lines' text, or `nil` for none. Wins over the
+    /// current-line highlight; the caret's line number still shows which it is.
+    public var fill: Color?
+
+    /// Creates a mark. Every parameter matches the property of the same name.
+    public init(lines: Range<Int>, bar: Color? = nil, fill: Color? = nil) {
+        self.lines = lines
+        self.bar = bar
+        self.fill = fill
+    }
+}
+
 /// A code editor: line-number gutter, current-line highlight, rule-based
 /// syntax colouring, and find-match highlighting.
 ///
@@ -391,6 +417,8 @@ public struct EditorView: PrimitiveView {
     public var search: TextSearch
     /// Diagnostics to underline and mark in the gutter.
     public var decorations: [EditorDecoration]
+    /// Whole lines to mark with a gutter bar or a fill. See `EditorLineMark`.
+    public var lineMarks: [EditorLineMark]
     /// Fired when the user clicks a decorated row's gutter icon, instead of
     /// the default "select the whole row" gutter click.
     public var onDecorationTap: ((EditorDecoration) -> Void)?
@@ -411,6 +439,7 @@ public struct EditorView: PrimitiveView {
         visibleLines: Int = 12,
         search: TextSearch = TextSearch(),
         decorations: [EditorDecoration] = [],
+        lineMarks: [EditorLineMark] = [],
         onDecorationTap: ((EditorDecoration) -> Void)? = nil,
         controller: EditorController? = nil,
         onZoom: ((Float) -> Void)? = nil
@@ -425,6 +454,7 @@ public struct EditorView: PrimitiveView {
         self.visibleLines = visibleLines
         self.search = search
         self.decorations = decorations
+        self.lineMarks = lineMarks
         self.onDecorationTap = onDecorationTap
         self.controller = controller
         self.onZoom = onZoom
@@ -523,6 +553,8 @@ public struct EditorView: PrimitiveView {
         // surface, so switching the pointer there would say otherwise.
         leaf.cursor = .text
         leaf.decorations = decorations
+        // Sorted once here so the paint can binary-search a screenful of rows.
+        leaf.lineMarks = lineMarks.sorted { $0.lines.lowerBound < $1.lines.lowerBound }
         leaf.onDecorationTap = onDecorationTap
 
         let binding = _text

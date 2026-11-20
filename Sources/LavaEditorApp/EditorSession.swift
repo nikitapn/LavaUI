@@ -81,6 +81,16 @@ final class EditorSession {
     var diff: DiffModel?
     @ObservationIgnored let diffScroll = ScrollPosition()
 
+    /// HEAD's copy of each open document that has one, by document id. See
+    /// `EditorSession+Git`.
+    var gitBaselines: [Int: GitBaseline] = [:]
+    @ObservationIgnored var baselineGeneration = 0
+    @ObservationIgnored var marksCache: (key: MarksKey, marks: [EditorLineMark])?
+    /// Fill changed lines as well as marking them in the gutter.
+    var highlightsChangedLines: Bool {
+        didSet { AppSettings.set(highlightsChangedLines, forKey: "highlightChangedLines") }
+    }
+
     struct TabDrag {
         var documentID: Int
         var destination: Int
@@ -104,6 +114,7 @@ final class EditorSession {
         fonts = EditorFonts(editor: editor)
         wraps = AppSettings.bool(forKey: "wraps") ?? false
         showLineNumbers = AppSettings.bool(forKey: "lineNumbers") ?? true
+        highlightsChangedLines = AppSettings.bool(forKey: "highlightChangedLines") ?? true
         documents = [EditorDocument(id: takeID(), url: nil, text: "")]
     }
 
@@ -300,6 +311,7 @@ final class EditorSession {
             notice = "\(documents[index].name): \(documents[index].loadError ?? "could not be read")"
         } else if let url = documents[index].url {
             rememberFile(url)
+            refreshBaseline(index)
         }
     }
 
@@ -391,6 +403,9 @@ final class EditorSession {
             return false
         }
         if let url = documents[activeIndex].url { rememberFile(url) }
+        // The file may have just become tracked, or the user committed from
+        // a terminal while it was open; saving is a cheap moment to ask.
+        refreshBaseline(activeIndex)
         notice = "Saved \(documents[activeIndex].name)"
         return true
     }
@@ -410,6 +425,7 @@ final class EditorSession {
             return false
         }
         if let url = documents[activeIndex].url { rememberFile(url) }
+        refreshBaseline(activeIndex)
         notice = "Saved \(documents[activeIndex].name)"
         return true
     }
@@ -419,6 +435,7 @@ final class EditorSession {
               documents[activeIndex].url != nil else { return }
         if documents[activeIndex].load() {
             controller.restore(documents[activeIndex].position ?? .start)
+            refreshBaseline(activeIndex)
             notice = "Reloaded \(documents[activeIndex].name)"
         } else {
             notice = "Could not reload: \(documents[activeIndex].loadError ?? "unknown error")"
@@ -444,6 +461,7 @@ final class EditorSession {
     func close(_ index: Int) {
         guard documents.indices.contains(index) else { return }
         pendingClose = nil
+        gitBaselines[documents[index].id] = nil
         if documents.count == 1 {
             documents = [EditorDocument(id: takeID(), url: nil, text: "")]
             activeIndex = 0

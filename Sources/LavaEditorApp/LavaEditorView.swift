@@ -56,6 +56,7 @@ struct LavaEditorView: View {
                     wraps: session.wraps,
                     visibleLines: 24,
                     search: session.find.isOpen ? session.find.search : TextSearch(),
+                    lineMarks: session.changeMarks(appearance),
                     controller: session.controller,
                     onZoom: { session.zoom(by: $0) }
                 )

@@ -611,6 +611,8 @@ final class LeafNode: YogaBoxNode {
     /// the underline" — see `docs/traceloom-lavaui-gaps.md` #4.
     var decorations: [EditorDecoration] = []
     var onDecorationTap: ((EditorDecoration) -> Void)?
+    /// Whole-line marks, sorted by first line. See `EditorLineMark`.
+    var lineMarks: [EditorLineMark] = []
     /// Vertical scroll offset in pixels. Positive scrolls content up.
     ///
     /// A `Double`, unlike every other coordinate here, because it is the one

@@ -52,6 +52,9 @@ extension EditorSession {
             notice = "git: \(error)"
             return
         }
+        // The comparison just asked git anyway: let the gutter catch up with
+        // a commit made since the file was opened.
+        refreshBaseline(activeIndex)
         let newTitle = document.isModified ? "Editor · \(path) (unsaved)" : "Working tree · \(path)"
         show(DiffModel(
             old: headText, new: document.text, oldTitle: oldTitle, newTitle: newTitle,

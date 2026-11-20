@@ -133,6 +133,9 @@ struct LavaEditorApp {
                         MenuItem("Toggle Line Numbers", id: "view.line-numbers") {
                             session.showLineNumbers.toggle()
                         }
+                        MenuItem("Toggle Changed-Line Highlight", id: "view.change-fills") {
+                            session.highlightsChangedLines.toggle()
+                        }
                     }
                 }
             },
