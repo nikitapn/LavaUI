@@ -12,11 +12,20 @@ struct LavaEditorView: View {
     var body: some View {
         VStack(flexGrow: 1, spacing: 0) {
             EditorTabs(session: session, appearance: appearance)
-            if session.pendingClose != nil { unsavedBar }
-            if session.gotoOpen { gotoBar }
-            if session.find.isOpen { findBar }
-            if let notice = session.notice { noticeBar(notice) }
-            editor(appearance)
+            if let project = session.project, session.showsSidebar {
+                HSplitView(
+                    fraction: $session.sidebarFraction,
+                    minLeading: 160,
+                    minTrailing: 360
+                ) {
+                    ProjectSidebar(session: session, project: project, appearance: appearance)
+                        .agentId("project")
+                } trailing: {
+                    documentColumn
+                }
+            } else {
+                documentColumn
+            }
             statusBar(appearance)
         }
         .background(appearance.theme.panel)
@@ -30,6 +39,17 @@ struct LavaEditorView: View {
     }
 
     // MARK: - The editor
+
+    /// The bars that come and go over the document, and the document.
+    private var documentColumn: some View {
+        VStack(flexGrow: 1, spacing: 0) {
+            if session.pendingClose != nil { unsavedBar }
+            if session.gotoOpen { gotoBar }
+            if session.find.isOpen { findBar }
+            if let notice = session.notice { noticeBar(notice) }
+            editor(appearance)
+        }
+    }
 
     private func editor(_ appearance: EditorAppearance) -> some View {
         VStack(flexGrow: 1, spacing: 0) {

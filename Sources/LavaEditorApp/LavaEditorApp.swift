@@ -50,6 +50,10 @@ struct LavaEditorApp {
                             "Open…", id: "file.open",
                             shortcut: KeyShortcut(KeyCode.o, .primary)
                         ) { session.openFileDialog() }
+                        MenuItem(
+                            "Open Folder…", id: "file.open-folder",
+                            shortcut: KeyShortcut(KeyCode.o, [.primary, .shift])
+                        ) { session.openFolderDialog() }
                         Menu("Recent Files", id: "file.recent") {
                             if session.recentFiles.isEmpty {
                                 MenuItem("No Recent Files", id: "file.recent.empty",
@@ -78,6 +82,8 @@ struct LavaEditorApp {
                             isEnabled: session.active.saveUnavailable == nil
                         ) { session.saveAs() }
                         MenuItem("Reload from Disk", id: "file.reload") { session.reload() }
+                        MenuItem("Close Folder", id: "file.close-folder",
+                                 isEnabled: session.project != nil) { session.closeFolder() }
                         MenuSeparator()
                         MenuItem(
                             "Close Tab", id: "file.close",
@@ -127,6 +133,12 @@ struct LavaEditorApp {
                         ) { session.stepDiff(forward: false) }
                     }
                     Menu("View", id: "view") {
+                        MenuItem(
+                            "Toggle Sidebar", id: "view.sidebar",
+                            shortcut: KeyShortcut(KeyCode.b, .primary)
+                        ) { session.toggleSidebar() }
+                        MenuItem("Refresh Folder", id: "view.refresh-folder",
+                                 isEnabled: session.project != nil) { session.project?.refresh() }
                         MenuItem("Toggle Soft Wrap", id: "view.wrap") {
                             session.wraps.toggle()
                         }

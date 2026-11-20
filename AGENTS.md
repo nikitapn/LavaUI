@@ -1341,6 +1341,7 @@ so headless test runs skip it too.
 | Dropdown / one-of-many switcher | `Sources/LavaUI/ComboBox.swift` |
 | Restoring where an editor was | `EditorPosition`, `EditorController.position()/restore(_:)` |
 | LavaEditor diff and git gutter | `Sources/LavaDiffCore` (line diff, slider, word changes, side-by-side rows; tested), `Sources/LavaGitCore` (the `git` command, not libgit2), `Sources/LavaEditorApp/{DiffModel,DiffView,EditorSession+Diff,EditorSession+Git}.swift`; the gutter is `EditorLineMark` on `EditorView`. HEAD's copy is fetched once per document and every keystroke diffs against it in memory |
+| LavaEditor project tree (Ctrl+B, Open Folder…, `LavaEditor <dir>`) | `Sources/LavaProjectCore` (`ProjectTree`: lazy listing, expand/reveal/restore; `GitDecorations`: status per row, folders take the loudest mark below them; tested), `Sources/LavaEditorApp/{ProjectSession,ProjectSidebar,EditorSession+Project}.swift`. `FolderWatcher` watches the visible folders and `.git`, so a commit in a terminal refreshes the letters and the gutter's copy of HEAD |
 | TraceLoom tabs and workspaces | `Sources/TraceLoomApp/{LogDocument,TraceLoomSession}.swift`, `TraceLoomCore/Workspace.swift` |
 | KeePass password manager | `Sources/LavaPassCore`, `Sources/LavaPassApp`, `Sources/CLavaPass`; `docs/lavapass.md`. Real vaults disable the development agent; use `--demo` for UI tests. |
 | File explorer browse / list | `Sources/LavaExplorerCore`, `Sources/LavaExplorerApp` |

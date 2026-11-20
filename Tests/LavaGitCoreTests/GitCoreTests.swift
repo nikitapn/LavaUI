@@ -23,6 +23,7 @@ final class GitStatusParseTests: XCTestCase {
                 path: "both.txt", kind: .conflicted, staged: .updatedUnmerged, unstaged: .updatedUnmerged
             ),
             GitStatusEntry(path: "untracked/x.txt", kind: .untracked, unstaged: .added),
+            GitStatusEntry(path: "ignored.o", kind: .ignored),
         ])
     }
 
@@ -103,5 +104,18 @@ final class GitRepositoryTests: XCTestCase {
         XCTAssertEqual(status.first { $0.path == "a.txt" }?.unstaged, .modified)
         XCTAssertEqual(status.first { $0.path == "b c.txt" }?.kind, .untracked)
         XCTAssertNotNil(try repo.branch())
+    }
+
+    func testIgnoredDirectoryIsOneEntry() throws {
+        let repo = try XCTUnwrap(GitRepository.containing(directory))
+        try ".build/\n".write(to: directory.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        let build = directory.appendingPathComponent(".build/deep", isDirectory: true)
+        try FileManager.default.createDirectory(at: build, withIntermediateDirectories: true)
+        for i in 0..<5 {
+            try "x".write(to: build.appendingPathComponent("\(i).o"), atomically: true, encoding: .utf8)
+        }
+        let ignored = try repo.status(ignored: true).filter { $0.kind == .ignored }
+        XCTAssertEqual(ignored.map(\.path), [".build/"])
+        XCTAssertTrue(try repo.status().allSatisfy { $0.kind != .ignored })
     }
 }

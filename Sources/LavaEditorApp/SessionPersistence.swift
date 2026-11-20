@@ -10,6 +10,12 @@ struct SavedEditorSession: Codable, Equatable, Sendable {
     var files: [File]
     var activePath: String?
     var fontSize: Int?
+    /// The open folder and which of its folders were expanded. Optional, so a
+    /// session saved before projects existed still decodes.
+    var projectRoot: String?
+    var expandedFolders: [String]?
+    var showsSidebar: Bool?
+    var sidebarFraction: Float?
 }
 
 /// The compositor can exit the process from its input thread. Keep an immutable

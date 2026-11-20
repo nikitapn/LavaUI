@@ -1,0 +1,79 @@
+import Foundation
+import LavaProjectCore
+import LavaUI
+
+/// The project folder: opening one, and keeping its tree on the document in
+/// front.
+extension EditorSession {
+    func openFolderDialog() {
+        guard let folder = FileDialog.openFolder(title: "Open Folder") else { return }
+        openFolder(folder)
+    }
+
+    func openFolder(_ url: URL) {
+        let root = url.standardizedFileURL
+        guard Self.isDirectory(root) else {
+            notice = "\(root.path) is not a folder."
+            return
+        }
+        if project?.tree.root == root {
+            showsSidebar = true
+            return
+        }
+        restoreProject(root.path, expanded: [])
+        showsSidebar = true
+    }
+
+    func closeFolder() {
+        project?.close()
+        project = nil
+    }
+
+    /// Opens `path` as the project with `expanded` folders open, as a
+    /// previous session left it. A folder that has gone since is not an
+    /// error worth a notice at startup; the sidebar simply is not there.
+    func restoreProject(_ path: String, expanded: Set<String>) {
+        let root = URL(fileURLWithPath: path, isDirectory: true)
+        guard Self.isDirectory(root) else { return }
+        project?.close()
+        let project = ProjectSession(root: root, expanded: expanded)
+        let owner = SessionRef(session: self)
+        // A commit, a checkout or a reset moved HEAD under every open file.
+        project.onRepositoryChanged = {
+            let session = owner.session
+            for index in session.documents.indices where session.documents[index].isLoaded {
+                session.refreshBaseline(index)
+            }
+        }
+        self.project = project
+        followActive()
+    }
+
+    /// Opens a file from the tree in a tab, or brings its tab forward.
+    func openFromTree(_ path: String) {
+        guard let project else { return }
+        project.selected = path
+        open([project.tree.url(of: path)])
+    }
+
+    func toggleSidebar() {
+        if project == nil {
+            openFolderDialog()
+        } else {
+            showsSidebar.toggle()
+        }
+    }
+
+    /// Selects the document in front in the tree, opening the folders above
+    /// it — so the tree always says where the file being edited lives.
+    func followActive() {
+        guard let project, let url = active.url else { return }
+        project.reveal(url)
+    }
+
+    static func isDirectory(_ url: URL) -> Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+            && isDirectory.boolValue
+    }
+}

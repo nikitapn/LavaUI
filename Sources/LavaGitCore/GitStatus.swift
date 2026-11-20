@@ -21,6 +21,9 @@ public struct GitStatusEntry: Equatable, Sendable {
         case untracked
         /// Both sides of a merge touched it and it is not resolved.
         case conflicted
+        /// Matches an ignore pattern. A directory is reported once, with a
+        /// trailing `/`, and nothing inside it is listed.
+        case ignored
     }
 
     /// Relative to the repository root, `/`-separated.
@@ -75,6 +78,8 @@ public struct GitStatusEntry: Equatable, Sendable {
                 out.append(GitStatusEntry(
                     path: String(record.dropFirst(2)), kind: .untracked, unstaged: .added
                 ))
+            case "!":
+                out.append(GitStatusEntry(path: String(record.dropFirst(2)), kind: .ignored))
             default:
                 continue
             }

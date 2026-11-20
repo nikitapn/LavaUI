@@ -110,12 +110,14 @@ public struct GitRepository: Sendable, Equatable {
     }
 
     /// The working tree's status: what is modified, staged, new or in conflict.
-    public func status() throws -> [GitStatusEntry] {
-        let result = try GitCommand.run(
-            executable,
-            ["status", "--porcelain=v2", "-z", "--untracked-files=all"],
-            in: root
-        )
+    ///
+    /// With `ignored`, also what the ignore rules match — in git's `matching`
+    /// mode, so an ignored build directory is one entry rather than every
+    /// file under it.
+    public func status(ignored: Bool = false) throws -> [GitStatusEntry] {
+        var arguments = ["status", "--porcelain=v2", "-z", "--untracked-files=all"]
+        if ignored { arguments.append("--ignored=matching") }
+        let result = try GitCommand.run(executable, arguments, in: root)
         guard result.status == 0 else {
             throw GitError.failed(command: "status", message: result.errorText)
         }

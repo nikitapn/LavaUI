@@ -81,6 +81,11 @@ final class EditorSession {
     var diff: DiffModel?
     @ObservationIgnored let diffScroll = ScrollPosition()
 
+    /// The open folder, if any. See `EditorSession+Project`.
+    var project: ProjectSession?
+    var showsSidebar = true
+    var sidebarFraction: Float = 0.24
+
     /// HEAD's copy of each open document that has one, by document id. See
     /// `EditorSession+Git`.
     var gitBaselines: [Int: GitBaseline] = [:]
@@ -122,6 +127,11 @@ final class EditorSession {
     /// selection while reusing an existing tab from the previous session.
     func restoreSession() {
         guard let saved = AppSettings.value(forKey: "session", as: SavedEditorSession.self) else { return }
+        if let root = saved.projectRoot {
+            showsSidebar = saved.showsSidebar ?? true
+            if let fraction = saved.sidebarFraction { sidebarFraction = min(0.6, max(0.1, fraction)) }
+            restoreProject(root, expanded: Set(saved.expandedFolders ?? []))
+        }
         var seen = Set<String>()
         let files = saved.files.filter { $0.path.hasPrefix("/") && seen.insert($0.path).inserted }
         guard !files.isEmpty else { return }
@@ -135,6 +145,7 @@ final class EditorSession {
         }
         controller.restore(active.position ?? .start)
         loadIfNeeded(activeIndex)
+        followActive()
     }
 
     /// Called after the editor emits, including scroll-only redraws. Reading
@@ -148,7 +159,11 @@ final class EditorSession {
         }
         SessionPersistence.shared.checkpoint(.init(
             files: files, activePath: active.url?.standardizedFileURL.path,
-            fontSize: (documentFont ?? FontStore.default).map { Int($0.pixelSize.rounded()) }
+            fontSize: (documentFont ?? FontStore.default).map { Int($0.pixelSize.rounded()) },
+            projectRoot: project?.tree.root.path,
+            expandedFolders: project.map { $0.tree.expanded.subtracting([""]).sorted() },
+            showsSidebar: project == nil ? nil : showsSidebar,
+            sidebarFraction: project == nil ? nil : sidebarFraction
         ))
     }
 
@@ -290,6 +305,7 @@ final class EditorSession {
         // Offsets into the document being left mean nothing in this one.
         find.search = TextSearch()
         if find.isOpen, !find.query.isEmpty { runSearch() }
+        followActive()
     }
 
     /// Records the live editor position on the active document, before
@@ -392,6 +408,7 @@ final class EditorSession {
             documents.remove(at: scratch)
             if scratch < activeIndex { activeIndex -= 1 }
         }
+        followActive()
     }
 
     @discardableResult
@@ -406,6 +423,7 @@ final class EditorSession {
         // The file may have just become tracked, or the user committed from
         // a terminal while it was open; saving is a cheap moment to ask.
         refreshBaseline(activeIndex)
+        project?.refreshStatus()
         notice = "Saved \(documents[activeIndex].name)"
         return true
     }
@@ -683,9 +701,14 @@ final class EditorSession {
             compare(old, with: new)
             return
         }
-        let urls = arguments
+        var urls = arguments
             .filter { !$0.hasPrefix("-") }
             .map { URL(fileURLWithPath: $0) }
+        // A folder on the command line is the project, as `code .` makes it.
+        if let folder = urls.first(where: { $0.hasDirectoryPath || Self.isDirectory($0) }) {
+            openFolder(folder)
+            urls.removeAll { $0.hasDirectoryPath || Self.isDirectory($0) }
+        }
         open(urls)
     }
 
