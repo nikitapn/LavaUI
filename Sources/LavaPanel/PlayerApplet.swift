@@ -133,7 +133,7 @@ struct PlayerWindow: View {
 /// report — or a change between playing and paused — is taken as a fresh
 /// anchor, and the time since it is added while playing.
 final class PlaybackPosition: @unchecked Sendable {
-    nonisolated(unsafe) static let shared = PlaybackPosition()
+    static let shared = PlaybackPosition()
 
     private var reported: Int64 = -1
     private var playing = false
