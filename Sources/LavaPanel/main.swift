@@ -1525,12 +1525,25 @@ struct PanelView: View {
         .border(metrics.style == .floating ? palette.glassBorder : .clear)
         .cornerRadius(metrics.radius)
         .backdropBlur(radius: 22, adaptation: 0, saturation: 1.7)
-        .underlay {
+        // Over the bar, not under it. The frost is a compositor plate *and* an
+        // in-window blur of whatever this surface drew first (`withBlurScope`),
+        // and an underlay is drawn first: the shadow round the bar was blurred
+        // back into the glass as a grey band along its edges. CSS's
+        // `backdrop-filter` never sees its own element's `box-shadow`. A hollow
+        // shadow has nothing inside the bar to cover it with, so on top it
+        // looks the same and is drawn after the capture.
+        .overlayLayer {
             Canvas(label: "bar-shadow", width: .pct(100), height: .pct(100)) { list, frame in
-                list.shadow(x: frame.x, y: frame.y + metrics.shadowOffset,
-                            w: frame.w, h: frame.h, cornerRadius: metrics.radius,
+                // The layer covers the box the margins are padding *inside*
+                // (`.padding` lands on this node, not on a wrapper), so the
+                // bar is that box less the margins — and the caster has to be
+                // the bar, or the hole is cut at the wrong place.
+                list.shadow(x: frame.x + metrics.marginSide, y: frame.y + metrics.marginTop,
+                            w: frame.w - 2 * metrics.marginSide,
+                            h: frame.h - metrics.marginTop, cornerRadius: metrics.radius,
                             blur: metrics.shadowBlur,
-                            color: palette.shadow.opacity(metrics.shadowAlpha), hollow: true)
+                            color: palette.shadow.opacity(metrics.shadowAlpha),
+                            offsetY: metrics.shadowOffset, hollow: true)
             }
         }
         .onFrame { _ in session.barMoved() }

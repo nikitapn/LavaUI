@@ -1018,7 +1018,8 @@ void QuadRenderer::pushCornerMask(vec2 topLeft, vec2 size, float radius) {
 }
 
 void QuadRenderer::pushShadow(vec2 topLeft, vec2 size, float radius,
-                              float blur, uint32_t rgba, bool hollow) {
+                              float blur, uint32_t rgba, bool hollow,
+                              vec2 holeOffset) {
   if (size.x <= 0.0f || size.y <= 0.0f) {
     return;
   }
@@ -1035,9 +1036,12 @@ void QuadRenderer::pushShadow(vec2 topLeft, vec2 size, float radius,
 
   // Hollow rides on the sign of the blur, which is otherwise never negative:
   // the instance has no spare field, and the shader takes `abs` anyway.
+  // The hole's offset rides in the UVs, which a shadow never samples: both
+  // ends equal, so the shader sees it as a constant.
   appendInstance({center.x-ext.x, center.y-ext.y}, {ext.x*2.f, ext.y*2.f},
                  half, r, rgba, Kind::Shadow,
-                 hollow ? -std::max(spread, 1e-3f) : spread);
+                 hollow ? -std::max(spread, 1e-3f) : spread,
+                 holeOffset, holeOffset);
 }
 
 void QuadRenderer::pushCircle(vec2 center, float radius, uint32_t rgba) {

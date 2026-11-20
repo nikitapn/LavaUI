@@ -237,8 +237,13 @@ void main() {
     float a = vColor.a * fall * fall;
     // Hollow (negative aux, `kShadowHollow`): nothing inside the caster, so a
     // translucent plate is not darkened by its own shadow; faded in over the
-    // pixel at the edge to meet the plate's antialiased rim. Same as quad.frag.
-    if (vAux < 0.0) a *= clamp(d / max(fwidth(d), 1e-5) + 0.5, 0.0, 1.0);
+    // pixel at the edge to meet the plate's antialiased rim. The caster is
+    // the shadow moved back by its offset, which rides in `vUv`
+    // (QuadRenderer::pushShadow) — the hole is the plate, not the shadow.
+    if (vAux < 0.0) {
+      float hole = sdRoundBox(vLocal - vUv, vHalfSize, vRadius);
+      a *= clamp(hole / max(fwidth(hole), 1e-5) + 0.5, 0.0, 1.0);
+    }
     if (a <= 0.002) discard;
     // No RGB dither. A shadow is premultiplied black — `rgb = 0, a = falloff`
     // — and adding ±½ a quantization step to the colour (the trick that

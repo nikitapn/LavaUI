@@ -723,20 +723,30 @@ public final class DrawList {
     /// alone. Mirrors `canvas::kShadowHollow`.
     static let shadowHollowBit: UInt32 = 0x8000_0000
 
-    /// A soft shadow under the rounded rect `x,y,w,h`, fading out over `blur`
-    /// pixels past its edge — a CSS `box-shadow` with no spread. Offset it by
-    /// moving the rect.
+    /// A soft shadow cast by the rounded rect `x,y,w,h`, moved by
+    /// `offsetX`,`offsetY` and fading out over `blur` pixels past its edge —
+    /// a CSS `box-shadow` with no spread.
     ///
-    /// `hollow` leaves the inside of the rect undrawn, as CSS does: a shadow
-    /// under a translucent plate would otherwise darken the plate. Opaque
-    /// casters can leave it off and save the discard.
+    /// `hollow` leaves the caster's inside undrawn, as CSS does: a shadow
+    /// under a translucent plate would otherwise darken the plate. The hole
+    /// is the caster's rect, not the moved one — cut at the shadow's own, a
+    /// shadow dropped below a glass bar shows its falloff inside the bar's
+    /// top edge. Opaque casters can leave it off and save the discard.
     public func shadow(
         x: Float, y: Float, w: Float, h: Float, cornerRadius: Float,
-        blur: Float, color: Color, hollow: Bool = false
+        blur: Float, color: Color, offsetX: Float = 0, offsetY: Float = 0,
+        hollow: Bool = false
     ) {
         let blurPx = UInt32(max(0, min(blur, 4096)).rounded())
-        append(kind: .shadow, x: x, y: y, w: w, h: h, color: color,
-               param: blurPx | (hollow ? Self.shadowHollowBit : 0), aux: cornerRadius)
+        // The caster relative to the shadow, as 9-bit two's complement in
+        // bits 13–21 (x) and 22–30 (y); see `canvas::shadowHoleOffset`.
+        func field(_ v: Float) -> UInt32 {
+            UInt32(bitPattern: Int32(max(-255, min(255, (-v).rounded())))) & 0x1ff
+        }
+        let hole = hollow ? (field(offsetX) << 13) | (field(offsetY) << 22) : 0
+        append(kind: .shadow, x: x + offsetX, y: y + offsetY, w: w, h: h, color: color,
+               param: blurPx | hole | (hollow ? Self.shadowHollowBit : 0),
+               aux: cornerRadius)
     }
 
     /// Fills a circle centred on `cx`,`cy`.

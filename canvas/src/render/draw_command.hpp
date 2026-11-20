@@ -184,8 +184,11 @@ enum class DrawCommandKind : uint32_t {
   ///   aux        = corner radius, which must match the window's or the
   ///                shadow will not sit under it
   ///   param      = blur in pixels: how far the fade reaches past the rect,
-  ///                with `kShadowHollow` set to leave the rect's own inside
-  ///                undrawn (a shadow under a translucent plate, CSS-style)
+  ///                with `kShadowHollow` set to leave the caster's inside
+  ///                undrawn (a shadow under a translucent plate, CSS-style).
+  ///                The caster is the rect moved back by the offset packed
+  ///                in the middle bits (`shadowHoleOffset`), so a shadow
+  ///                dropped below its plate is still cut at the plate
   ///   color      = the shadow's colour and its opacity at full strength
   ///
   /// A shape rather than a post-process, because that is what it is: a
@@ -288,8 +291,24 @@ enum class DrawCommandKind : uint32_t {
 };
 
 /// In a `Shadow` command's `param`: the bit that makes it hollow. The blur
-/// is the low bits; nobody blurs by two billion pixels.
+/// is the low 13 bits; nobody blurs by more than 8191 pixels.
 inline constexpr uint32_t kShadowHollow = 0x80000000u;
+inline constexpr uint32_t kShadowBlurMask = 0x1fffu;
+
+/// Where a hollow shadow's caster sits relative to the shadow, in whole
+/// pixels: x in bits 13–21 and y in bits 22–30, each a 9-bit two's
+/// complement (±255). The shadow is the caster moved by an offset, and CSS
+/// cuts the hole at the *caster* — cut at the shadow's own rect, a shadow
+/// dropped 8px below a translucent bar darkened the bar's top 8px with its
+/// own falloff. Zero on everything written before the offset existed.
+inline void shadowHoleOffset(uint32_t param, float &dx, float &dy) {
+  auto field = [](uint32_t bits) {
+    const int32_t v = static_cast<int32_t>(bits & 0x1ffu);
+    return static_cast<float>(v >= 256 ? v - 512 : v);
+  };
+  dx = field(param >> 13);
+  dy = field(param >> 22);
+}
 
 /// Backdrop saturation, as one byte: what CSS's `saturate()` does to the
 /// frost after the blur. 255 is "unchanged" — it is what every producer that
