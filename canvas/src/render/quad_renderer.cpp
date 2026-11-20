@@ -1151,12 +1151,20 @@ void QuadRenderer::pushGlyph(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1,
 }
 
 void QuadRenderer::pushImage(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1,
-                             uint32_t rgba, VkImageView textureView)
+                             uint32_t rgba, VkImageView textureView,
+                             vec2 clipHalf, float clipRadius)
 {
   if (size.x <= 0.0f || size.y <= 0.0f || textureView == VK_NULL_HANDLE) {
     return;
   }
   ensureBatchTexture(textureView);
+  if (clipHalf.x > 0.f && clipHalf.y > 0.f) {
+    // Cut to a rounded box centred on the picture (`ImageClip`); the shader
+    // reads an image's outline from the half size it is given, glass or not.
+    const float r = std::min(clipRadius, std::min(clipHalf.x, clipHalf.y));
+    appendInstance(topLeft, size, clipHalf, r, rgba, Kind::Image, 0.f, uv0, uv1);
+    return;
+  }
   if (glass_.active()) {
     // Glass needs the outline the shader measures the rim from, which a plain
     // image never states. No bleed: the picture ends where its pixels do, and

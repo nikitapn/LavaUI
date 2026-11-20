@@ -74,6 +74,10 @@ public enum DrawKind: UInt32 {
     /// `h` = frost, 0…1, `x` = magnification (0 or 1: none).
     /// See `Glass` in `draw_command.hpp`.
     case glass = 25
+    /// Rounded corners for the next image: `x,y,w,h` = the box it is cut
+    /// to, centred on the picture; `aux` = corner radius. See `ImageClip` in
+    /// `draw_command.hpp`.
+    case imageClip = 26
     /// A soft shadow cast by a rounded rect: `aux` = corner radius, `param` =
     /// blur in pixels, with `DrawList.shadowHollowBit` set when nothing is to
     /// be drawn inside the rect. See `Shadow` in `draw_command.hpp`.
@@ -2227,6 +2231,14 @@ public final class DrawList {
             // picture in a square box never shows this, a 16:9 thumbnail does.
             let overflows = dest.w > w + 0.5 || dest.h > h + 0.5
             if overflows { pushClip(x: x, y: y, w: w, h: h) }
+            // `.cornerRadius` on an image rounds the picture, cut to the box
+            // when `.fill` overshoots it and to the picture's own rect when
+            // it does not. Glass on it carries its own outline instead.
+            if leaf.cornerRadius > 0, leaf.glass == nil {
+                let box = overflows ? (x: x, y: y, w: w, h: h) : dest
+                append(kind: .imageClip, x: box.x, y: box.y, w: box.w, h: box.h,
+                       color: Color(r: 1, g: 1, b: 1), aux: leaf.cornerRadius)
+            }
             withGlass(leaf.glass, cornerRadius: leaf.cornerRadius) {
                 self.image(
                     img,

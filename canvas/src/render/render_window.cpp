@@ -1674,6 +1674,10 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
   // fill, image or backdrop and cleared there, so it can never leak onto a
   // later quad — see `DrawCommandKind::Glass`.
   QuadRenderer::Glass pendingGlass;
+  // An `ImageClip` waiting for its image: the rounded box's half size and
+  // radius, or a zero half size for none. Taken by the next image.
+  vec2 pendingClipHalf{0.f, 0.f};
+  float pendingClipRadius = 0.f;
   const auto takeGlass = [&pendingGlass] {
     const QuadRenderer::Glass glass = pendingGlass;
     pendingGlass = {};
@@ -1980,6 +1984,10 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       opacity           = node.parentOpacity;
       break;
     }
+    case canvas::DrawCommandKind::ImageClip:
+      pendingClipHalf = {std::max(0.f, cmd.w) * 0.5f, std::max(0.f, cmd.h) * 0.5f};
+      pendingClipRadius = std::max(0.f, cmd.aux);
+      break;
     case canvas::DrawCommandKind::Glass:
       pendingGlass = {
         .refractPx = std::max(0.f, cmd.aux),
@@ -2200,6 +2208,10 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       // Taken up front: an image that turns out not to be drawable still
       // consumed its prefix, or the glass would land on whatever came next.
       const QuadRenderer::Glass glass = takeGlass();
+      const vec2 clipHalf = pendingClipHalf;
+      const float clipRadius = pendingClipRadius;
+      pendingClipHalf = {0.f, 0.f};
+      pendingClipRadius = 0.f;
       uint32_t texId = cmd.param;
       if (static_cast<canvas::DrawCommandKind>(cmd.kind) ==
           canvas::DrawCommandKind::ImageSurface) {
@@ -2219,7 +2231,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       tm.getTextureUV(texId, uv0, uv1);
       quads_.setGlass(glass);
       quads_.pushImage({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h}, uv0, uv1,
-                       faded(cmd.color), view);
+                       faded(cmd.color), view, clipHalf, clipRadius);
       quads_.setGlass({});
       break;
     }

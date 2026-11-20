@@ -363,6 +363,13 @@ void main() {
       return;
     }
     vec4 c = texture(textures[nonuniformEXT(vTextureIndex)], vUv) * vColor;
+    // Rounded (`ImageClip`): cut to the box it was given, antialiased like
+    // any rounded fill. A plain image states no outline and skips this.
+    if (vHalfSize.x > 0.0) {
+      float d = sdRoundBox(vLocal, vHalfSize, vRadius);
+      float aa = max(fwidth(d), 1e-5);
+      c *= 1.0 - smoothstep(-aa, aa, d);
+    }
     if (c.a <= 0.001) discard;
     outColor = vec4(c.rgb * c.a, c.a);
     return;

@@ -288,6 +288,17 @@ enum class DrawCommandKind : uint32_t {
   ///
   /// A reader that predates it skips it, and the view draws without glass.
   Glass = 25,
+  /// Rounded corners for the *next* `Image` or `ImageSurface` — a prefix,
+  /// like `Glass`, because an image's own command has no field left.
+  ///
+  ///   x, y, w, h = the rounded box the picture is cut to
+  ///   aux        = its corner radius
+  ///
+  /// The box is centred on the image's own rect: the picture itself for
+  /// `.fit` and `.stretch`, and the layout box for `.fill`, whose picture
+  /// overshoots it on one axis and is cut back to it — which is why the box
+  /// is stated rather than taken from the image's rect.
+  ImageClip = 26,
 };
 
 /// In a `Shadow` command's `param`: the bit that makes it hollow. The blur

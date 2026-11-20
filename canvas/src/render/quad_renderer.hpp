@@ -308,8 +308,11 @@ class QuadRenderer {
   /// Full-color textured quad. `textureView` is sampled as RGBA; `uv0`/`uv1`
   /// are the source rect (usually (0,0)-(1,1)). The view becomes a bindless
   /// table slot carried by the vertices, so changing it does not end a batch.
+  /// `clipHalf`/`clipRadius`: a rounded box, centred on the picture, to cut
+  /// it to (`ImageClip`); a zero half size for none.
   void pushImage(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1, uint32_t rgba,
-                 VkImageView textureView);
+                 VkImageView textureView, vec2 clipHalf = {0.f, 0.f},
+                 float clipRadius = 0.f);
 
   /// Filled arbitrary polygon, flat-shaded (no SDF distance calc — the mesh
   /// boundary *is* the edge). `points` are absolute pixel positions.

@@ -1126,7 +1126,7 @@ final class MenuSession {
             return
         }
         let anchor = popupAnchor(under: "applet.player", width: PlayerWindow.width,
-                                 rightOverhang: 24)
+                                 leftAligned: true)
         var opened: WindowID?
         opened = LavaApp.openPopup(
             title: "Player",
@@ -1458,19 +1458,25 @@ struct PanelView: View {
             )
             .font(fonts.label)
 
-            Canvas(label: "divider", width: .pt(13), height: .pt(18)) { list, frame in
-                list.rect(x: frame.x + 6, y: frame.y, w: 1, h: frame.h, color: palette.divider)
+            // What is playing, after the menus. The workspace dots used to
+            // sit here, and every application's menus are a different width,
+            // so switching workspace moved the dots out from under the
+            // pointer that had just clicked them.
+            if mpris.present {
+                Canvas(label: "divider", width: .pt(13), height: .pt(18)) { list, frame in
+                    list.rect(x: frame.x + 6, y: frame.y, w: 1, h: frame.h,
+                              color: palette.divider)
+                }
+                NowPlayingChip(mpris: mpris, metrics: metrics, palette: palette, fonts: fonts)
             }
-
-            WorkspaceDots(workspaces: session.workspaceDots, metrics: metrics, palette: palette)
 
             // Pushes the rest to the far end: an empty growing child is the
             // spacer, since the stack distributes leftover space by flex.
             HStack(flexGrow: 1, padding: 0) {}
 
-            if mpris.present {
-                NowPlayingChip(mpris: mpris, metrics: metrics, palette: palette, fonts: fonts)
-            }
+            // At the right, where nothing before them changes width with
+            // the focused window.
+            WorkspaceDots(workspaces: session.workspaceDots, metrics: metrics, palette: palette)
 
             trayStrip(palette: palette, metrics: metrics)
 
@@ -1525,11 +1531,20 @@ struct PanelView: View {
     private func trayStrip(palette: PanelPalette, metrics: PanelMetrics) -> some View {
         let items = tray?.items ?? []
         if !items.isEmpty {
+            // A capsule of their own beside the system one, drawn the same
+            // way: other programs' icons, kept apart from the panel's own
+            // so the cluster that is always there does not change width
+            // when an applet comes and goes.
+            let size = metrics.control - 4
             HStack(padding: 0, alignment: .center, spacing: 2) {
                 ForEach(items) { item in
-                    trayIcon(item, palette: palette, size: metrics.control - 4)
+                    trayIcon(item, palette: palette, size: size)
                 }
             }
+            .padding(2)
+            .background(palette.chip)
+            .cornerRadius((size + 4) / 2)
+            .agentId("tray.apps")
         }
     }
 
@@ -1559,14 +1574,19 @@ struct PanelView: View {
             }
         ) {
             // Fixed size so a large IconPixmap does not blow the bar height;
-            // the same disc the built-in tray glyphs sit on.
-            if let image = item.image {
+            // the same disc the built-in tray glyphs sit on. 18 on 22: these
+            // are pictures, not strokes, and at 16 an app's logo is mush.
+            if let path = item.iconPath {
+                Image(path: path, width: .pt(size - 4), height: .pt(size - 4),
+                      contentMode: .fit)
+                    .padding(2)
+            } else if let image = item.image {
                 Image(
                     image,
-                    width: .pt(size - 6), height: .pt(size - 6),
+                    width: .pt(size - 4), height: .pt(size - 4),
                     contentMode: .fit
                 )
-                .padding(3)
+                .padding(2)
             } else {
                 Text(item.fallback, color: palette.text)
                     .padding(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))

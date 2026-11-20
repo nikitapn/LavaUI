@@ -25,7 +25,14 @@ public final class StatusNotifierTray {
         public var hasMenu: Bool
         /// A left click should open that menu rather than call `Activate`.
         public var prefersMenu: Bool
-        /// Drawn when non-nil; otherwise the panel shows a letter fallback.
+        /// The icon theme's file for it, when there is one: drawn with
+        /// `Image(path:)`, which decodes at the size it is drawn — an SVG
+        /// rasterised there, a 48px PNG resampled down properly — rather than
+        /// at the file's own size and shrunk by the GPU.
+        public var iconPath: String?
+        /// The item's own pixels (`IconPixmap`), already brought down to
+        /// `iconPixels`, when it has no theme file. With neither, the panel
+        /// shows a letter fallback.
         public var image: UIImage?
         /// Single character when there is no icon.
         public var fallback: String
@@ -33,6 +40,11 @@ public final class StatusNotifierTray {
 
     private let editor: Editor
     private var revision: UInt64 = 0
+    /// The longest edge an `IconPixmap` is uploaded at. Electron apps send
+    /// 256px pictures, and drawn at 18 the GPU's one bilinear tap from that
+    /// far away is a speckle; averaged down here first, the GPU is left at
+    /// most a 2:1 step. Twice the drawn size, so a 2× screen is native.
+    public var iconPixels = 36
     /// Last uploaded pixmap key → texture, so we do not re-upload every poll.
     private var pixmapKeys: [String: String] = [:]
 
@@ -183,7 +195,8 @@ public final class StatusNotifierTray {
         for i in 0..<count {
             let info = editor.statusNotifierItem(i)
             liveKeys.insert(info.key)
-            let image = resolveImage(info)
+            let iconPath = info.iconPath.isEmpty ? nil : info.iconPath
+            let image = iconPath == nil ? resolveImage(info) : nil
             let label = info.title.isEmpty
                 ? (info.id.isEmpty ? "?" : info.id)
                 : info.title
@@ -202,6 +215,7 @@ public final class StatusNotifierTray {
                 isMenu: info.isMenu,
                 hasMenu: info.hasMenu,
                 prefersMenu: info.prefersMenu,
+                iconPath: iconPath,
                 image: image,
                 fallback: fallback
             ))
@@ -212,30 +226,74 @@ public final class StatusNotifierTray {
         items = next
     }
 
+    /// The item's `IconPixmap`, averaged down to `iconPixels` and uploaded.
     private func resolveImage(_ info: StatusNotifierItemInfo) -> UIImage? {
-        // Prefer a theme file we resolved on the C++ side.
-        if !info.iconPath.isEmpty,
-           let img = ImageStore.load(path: info.iconPath, into: editor)
-        {
-            return img
-        }
-        // Raw IconPixmap from the bus.
         if info.iconWidth > 0, info.iconHeight > 0,
            info.iconRgba.count >= info.iconWidth * info.iconHeight * 4
         {
+            let (pixels, w, h) = Self.areaDownscale(
+                info.iconRgba, width: info.iconWidth, height: info.iconHeight,
+                maxEdge: iconPixels
+            )
             let cacheKey =
-                "sni-pixmap:\(info.key):\(info.iconWidth)x\(info.iconHeight):\(info.iconRgba.count)"
+                "sni-pixmap:\(info.key):\(info.iconWidth)x\(info.iconHeight):\(info.iconRgba.count)@\(w)"
             if let img = editor.uploadImage(
                 key: cacheKey,
                 path: info.key,
-                pixels: info.iconRgba,
-                width: UInt32(info.iconWidth),
-                height: UInt32(info.iconHeight)
+                pixels: pixels,
+                width: UInt32(w),
+                height: UInt32(h)
             ) {
                 pixmapKeys[info.key] = cacheKey
                 return img
             }
         }
         return nil
+    }
+
+    /// Straight RGBA shrunk so its longer edge is at most `maxEdge`, by
+    /// averaging every source pixel each output pixel covers — weighted by
+    /// alpha, so the transparent margin round an icon does not darken its
+    /// edge. Returned unchanged when it is already small enough.
+    static func areaDownscale(
+        _ rgba: [UInt8], width: Int, height: Int, maxEdge: Int
+    ) -> ([UInt8], Int, Int) {
+        let long = max(width, height)
+        guard maxEdge > 0, long > maxEdge else { return (rgba, width, height) }
+        let scale = Double(maxEdge) / Double(long)
+        let ow = max(1, Int((Double(width) * scale).rounded()))
+        let oh = max(1, Int((Double(height) * scale).rounded()))
+        var out = [UInt8](repeating: 0, count: ow * oh * 4)
+        let sx = Double(width) / Double(ow), sy = Double(height) / Double(oh)
+        for oy in 0..<oh {
+            let y0 = Double(oy) * sy, y1 = y0 + sy
+            for ox in 0..<ow {
+                let x0 = Double(ox) * sx, x1 = x0 + sx
+                var r = 0.0, g = 0.0, b = 0.0, a = 0.0, area = 0.0
+                for y in Int(y0)..<min(height, Int(y1.rounded(.up))) {
+                    let wy = min(Double(y + 1), y1) - max(Double(y), y0)
+                    guard wy > 0 else { continue }
+                    for x in Int(x0)..<min(width, Int(x1.rounded(.up))) {
+                        let wx = min(Double(x + 1), x1) - max(Double(x), x0)
+                        guard wx > 0 else { continue }
+                        let w = wx * wy
+                        let i = (y * width + x) * 4
+                        let alpha = Double(rgba[i + 3]) / 255
+                        r += Double(rgba[i]) * alpha * w
+                        g += Double(rgba[i + 1]) * alpha * w
+                        b += Double(rgba[i + 2]) * alpha * w
+                        a += alpha * w
+                        area += w
+                    }
+                }
+                let o = (oy * ow + ox) * 4
+                guard area > 0, a > 0 else { continue }
+                out[o] = UInt8(min(255, (r / a).rounded()))
+                out[o + 1] = UInt8(min(255, (g / a).rounded()))
+                out[o + 2] = UInt8(min(255, (b / a).rounded()))
+                out[o + 3] = UInt8(min(255, (a / area * 255).rounded()))
+            }
+        }
+        return (out, ow, oh)
     }
 }

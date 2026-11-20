@@ -397,26 +397,34 @@ extension PanelIcons {
 }
 
 extension MenuSession {
-    /// Where a popup hangs: 10pt under the bar — the compositor adds its own
-    /// 6 to an anchor's bottom — with its right edge `rightOverhang` past the
-    /// right edge of what opened it, as the design places each card.
+    /// Where a popup hangs: the style's gap under the bar — the compositor
+    /// adds its own 6 to an anchor's bottom — with its right edge
+    /// `rightOverhang` past the right edge of what opened it, as the design
+    /// places each card on the right of the bar. `leftAligned` lines its left
+    /// edge up with the trigger's instead, for something on the left of the
+    /// bar (the now-playing chip), whose card would otherwise run off the
+    /// screen's left edge and be pushed back to it.
     ///
     /// Falls back to the right end of the screen before the first layout.
-    func popupAnchor(under sid: String, width: Float, rightOverhang: Float = 0)
+    func popupAnchor(under sid: String, width: Float, rightOverhang: Float = 0,
+                     leftAligned: Bool = false)
         -> LavaApp.SurfaceAnchor
     {
         let host = LavaApp.mainLayoutHost
         let bar = host?.agentFrame(sid: "panel.bar")
         let barBottom = (bar.map { $0.y + $0.h } ?? panelMetrics.marginTop + panelMetrics.barHeight)
-        let right: Float
-        if let trigger = host?.agentFrame(sid: sid) {
-            right = trigger.x + trigger.w + rightOverhang
+        let trigger = host?.agentFrame(sid: sid)
+        let x: Float
+        if leftAligned, let trigger {
+            x = trigger.x
+        } else if let trigger {
+            x = trigger.x + trigger.w + rightOverhang - width
         } else {
-            right = (editor?.framebufferSize().w ?? 1280) - panelMetrics.marginSide
+            x = (editor?.framebufferSize().w ?? 1280) - panelMetrics.marginSide - width
         }
         // The compositor places a popup 6px under its anchor; the anchor's
         // height makes up the rest of the gap the style asks for.
-        return LavaApp.SurfaceAnchor(x: max(0, right - width), y: barBottom - 1, w: 1,
+        return LavaApp.SurfaceAnchor(x: max(0, x), y: barBottom - 1, w: 1,
                                      h: 1 + panelMetrics.popupGap - 6)
     }
 }
