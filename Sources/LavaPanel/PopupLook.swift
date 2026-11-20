@@ -174,6 +174,43 @@ struct PopupCard<Content: View>: View {
     }
 }
 
+/// A card whose rows scroll once there are more than fit: Wi-Fi, sound,
+/// Bluetooth.
+///
+/// The padding above and below is the card's, outside the scroll, not the
+/// rows'. A scroll view clips to a rectangle and the card's corners are 24px
+/// round, so a viewport that reached the card's edge let a row scrolled to
+/// the bottom draw through the curve and over the rim. Inset by the padding,
+/// the rectangle's corners sit inside the curve.
+struct ScrollingCard<Content: View>: View {
+    var padding: Float
+    var content: Content
+
+    init(padding: Float, @ViewBuilder content: () -> Content) {
+        self.padding = padding
+        self.content = content()
+    }
+
+    var body: some View {
+        let padding = padding
+        // On a stack around the scroll view, not on the scroll view: padding
+        // there lands inside the scroll node, which keeps the node — and its
+        // clip — the card's full height.
+        return PopupCard(padding: 0) {
+            VStack(flexGrow: 1, padding: 0, spacing: 0) {
+                ScrollView(showsIndicator: true) {
+                    VStack(padding: 0, spacing: 0) {
+                        content
+                    }
+                    .padding(EdgeInsets(top: 0, leading: padding, bottom: 0, trailing: padding))
+                }
+                .agentId("card.scroll")
+            }
+            .padding(EdgeInsets(top: padding, leading: 0, bottom: padding, trailing: 0))
+        }
+    }
+}
+
 /// The design's controls, as LavaUI styles.
 enum PopupStyles {
     /// 42×24, accent when on, the knob white either way.

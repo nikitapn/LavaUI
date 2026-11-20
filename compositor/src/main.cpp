@@ -4329,12 +4329,26 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Panels live in a tree created after the workspaces, so they draw on
   /// top of every window. Disabling their nodes is what makes fullscreen
   /// actually cover the screen rather than sit under the panel.
+  ///
+  /// The frost plates too: they are the panel's node's siblings, not its
+  /// children, so a panel that frosts left a blurred strip of the desktop
+  /// over the game when only its node went.
   void syncShellForFullscreen() {
     const bool hide = fullscreenCoversShell();
+    bool returned = false;
     for (auto &s : surfaces_) {
       if (!s->panel || s->node == nullptr) continue;
-      wlr_scene_node_set_enabled(&s->node->node, !hide && frameShown(*s));
+      const bool show = !hide && frameShown(*s);
+      returned |= show && !s->node->node.enabled && !s->frostPlates.empty();
+      wlr_scene_node_set_enabled(&s->node->node, show);
+      for (auto &plate : s->frostPlates) {
+        if (plate.node == nullptr) continue;
+        wlr_scene_node_set_enabled(&plate.node->node, show && plate.ready);
+      }
     }
+    // Back from under a game: the plate is a picture of the desktop as it
+    // was when the game took the screen.
+    if (returned) scheduleBackdropRefresh();
   }
 
   /// How big the primary output currently is. Used to size a fullscreen
@@ -5107,7 +5121,13 @@ class SurfaceRegistry : public lava::CompositorHost {
     // positions it): its plate is captured now, before the reveal, so the
     // popup comes up frosted. See `applyBackdrop`.
     const bool heldPopup = surface.popup && surface.awaitingFirstFrame;
-    if (surface.minimized || surface.fullscreen ||
+    // A panel a fullscreen window has taken down is in the same position as a
+    // minimized window: nothing to be a picture for. And it has to stop here
+    // rather than below, because below puts the surface's node back on with
+    // `frameShown`, which knows nothing of fullscreen — every recapture
+    // after a game went fullscreen brought the whole panel back over it.
+    const bool shellHidden = surface.panel && fullscreenCoversShell();
+    if (surface.minimized || surface.fullscreen || shellHidden ||
         (surface.menu && !visible(surface) && !heldPopup)) {
       hidePlates(surface);
       return;

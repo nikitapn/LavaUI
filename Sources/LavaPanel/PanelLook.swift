@@ -55,8 +55,14 @@ struct PanelMetrics {
     /// The surface, which has to hold the shadow as well as the bar. Deeper
     /// than `reserved`: the shadow falls over the windows below, and the
     /// input region keeps the pointer from noticing.
+    ///
+    /// And deep enough for a tooltip under a control: a label is placed
+    /// below its anchor only when it fits in the window, and otherwise flips
+    /// above — which, at the top of the screen, clamped it straight down onto
+    /// the icon it was naming. 6px gap, a label about 26px tall, 4px margin.
     var surfaceHeight: Float {
-        marginTop + barHeight + shadowOffset + shadowBlur
+        max(marginTop + barHeight + shadowOffset + shadowBlur,
+            marginTop + barHeight + 40)
     }
 
     /// The bar's rectangle in the surface.
@@ -289,10 +295,10 @@ struct GlassIconButton: View {
         return HStack(width: .pt(size), height: .pt(size), padding: 0, alignment: .center, spacing: 0,
                       onPointer: { _, button in onPointer(button) },
                       onWheel: onWheel.map { wheel in { _, dy in wheel(dy) } }) {
-            Spacer()
+            // The disc's own square, glyph at its exact centre: 15 on 26
+            // between spacers came out half a pixel right and low.
             Icon(icon, size: glyph, color: color, strokeWidth: strokeWidth,
-                 faint: faint, faintColor: faintColor)
-            Spacer()
+                 faint: faint, faintColor: faintColor, box: size)
         }
         .background(fill)
         .hoverBackground(hover)

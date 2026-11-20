@@ -1706,6 +1706,11 @@ final class StackNode: YogaBoxNode {
         onWheel: ((Float, Float) -> Void)? = nil
     ) {
         apply(style)
+        // The stack's own size can change between bodies — a workspace dot
+        // that is 26 wide when current and 8 otherwise — and a modifier on it
+        // replays its style over the first snapshot. Without this the dot kept
+        // the width it was mounted with whatever it was told after.
+        syncLayoutBaseline()
         self.onClick = onClick
         self.onPointer = onPointer
         self.onHover = onHover

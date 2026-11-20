@@ -15,13 +15,9 @@ struct BluetoothWindow: View {
 
     var body: some View {
         let blocks = isSearch ? BluetoothBlock.searchBlocks(bluetooth) : BluetoothBlock.blocks(bluetooth)
-        return PopupCard(padding: 0) {
-            ScrollView(showsIndicator: true) {
-                VStack(padding: BluetoothBlock.padding, spacing: 0) {
-                    ForEach(blocks) { block in
-                        row(block).frame(height: .pt(block.height))
-                    }
-                }
+        return ScrollingCard(padding: BluetoothBlock.padding) {
+            ForEach(blocks) { block in
+                row(block).frame(height: .pt(block.height))
             }
         }
         .agentId(isSearch ? "bluetooth.search" : "bluetooth.window")

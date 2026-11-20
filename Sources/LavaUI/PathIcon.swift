@@ -31,10 +31,19 @@ public struct Icon: View {
     /// disc. Measured over `shapes` and `faint` together, so a glyph whose
     /// faint part changes does not move.
     public var centersInk: Bool
+    /// The square the view takes, with the glyph drawn at its exact centre;
+    /// `nil` for the glyph's own `size`.
+    ///
+    /// For a glyph centred on something whose size differs from it by an
+    /// odd number of points — a 15pt glyph on a 26pt disc. Centred between
+    /// spacers instead, its box starts at 5.5, layout rounds that to 6, and
+    /// the glyph sits half a pixel off. Drawn from the box, the strokes land
+    /// where they belong; they are antialiased and need no whole pixel.
+    public var box: Float?
 
     public init(_ shapes: [IconShape], size: Float = 16, color: Color = .primary,
                 strokeWidth: Float = 2, faint: [IconShape] = [],
-                faintColor: Color = .clear, centersInk: Bool = true) {
+                faintColor: Color = .clear, centersInk: Bool = true, box: Float? = nil) {
         self.shapes = shapes
         self.size = size
         self.color = color
@@ -42,6 +51,7 @@ public struct Icon: View {
         self.faint = faint
         self.faintColor = faintColor
         self.centersInk = centersInk
+        self.box = box
     }
 
     /// One path, the common case: `Icon("M18 6 6 18M6 6l12 12", size: 12)`.
@@ -55,9 +65,11 @@ public struct Icon: View {
         let faint = faint, faintColor = faintColor
         let shift = centersInk ? IconPathCache.inkOffset(shapes + faint, strokeWidth: strokeWidth)
                                : (x: Float(0), y: Float(0))
-        return Canvas(label: "icon", width: .pt(size), height: .pt(size)) { list, frame in
+        let side = box ?? size
+        return Canvas(label: "icon", width: .pt(side), height: .pt(side)) { list, frame in
             let scale = size / 24
-            let x = frame.x + shift.x * scale, y = frame.y + shift.y * scale
+            let inset = (side - size) / 2
+            let x = frame.x + inset + shift.x * scale, y = frame.y + inset + shift.y * scale
             if !faint.isEmpty {
                 list.strokeIcon(faint, x: x, y: y, size: size,
                                 color: faintColor, strokeWidth: strokeWidth)

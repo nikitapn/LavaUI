@@ -15,13 +15,9 @@ struct NetworkWindow: View {
 
     var body: some View {
         let blocks = isList ? NetworkBlock.listBlocks(network) : NetworkBlock.blocks(network)
-        return PopupCard(padding: 0) {
-            ScrollView(showsIndicator: true) {
-                VStack(padding: NetworkBlock.padding, spacing: 0) {
-                    ForEach(blocks) { block in
-                        row(block).frame(height: .pt(block.height))
-                    }
-                }
+        return ScrollingCard(padding: NetworkBlock.padding) {
+            ForEach(blocks) { block in
+                row(block).frame(height: .pt(block.height))
             }
         }
         .agentId(isList ? "network.list" : "network.window")

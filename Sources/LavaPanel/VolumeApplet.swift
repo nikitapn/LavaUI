@@ -18,13 +18,9 @@ struct VolumeWindow: View {
 
     var body: some View {
         let blocks = SoundBlock.blocks(pulse)
-        return PopupCard(padding: 0) {
-            ScrollView(showsIndicator: true) {
-                VStack(padding: SoundBlock.padding, spacing: 0) {
-                    ForEach(blocks) { block in
-                        row(block).frame(height: .pt(block.height))
-                    }
-                }
+        return ScrollingCard(padding: SoundBlock.padding) {
+            ForEach(blocks) { block in
+                row(block).frame(height: .pt(block.height))
             }
         }
         .agentId("volume.window")
