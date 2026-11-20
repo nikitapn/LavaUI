@@ -3066,6 +3066,20 @@ extension DrawList {
         }
     }
 
+    /// Draws one line of code coloured by `spans`, the way `EditorView` draws
+    /// its rows — for a custom view (a diff, a preview) that shows code and
+    /// should colour it exactly as the editor does. `y` is the row's top and
+    /// `h` its height; nothing is clipped.
+    public func codeLine(
+        _ line: String, spans: [HighlightSpan], style: CodeStyle,
+        font: UIFont, x: Float, y: Float, h: Float
+    ) {
+        emitCodeLine(
+            line, spans: spans, style: style, run: font.shapedRun(line),
+            font: font, x: x, y: y, h: h
+        )
+    }
+
     /// Emits a wrapped Markdown row using document-relative character spans.
     private func emitMarkdownLine(
         _ line: String, documentOffset: Int, spans: [MarkdownSpan],

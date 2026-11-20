@@ -2461,6 +2461,15 @@ public final class LayoutHost {
         let nw = YGNodeLayoutGetWidth(yref)
         let nh = YGNodeLayoutGetHeight(yref)
 
+        // Outside a scissored box is off screen, and the renderer skips what
+        // is drawn there but not visible (`SceneNodeRect::visibleAt`). Without
+        // this a list's overscan row, mounted above the viewport and sitting
+        // under a toolbar, answered for the toolbar — and the `Button` there
+        // never believed an injected pointer was on it.
+        if box.clipsChildren, x < nx || x >= nx + nw || y < ny || y >= ny + nh {
+            return nil
+        }
+
         // Children first: deepest wins, as it does in the renderer.
         for child in node.childNodes.reversed() {
             let shift = box.childOffset

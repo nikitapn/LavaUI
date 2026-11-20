@@ -82,6 +82,8 @@ var products: [Product] = [
     .library(name: "LavaTermCore", targets: ["LavaTermCore"]),
     .library(name: "WeatherCore", targets: ["WeatherCore"]),
     .library(name: "LavaViewCore", targets: ["LavaViewCore"]),
+    .library(name: "LavaDiffCore", targets: ["LavaDiffCore"]),
+    .library(name: "LavaGitCore", targets: ["LavaGitCore"]),
     .library(name: "LavaFindCore", targets: ["LavaFindCore"]),
     .library(name: "LavaShotCore", targets: ["LavaShotCore"]),
     .library(name: "LavaExplorerCore", targets: ["LavaExplorerCore"]),
@@ -132,6 +134,11 @@ var targets: [Target] = [
     // Which pictures are next to this one, and where the picture sits in
     // the window. No engine — see Sources/LavaViewCore.
     .target(name: "LavaViewCore"),
+    // Line diff, word-level highlights, side-by-side rows. No engine — see
+    // Sources/LavaDiffCore.
+    .target(name: "LavaDiffCore"),
+    // The `git` command, wrapped: a file at HEAD, status. No engine.
+    .target(name: "LavaGitCore"),
     // What a search row says about a file: size, date, badge, `~` paths,
     // the match highlight. No engine — see Sources/LavaFindCore.
     .target(name: "LavaFindCore"),
@@ -485,7 +492,7 @@ var targets: [Target] = [
     ),
     .executableTarget(
         name: "LavaEditorApp",
-        dependencies: ["LavaUI", "LavaHost", "LavaText"],
+        dependencies: ["LavaUI", "LavaHost", "LavaText", "LavaDiffCore", "LavaGitCore"],
         swiftSettings: interopCxx
     ),
     .executableTarget(
@@ -556,6 +563,8 @@ var targets: [Target] = [
     .testTarget(name: "LavaTermCoreTests", dependencies: ["LavaTermCore"]),
     .testTarget(name: "WeatherCoreTests", dependencies: ["WeatherCore"]),
     .testTarget(name: "LavaViewCoreTests", dependencies: ["LavaViewCore"]),
+    .testTarget(name: "LavaDiffCoreTests", dependencies: ["LavaDiffCore"]),
+    .testTarget(name: "LavaGitCoreTests", dependencies: ["LavaGitCore"]),
     .testTarget(name: "LavaPDFCoreTests", dependencies: ["LavaPDFCore"]),
     .testTarget(name: "LavaPlayerCoreTests", dependencies: ["LavaPlayerCore"]),
     .testTarget(name: "LavaFindCoreTests", dependencies: ["LavaFindCore"]),

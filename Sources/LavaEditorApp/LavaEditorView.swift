@@ -33,7 +33,11 @@ struct LavaEditorView: View {
 
     private func editor(_ appearance: EditorAppearance) -> some View {
         VStack(flexGrow: 1, spacing: 0) {
-            if let error = session.active.loadError {
+            if let diff = session.visibleDiff {
+                DiffPane(session: session, model: diff, appearance: appearance)
+                    .flexGrow(1)
+                    .theme(appearance.documentTheme)
+            } else if let error = session.active.loadError {
                 // The file could not be read. Saying so beats an empty buffer,
                 // which looks exactly like an empty file — and would overwrite
                 // the real one on the next Ctrl+S.

@@ -76,6 +76,11 @@ final class EditorSession {
     let controller = EditorController()
     private var nextID = 1
 
+    /// The comparison on screen instead of the editor, when there is one. It
+    /// belongs to a document, and shows only while that document is in front.
+    var diff: DiffModel?
+    @ObservationIgnored let diffScroll = ScrollPosition()
+
     struct TabDrag {
         var documentID: Int
         var destination: Int
@@ -649,6 +654,17 @@ final class EditorSession {
     // MARK: - Command line
 
     func openArguments(_ arguments: [String]) {
+        // `--diff old new`: the new file opens as a document and the old one
+        // is only read, as the left column.
+        if let flag = arguments.firstIndex(of: "--diff"), arguments.count > flag + 2 {
+            let old = URL(fileURLWithPath: arguments[flag + 1])
+            let new = URL(fileURLWithPath: arguments[flag + 2])
+            var rest = arguments
+            rest.removeSubrange(flag...(flag + 2))
+            openArguments(rest)
+            compare(old, with: new)
+            return
+        }
         let urls = arguments
             .filter { !$0.hasPrefix("-") }
             .map { URL(fileURLWithPath: $0) }

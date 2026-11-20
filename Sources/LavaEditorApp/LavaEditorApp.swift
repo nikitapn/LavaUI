@@ -108,6 +108,24 @@ struct LavaEditorApp {
                             shortcut: KeyShortcut(KeyCode.l, .primary)
                         ) { session.openGoto() }
                     }
+                    Menu("Git", id: "git") {
+                        MenuItem(
+                            session.visibleDiff == nil ? "Compare with HEAD" : "Close Comparison",
+                            id: "git.compare-head",
+                            shortcut: KeyShortcut(KeyCode.d, [.primary, .shift])
+                        ) { session.compareWithHEAD() }
+                        MenuSeparator()
+                        MenuItem(
+                            "Next Change", id: "git.next-change",
+                            shortcut: KeyShortcut(KeyCode.f7, []),
+                            isEnabled: session.visibleDiff != nil
+                        ) { session.stepDiff(forward: true) }
+                        MenuItem(
+                            "Previous Change", id: "git.previous-change",
+                            shortcut: KeyShortcut(KeyCode.f7, .shift),
+                            isEnabled: session.visibleDiff != nil
+                        ) { session.stepDiff(forward: false) }
+                    }
                     Menu("View", id: "view") {
                         MenuItem("Toggle Soft Wrap", id: "view.wrap") {
                             session.wraps.toggle()
