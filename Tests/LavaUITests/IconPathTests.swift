@@ -98,6 +98,22 @@ final class IconPathTests: XCTestCase {
         XCTAssertLessThan(quad.map(\.y).min() ?? 0, -1)
     }
 
+    /// The Wi-Fi fan's ink runs from the top arc's crest (y≈5, less the
+    /// stroke) to the dot (20, plus it), so it sits half a unit low.
+    func testInkOffsetCentresTheFan() {
+        let fan: [IconShape] = [.path("M5 12.55a11 11 0 0 1 14 0M8.5 16.05a6 6 0 0 1 7 0M2 8.82a15 15 0 0 1 20 0M12 20h.01")]
+        let shift = IconPathCache.inkOffset(fan, strokeWidth: 2)
+        XCTAssertEqual(shift.x, 0, accuracy: 0.05)
+        XCTAssertEqual(shift.y, -0.5, accuracy: 0.05)
+        // A speaker with no waves leans left; centring moves it right.
+        let speaker = IconPathCache.inkOffset([.path("M11 5 6 9H2v6h4l5 4Z")], strokeWidth: 2)
+        XCTAssertEqual(speaker.x, 12 - (1 + 12) / 2, accuracy: 0.05)
+        // A glyph already centred stays put.
+        let cross = IconPathCache.inkOffset([.path("M18 6 6 18M6 6l12 12")], strokeWidth: 2)
+        XCTAssertEqual(cross.x, 0, accuracy: 0.001)
+        XCTAssertEqual(cross.y, 0, accuracy: 0.001)
+    }
+
     func testGarbageDrawsWhatParsed() {
         let paths = flatten("M1 1L5 5L")
         XCTAssertEqual(paths, [[IconPoint(x: 1, y: 1), IconPoint(x: 5, y: 5)]])

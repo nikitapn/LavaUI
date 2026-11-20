@@ -268,17 +268,20 @@ struct GlassIconButton: View {
     var fill: Color = .clear
     var hover: Color
     var strokeWidth: Float = 2.25
+    var faint: [IconShape] = []
+    var faintColor: Color = .clear
     var agentId: String
     var onPointer: (_ button: Int32) -> Void
     var onWheel: ((Float) -> Void)? = nil
 
     var body: some View {
         let onPointer = onPointer, onWheel = onWheel
-        return HStack(width: .pt(size), height: .pt(size), padding: 0, alignment: .center,
+        return HStack(width: .pt(size), height: .pt(size), padding: 0, alignment: .center, spacing: 0,
                       onPointer: { _, button in onPointer(button) },
                       onWheel: onWheel.map { wheel in { _, dy in wheel(dy) } }) {
             Spacer()
-            Icon(icon, size: glyph, color: color, strokeWidth: strokeWidth)
+            Icon(icon, size: glyph, color: color, strokeWidth: strokeWidth,
+                 faint: faint, faintColor: faintColor)
             Spacer()
         }
         .background(fill)
@@ -313,11 +316,12 @@ struct TrayCluster: View {
             }
             if network.state.running {
                 let open = session.networkWindow != nil
-                let status = network.status
+                let fan = Self.networkIcon(network.status)
+                let ink = open ? palette.accentInk : palette.icon
                 GlassIconButton(
-                    icon: Self.networkIcon(status), size: size,
-                    color: open ? palette.accentInk : palette.icon,
+                    icon: fan.lit, size: size, color: ink,
                     fill: open ? palette.trayOn : .clear, hover: palette.chipOpen,
+                    faint: fan.faint, faintColor: ink.mixed(with: palette.trayOn, 0.62),
                     agentId: "applet.network",
                     onPointer: { button in
                         if button == PointerButton.left { session.toggleNetwork() }
@@ -367,19 +371,28 @@ struct TrayCluster: View {
         }
     }
 
-    /// The fan, with the arcs beyond the signal's reach left out — the
-    /// strength is the one thing the old glyph said that a static icon
-    /// would lose.
-    static func networkIcon(_ status: NetworkStatus) -> [IconShape] {
+    /// A glyph in two layers: what is lit, and what is drawn faint under it.
+    struct SplitIcon {
+        var lit: [IconShape]
+        var faint: [IconShape] = []
+    }
+
+    /// The design's whole fan, always — the dot and three arcs — with the
+    /// arcs beyond the signal's reach drawn faint: the strength is the one
+    /// thing the old glyph said that a static icon would lose, and leaving
+    /// those arcs out made a different glyph.
+    static func networkIcon(_ status: NetworkStatus) -> SplitIcon {
+        let arcs = PanelIcons.wifiArcs.map { IconShape.path($0) }
         switch status.link {
         case .off, .disconnected:
-            return [.path(PanelIcons.wifiOff)]
+            return SplitIcon(lit: [.path(PanelIcons.wifiOff)])
         case .connecting:
-            return PanelIcons.wifiArcs.prefix(2).map { .path($0) }
+            return SplitIcon(lit: Array(arcs.prefix(2)), faint: Array(arcs.dropFirst(2)))
         case .wired:
-            return [.path(PanelIcons.ethernet)]
+            return SplitIcon(lit: [.path(PanelIcons.ethernet)])
         case .wifi(let bars):
-            return PanelIcons.wifiArcs.prefix(max(1, min(4, bars))).map { .path($0) }
+            let lit = max(1, min(4, bars))
+            return SplitIcon(lit: Array(arcs.prefix(lit)), faint: Array(arcs.dropFirst(lit)))
         }
     }
 
@@ -464,7 +477,7 @@ struct NowPlayingChip: View {
                 .frame(width: .pt(size), height: .pt(size))
         } else {
             let accent = palette.accent, ink = palette.accentInk, on = palette.onAccent
-            HStack(width: .pt(size), height: .pt(size), padding: 0, alignment: .center) {
+            HStack(width: .pt(size), height: .pt(size), padding: 0, alignment: .center, spacing: 0) {
                 Spacer()
                 Icon([.path(PanelIcons.music), .circle(cx: 6, cy: 18, r: 3),
                       .circle(cx: 18, cy: 16, r: 3)],

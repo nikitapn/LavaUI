@@ -106,7 +106,7 @@ struct PlayerWindow: View {
         let primary = size > 44
         let ink: Color = primary ? palette.bar.onAccent
             : enabled ? palette.bar.text : palette.neutral400
-        return HStack(width: .pt(size), height: .pt(size), padding: 0, alignment: .center,
+        return HStack(width: .pt(size), height: .pt(size), padding: 0, alignment: .center, spacing: 0,
                       onClick: enabled ? action : nil) {
             Spacer()
             TransportMark(kind, size: primary ? 20 : 18, color: ink)
@@ -183,7 +183,7 @@ private struct PlayerArt: View {
             .cornerRadius(radius)
             .frame(width: .pt(size), height: .pt(size))
         } else {
-            HStack(width: .pt(size), height: .pt(size), padding: 0, alignment: .center) {
+            HStack(width: .pt(size), height: .pt(size), padding: 0, alignment: .center, spacing: 0) {
                 Spacer()
                 Icon([.path(PanelIcons.music), .circle(cx: 6, cy: 18, r: 3),
                       .circle(cx: 18, cy: 16, r: 3)],

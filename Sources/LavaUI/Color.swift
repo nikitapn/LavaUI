@@ -294,3 +294,14 @@ public struct Color: Equatable, Sendable, Hashable {
     // Semantic tokens live in Theme.swift so they resolve through
     // `Theme.current` rather than being frozen here.
 }
+
+extension Color {
+    /// `self` moved `amount` (0…1) of the way to `other`, channel by channel
+    /// in sRGB — the colour a faint stroke would show as over that ground,
+    /// without being translucent.
+    public func mixed(with other: Color, _ amount: Float) -> Color {
+        let t = min(max(amount, 0), 1)
+        return Color(r: r + (other.r - r) * t, g: g + (other.g - g) * t,
+                     b: b + (other.b - b) * t, a: a + (other.a - a) * t)
+    }
+}

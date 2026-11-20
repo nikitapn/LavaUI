@@ -218,11 +218,14 @@ struct IconDisc: View {
     var fill: Color
     var color: Color
     var strokeWidth: Float = 2.25
+    var faint: [IconShape] = []
+    var faintColor: Color = .clear
 
     var body: some View {
-        HStack(width: .pt(size), height: .pt(size), padding: 0, alignment: .center) {
+        HStack(width: .pt(size), height: .pt(size), padding: 0, alignment: .center, spacing: 0) {
             Spacer()
-            Icon(icon, size: glyph, color: color, strokeWidth: strokeWidth)
+            Icon(icon, size: glyph, color: color, strokeWidth: strokeWidth,
+                 faint: faint, faintColor: faintColor)
             Spacer()
         }
         .background(fill)
@@ -279,7 +282,7 @@ struct CardIconButton: View {
     var action: () -> Void
 
     var body: some View {
-        HStack(width: .pt(size), height: .pt(size), padding: 0, alignment: .center,
+        HStack(width: .pt(size), height: .pt(size), padding: 0, alignment: .center, spacing: 0,
                onClick: action) {
             Spacer()
             Icon(icon, size: glyph, color: color, strokeWidth: strokeWidth)

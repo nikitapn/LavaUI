@@ -212,9 +212,11 @@ struct WifiRow: View {
         let network = network
         let secured = wifi.security.showsLock
         return HStack(padding: 0, alignment: .center, spacing: 10) {
-            IconDisc(icon: TrayCluster.networkIcon(NetworkStatus(link: .wifi(bars: NetworkRows.bars(wifi.strength)))),
-                     size: 32, glyph: 15, fill: palette.bar.accent, color: palette.bar.onAccent,
-                     strokeWidth: 2.75)
+            let fan = TrayCluster.networkIcon(
+                NetworkStatus(link: .wifi(bars: NetworkRows.bars(wifi.strength))))
+            IconDisc(icon: fan.lit, size: 32, glyph: 15, fill: palette.bar.accent,
+                     color: palette.bar.onAccent, strokeWidth: 2.75, faint: fan.faint,
+                     faintColor: palette.bar.onAccent.mixed(with: palette.bar.accent, 0.55))
             VStack(flexGrow: 1, padding: 0, spacing: 1) {
                 Text(wifi.ssid, color: palette.bar.text, font: fonts.body14Bold, lineLimit: 1)
                 HStack(padding: 0, alignment: .center, spacing: 5) {
@@ -256,9 +258,10 @@ struct WifiRow: View {
                 onConnect?()
             }
         ) {
-            Icon(TrayCluster.networkIcon(NetworkStatus(link: .wifi(bars: bars))), size: 17,
-                 color: wifi.isConnected ? palette.bar.accent : palette.bar.textSoft,
-                 strokeWidth: 2.25)
+            let fan = TrayCluster.networkIcon(NetworkStatus(link: .wifi(bars: bars)))
+            let ink = wifi.isConnected ? palette.bar.accent : palette.bar.textSoft
+            Icon(fan.lit, size: 17, color: ink, strokeWidth: 2.25, faint: fan.faint,
+                 faintColor: ink.mixed(with: palette.bar.onAccent, 0.62))
             Text(wifi.ssid, color: ink, font: fonts.body14, lineLimit: 1)
                 .flexShrink(1)
             Spacer()

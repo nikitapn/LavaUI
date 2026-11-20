@@ -20,13 +20,28 @@ public struct Icon: View {
     public var color: Color
     /// In the 24-unit box, as SVG's `stroke-width`, scaled with the icon.
     public var strokeWidth: Float
+    /// Parts of the glyph drawn under `shapes` in `faintColor` — the arcs
+    /// of a Wi-Fi fan the signal does not reach. Opaque, for the same
+    /// reason `color` is.
+    public var faint: [IconShape]
+    public var faintColor: Color
+    /// Centre the ink rather than the 24-unit box. Icon sets draw some
+    /// glyphs off-centre in their box — a Wi-Fi fan sits low, a speaker
+    /// with no waves leans left — which shows as soon as one sits on a
+    /// disc. Measured over `shapes` and `faint` together, so a glyph whose
+    /// faint part changes does not move.
+    public var centersInk: Bool
 
     public init(_ shapes: [IconShape], size: Float = 16, color: Color = .primary,
-                strokeWidth: Float = 2) {
+                strokeWidth: Float = 2, faint: [IconShape] = [],
+                faintColor: Color = .clear, centersInk: Bool = true) {
         self.shapes = shapes
         self.size = size
         self.color = color
         self.strokeWidth = strokeWidth
+        self.faint = faint
+        self.faintColor = faintColor
+        self.centersInk = centersInk
     }
 
     /// One path, the common case: `Icon("M18 6 6 18M6 6l12 12", size: 12)`.
@@ -37,8 +52,17 @@ public struct Icon: View {
 
     public var body: some View {
         let shapes = shapes, color = color, strokeWidth = strokeWidth, size = size
+        let faint = faint, faintColor = faintColor
+        let shift = centersInk ? IconPathCache.inkOffset(shapes + faint, strokeWidth: strokeWidth)
+                               : (x: Float(0), y: Float(0))
         return Canvas(label: "icon", width: .pt(size), height: .pt(size)) { list, frame in
-            list.strokeIcon(shapes, x: frame.x, y: frame.y, size: size,
+            let scale = size / 24
+            let x = frame.x + shift.x * scale, y = frame.y + shift.y * scale
+            if !faint.isEmpty {
+                list.strokeIcon(faint, x: x, y: y, size: size,
+                                color: faintColor, strokeWidth: strokeWidth)
+            }
+            list.strokeIcon(shapes, x: x, y: y, size: size,
                             color: color, strokeWidth: strokeWidth)
         }
     }
@@ -117,6 +141,24 @@ extension DrawList {
 enum IconPathCache {
     nonisolated(unsafe) private static var cache: [String: [[IconPoint]]] = [:]
     private static let lock = NSLock()
+
+    /// How far to move `shapes`, in path units, so their ink — the stroke's
+    /// half-width included — is centred in the 24-unit box.
+    static func inkOffset(_ shapes: [IconShape], strokeWidth: Float) -> (x: Float, y: Float) {
+        var minX = Float.infinity, minY = Float.infinity
+        var maxX = -Float.infinity, maxY = -Float.infinity
+        for shape in shapes {
+            let pad = shape.isFill ? 0 : strokeWidth / 2
+            for subpath in flattened(shape.pathData) where subpath.count > 1 || shape.isFill {
+                for p in subpath {
+                    minX = min(minX, p.x - pad); maxX = max(maxX, p.x + pad)
+                    minY = min(minY, p.y - pad); maxY = max(maxY, p.y + pad)
+                }
+            }
+        }
+        guard minX.isFinite, maxX.isFinite else { return (0, 0) }
+        return (12 - (minX + maxX) / 2, 12 - (minY + maxY) / 2)
+    }
 
     static func flattened(_ d: String) -> [[IconPoint]] {
         lock.lock()
