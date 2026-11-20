@@ -220,6 +220,42 @@ struct ScrollingCard<Content: View>: View {
     }
 }
 
+/// A card as tall as what is in it, for text that wraps: the popup is
+/// opened at a guess and then follows the content's measured height.
+struct FittedCard<Content: View>: View {
+    var padding: Float
+    var radius: Float
+    var content: Content
+
+    init(padding: Float, radius: Float = 24, @ViewBuilder content: () -> Content) {
+        self.padding = padding
+        self.radius = radius
+        self.content = content()
+    }
+
+    var body: some View {
+        let window = LavaApp.currentWindow
+        let palette = PopupPalette.current
+        // The card at its own height at the top of the popup, not stretched
+        // to it. Stretched, the first frames showed a card as tall as the
+        // guess the popup opened at, which then visibly shrank; at its own
+        // height the resize only trims transparent surface under it.
+        return VStack(flexGrow: 1, padding: 0, spacing: 0) {
+            VStack(padding: padding, spacing: 0) {
+                content
+            }
+            .background(palette.bar.glassStrong)
+            .border(palette.rim)
+            .cornerRadius(radius)
+            .backdropBlur(radius: 22, adaptation: 0, saturation: 1.7)
+            .onFrame { frame in
+                PopupFit.follow(window, height: frame.h)
+            }
+            Spacer()
+        }
+    }
+}
+
 /// Keeps a popup the height its card asks for.
 enum PopupFit {
     /// What each popup was last asked to be, so a body that runs every clock
@@ -315,18 +351,25 @@ struct IconDisc: View {
 /// "Today", "Disconnect": an outlined pill on the card.
 struct PillButton: View {
     var title: String
+    /// Solid accent, for the one action a dialog is asking about.
+    var prominent = false
+    var isEnabled = true
     var agentId: String
     var action: () -> Void
 
     var body: some View {
         let palette = PopupPalette.current
-        return Text(title, color: palette.bar.accentInk, font: popupFonts.small13Semi,
-                    hoverFill: palette.bar.accentSoft, onClick: action)
+        let ink = prominent ? palette.bar.onAccent : palette.bar.accentInk
+        let hover = prominent ? palette.bar.accentHover : palette.bar.accentSoft
+        return Text(title, color: isEnabled ? ink : ink.opacity(0.5),
+                    font: popupFonts.small13Semi,
+                    hoverFill: isEnabled ? hover : nil,
+                    onClick: isEnabled ? action : nil)
             .padding(EdgeInsets(top: 5, leading: 14, bottom: 5, trailing: 14))
-            .background(palette.bar.onAccent)
-            .border(palette.accent300)
+            .background(prominent ? palette.bar.accent : palette.bar.onAccent)
+            .border(prominent ? palette.bar.accent : palette.accent300)
             .cornerRadius(14)
-            .cursor(.pointer)
+            .cursor(isEnabled ? .pointer : .arrow)
             .agentId(agentId)
     }
 }
@@ -397,6 +440,17 @@ extension PanelIcons {
 }
 
 extension MenuSession {
+    /// Centred under the bar, the style's gap below it: where a dialog that
+    /// belongs to no one control (About, a confirmation) hangs.
+    func centredAnchor(width: Float) -> LavaApp.SurfaceAnchor {
+        let host = LavaApp.mainLayoutHost
+        let bar = host?.agentFrame(sid: "panel.bar")
+        let barBottom = (bar.map { $0.y + $0.h } ?? panelMetrics.marginTop + panelMetrics.barHeight)
+        let panelW = editor?.framebufferSize().w ?? 1280
+        return LavaApp.SurfaceAnchor(x: max(8, (panelW - width) / 2), y: barBottom - 1,
+                                     w: width, h: 1 + panelMetrics.popupGap - 6)
+    }
+
     /// Where a popup hangs: the style's gap under the bar — the compositor
     /// adds its own 6 to an anchor's bottom — with its right edge
     /// `rightOverhang` past the right edge of what opened it, as the design

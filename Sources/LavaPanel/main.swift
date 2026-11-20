@@ -726,20 +726,12 @@ final class MenuSession {
 
     private func openSessionDialog() {
         if let id = sessionWindow, LavaApp.isWindowOpen(id) { return }
-        let panelW = editor?.framebufferSize().w ?? 1280
-        let width = SessionWindow.width
-        let anchor = LavaApp.SurfaceAnchor(
-            x: max(8, (panelW - width) / 2),
-            y: 0,
-            w: width,
-            h: Self.stripHeight
-        )
         var opened: WindowID?
         opened = LavaApp.openPopup(
             title: "Session",
-            width: width,
+            width: SessionWindow.width,
             height: SessionWindow.height,
-            anchor: anchor,
+            anchor: centredAnchor(width: SessionWindow.width),
             onClose: {
                 if let id = opened, session.sessionWindow == id {
                     session.sessionWindow = nil
@@ -747,11 +739,9 @@ final class MenuSession {
                 }
             }
         ) {
+            // The card frosts itself, at its own corner, and sizes the popup
+            // to its text.
             SessionWindow()
-                // The plate's bend, which the open call used to give it. The
-                // rim is the plate's (lit where it bends); this fill has none.
-                .backdropBlur(radius: PanelChrome.popupBlurRadius)
-                .glassEffect(magnification: PanelChrome.popupMagnification)
         }
         sessionWindow = opened
     }
@@ -764,22 +754,13 @@ final class MenuSession {
         if dialog != .none { setDialog(.none) }
         if let id = aboutWindow, LavaApp.isWindowOpen(id) { return }
         guard let image = aboutImage, let font = aboutFont else { return }
-        let panelW = editor?.framebufferSize().w ?? 1280
-        let width: Float = 560
-        // Centred under the strip. The compositor places the popup below
-        // this rectangle and keeps it on the output.
-        let anchor = LavaApp.SurfaceAnchor(
-            x: max(8, (panelW - width) / 2),
-            y: 0,
-            w: width,
-            h: Self.stripHeight
-        )
+        let width = AboutWindow.width
         var opened: WindowID?
         opened = LavaApp.openPopup(
             title: "About Lava",
             width: width,
-            height: 520,
-            anchor: anchor,
+            height: AboutWindow.height,
+            anchor: centredAnchor(width: width),
             onClose: {
                 if let id = opened, session.aboutWindow == id {
                     session.aboutWindow = nil
@@ -787,8 +768,6 @@ final class MenuSession {
             }
         ) {
             AboutWindow(image: image, font: font)
-                .backdropBlur(radius: PanelChrome.popupBlurRadius)
-                .glassEffect(magnification: PanelChrome.popupMagnification)
         }
         aboutWindow = opened
     }
@@ -1640,19 +1619,33 @@ struct PanelView: View {
 
 }
 
-/// About, as a popup. Same glass as the volume card: a translucent wash
-/// over the compositor's frost, not the panel's opaque background.
+/// About Lava: the artwork, the name, and the story, on the cards' glass.
 struct AboutWindow: View {
     var image: UIImage
     var font: UIFont
 
+    static let width: Float = 480
+    static let padding: Float = 16
+    /// A first guess; the card measures itself and the popup follows.
+    static let height: Float = 560
+
     var body: some View {
-        VStack(padding: 12, spacing: 10) {
-            HStack {
+        let palette = PopupPalette.current
+        let fonts = popupFonts!
+        let artW = Self.width - Self.padding * 2
+        return FittedCard(padding: Self.padding) {
+            // The artwork, cut to the card's inner curve.
+            Image(image, width: .pt(artW), height: .pt(artW * 2 / 3), contentMode: .fill)
+                .cornerRadius(Self.radius)
+            HStack(padding: 0, alignment: .end, spacing: 10) {
+                Text("Lava", color: palette.bar.text, font: fonts.heading22)
+                Text("A desktop environment", color: palette.bar.textSoft, font: fonts.small13)
+                    .padding(EdgeInsets(top: 0, leading: 0, bottom: 3, trailing: 0))
                 Spacer()
-                Image(image, width: .pt(400), contentMode: .fit)
-                Spacer()
+                TagLabel(text: "Wayland · Vulkan", tone: .sage)
+                    .padding(EdgeInsets(top: 0, leading: 0, bottom: 2, trailing: 0))
             }
+            .padding(EdgeInsets(top: 14, leading: 4, bottom: 8, trailing: 4))
             Text(
                 "Lava is a free and open-source desktop environment. " +
                 "It is designed to be fast, lightweight, and ready to use from the initial launch " +
@@ -1661,52 +1654,65 @@ struct AboutWindow: View {
                 "particularly with Linux Desktop Environments. He has tried many, but none of them " +
                 "have been able to provide him with the experience he desires. Then one day, he decided " +
                 "to have Claude build him a new desktop environment, and thus Lava was born, and now " +
-                "Nikita is not struggling with computers anymore, and he is happy."
+                "Nikita is not struggling with computers anymore, and he is happy.",
+                color: palette.bar.textSoft, font: font
             )
+            .padding(EdgeInsets(top: 0, leading: 4, bottom: 4, trailing: 4))
         }
-        .flexGrow(1)
-        .background(PanelChrome.popupWash)
         .agentId("dialog.about")
     }
+
+    /// The card's 24, less its padding: concentric with the card's corner.
+    static var radius: Float { 24 - padding / 2 }
 }
 
-/// Destructive actions require a separate click after the menu closes.
+/// Asks before ending something — log out, restart, shut down — or says why
+/// it did not happen. Destructive actions take a second click here, after
+/// the session card has closed.
 struct SessionWindow: View {
-    static let width: Float = 400
-    static let height: Float = 210
+    static let width: Float = 380
+    static let padding: Float = 20
+    /// A first guess; the card measures itself and the popup follows.
+    static let height: Float = 220
 
     var body: some View {
-        let theme = Theme.current
+        let palette = PopupPalette.current
+        let fonts = popupFonts!
         let isError = session.dialog == .powerError
         let powerOff = session.dialog == .powerOff
         let restart = session.dialog == .restart
         let heading = isError ? session.powerErrorTitle
-            : powerOff ? "Power off?" : restart ? "Restart?" : "Log out?"
+            : powerOff ? "Shut down?" : restart ? "Restart?" : "Log out?"
         let detail = isError ? session.powerError
             : powerOff
                 ? "This turns off the computer and closes every window. Save your work before continuing."
             : restart
                 ? "This restarts the computer and closes every window. Save your work before continuing."
                 : "This ends the session and closes every window."
-        VStack(padding: 0, spacing: 12) {
-            Text(heading, color: theme.textPrimary)
-            ScrollView {
-                Text(detail, color: theme.textSecondary)
+        let glyph = isError ? MenuGlyphs.info
+            : powerOff ? MenuGlyphs.power : restart ? MenuGlyphs.restart : MenuGlyphs.logout
+        let verb = powerOff ? "Shut down" : restart ? "Restart" : "Log out"
+
+        return FittedCard(padding: Self.padding) {
+            HStack(padding: 0, alignment: .start, spacing: 14) {
+                IconDisc(icon: [.path(glyph)], size: 40, glyph: 18,
+                         fill: palette.bar.accentSoft, color: palette.bar.accentInk,
+                         strokeWidth: 2.25)
+                VStack(flexGrow: 1, padding: 0, spacing: 6) {
+                    Text(heading, color: palette.bar.text, font: fonts.heading19)
+                    Text(detail, color: palette.bar.textSoft, font: fonts.body14)
+                }
+                .padding(EdgeInsets(top: 2, leading: 0, bottom: 0, trailing: 0))
             }
-            HStack(padding: 0, spacing: 8) {
+            HStack(padding: 0, alignment: .center, spacing: 8) {
                 Spacer()
-                Button(isError ? "Close" : "Cancel") { session.setDialog(.none) }
-                    .agentId("dialog.session.cancel")
+                PillButton(title: isError ? "Close" : "Cancel",
+                           agentId: "dialog.session.cancel") {
+                    session.setDialog(.none)
+                }
                 if !isError {
-                    Button(
-                        powerOff ? "Power Off" : restart ? "Restart" : "Log Out",
-                        style: ButtonStyle(
-                            background: theme.accent.opacity(0.22),
-                            hover: theme.accent.opacity(0.38),
-                            foreground: theme.accent
-                        ),
-                        isEnabled: !session.powerBusy
-                    ) {
+                    PillButton(title: verb, prominent: true, isEnabled: !session.powerBusy,
+                               agentId: "dialog.session.confirm") {
                         if powerOff {
                             session.requestPower(.powerOff)
                         } else if restart {
@@ -1716,13 +1722,10 @@ struct SessionWindow: View {
                             LavaClient.endSession()
                         }
                     }
-                    .agentId("dialog.session.confirm")
                 }
             }
+            .padding(EdgeInsets(top: 18, leading: 0, bottom: 0, trailing: 0))
         }
-        .padding(16)
-        .frame(width: .pt(Self.width), height: .pt(Self.height))
-        .background(PanelChrome.popupWash)
         .agentId(powerOff ? "dialog.power-off" : restart ? "dialog.restart"
                  : isError ? "dialog.power-error" : "dialog.logout")
     }
@@ -1946,7 +1949,8 @@ LavaClient.onMenuChoice { serial, chosen in
 // A test lever: open popups by name once the bar has drawn, for screenshots
 // of cards a headless session has no pointer to open — the agent port drives
 // the bar's window only. `LAVA_PANEL_OPEN=calendar,year`; also `player`,
-// `network`, `volume`, `bluetooth`, `power`, `battery`. Each waits a frame for the one before.
+// `network`, `volume`, `bluetooth`, `power`, `battery`, `about`, `shutdown`,
+// `restart`, `logout`. Each waits a frame for the one before.
 if let names = ProcessInfo.processInfo.environment["LAVA_PANEL_OPEN"] {
     func openNext(_ rest: ArraySlice<Substring>, delay: Int) {
         guard let name = rest.first else { return }
@@ -1963,6 +1967,10 @@ if let names = ProcessInfo.processInfo.environment["LAVA_PANEL_OPEN"] {
             case "bluetooth": session.toggleBluetooth()
             case "power": session.toggleSessionCard()
             case "battery": session.toggleBattery()
+            case "about": session.openAbout()
+            case "shutdown": session.setDialog(.powerOff)
+            case "restart": session.setDialog(.restart)
+            case "logout": session.setDialog(.logout)
             default: FileHandle.standardError.write(Data("LAVA_PANEL_OPEN: no '\(name)'\n".utf8))
             }
             openNext(rest.dropFirst(), delay: 10)
