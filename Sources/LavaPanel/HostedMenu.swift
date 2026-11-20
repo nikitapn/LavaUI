@@ -86,6 +86,7 @@ enum MenuWire {
                     row.kind = .submenu
                     row.enabled = true
                     row.parent = parent
+                    row.icon = node.glyph ?? ""
                     items.append(row)
                     emit(node.items, parent: id)
                 }

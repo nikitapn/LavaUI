@@ -239,18 +239,23 @@ public struct MenuNode: Equatable, Sendable, Identifiable {
     public var icon: MenuIcon?
     /// The menu's rows, in order.
     public var items: [MenuEntry]
+    /// A glyph beside the title where this menu is a row of another — SVG
+    /// path data on a 24-unit grid, as `MenuItemModel.icon`.
+    public var glyph: String?
 
     /// Creates a menu node.
     public init(
         id: MenuID,
         title: String,
         icon: MenuIcon? = nil,
-        items: [MenuEntry]
+        items: [MenuEntry],
+        glyph: String? = nil
     ) {
         self.id = id
         self.title = title
         self.icon = icon
         self.items = items
+        self.glyph = glyph
     }
 
     /// Every item in this menu and its submenus, depth first. Separators are skipped.

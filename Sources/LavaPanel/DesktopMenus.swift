@@ -187,7 +187,7 @@ enum MenuGlyphs {
         case "Downloads": return down
         case "Pictures": return image
         case "Music": return music
-        case "Videos": return video
+        case "Videos", "Video": return video
         case "Computer": return computer
         case "Trash": return trash
         default: return folder

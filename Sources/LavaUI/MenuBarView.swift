@@ -433,6 +433,30 @@ public struct MenuDropdownPanel: View {
         }
     }
 
+    /// Whether any row here has a glyph, which gives every row the column so
+    /// the titles stay in line.
+    private var hasGlyphs: Bool {
+        entries.contains { entry in
+            switch entry {
+            case .item(let item): return item.icon != nil
+            case .submenu(let node): return node.glyph != nil
+            default: return false
+            }
+        }
+    }
+
+    /// The glyph column: the row's own glyph, or the empty column.
+    @ViewBuilder
+    private func glyphColumn(_ d: String?, color: Color) -> some View {
+        if hasGlyphs {
+            HStack(width: .pt(18), height: .pt(16), padding: 0, alignment: .center, spacing: 0) {
+                if let d {
+                    Icon([.path(d)], size: 16, color: color, strokeWidth: 2.25, box: 18)
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private func rowView(_ row: MenuRow) -> some View {
         let theme = Environment.current.theme
@@ -468,6 +492,7 @@ public struct MenuDropdownPanel: View {
             onClick: { openSubmenu = open ? nil : nodeID },
             onHover: { inside in if inside { openSubmenu = nodeID } }
         ) {
+            glyphColumn(node.glyph, color: theme.textSecondary)
             Text(node.title, color: theme.textPrimary)
             Spacer()
             // The arrow is the only thing that says this row is a door rather
@@ -554,6 +579,7 @@ public struct MenuDropdownPanel: View {
             // panel that belongs to a row it has walked past.
             onHover: { inside in if inside { openSubmenu = nil } }
         ) {
+            glyphColumn(item.icon, color: enabled ? theme.textSecondary : theme.textDim)
             Text(title, color: color)
             if !shortcut.isEmpty {
                 Spacer()

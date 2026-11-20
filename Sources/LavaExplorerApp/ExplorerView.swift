@@ -13,6 +13,32 @@ enum PaneChrome {
     /// read as a tab rather than a stripe.
     static let tabHeight: Float = 30
 
+    /// A dialog's card: the panes' colour, the design's 24pt corner, and
+    /// the window dimmed behind it.
+    static var dialogStyle: OverlayStyle {
+        let look = ExplorerLook.current
+        return OverlayStyle(background: look.card, border: look.divider, cornerRadius: 24,
+                            padding: 22, scrim: look.text.opacity(0.18))
+    }
+
+    /// The menus in the window — a file's, a drop's — as the desktop's menus
+    /// are drawn: a rounded plate, rows that light up in the accent.
+    static var menuStyle: MenuBarStyle {
+        let look = ExplorerLook.current
+        var style = MenuBarStyle.standard(theme: Theme.current)
+        style.itemPadding = EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 12)
+        style.itemCornerRadius = 12
+        style.itemHover = look.accent200
+        style.itemSpacing = 0
+        style.dropdownPadding = 6
+        style.dropdownMinWidth = 240
+        style.dropdownBackground = look.card
+        style.dropdownBorder = look.divider
+        style.dropdownCornerRadius = 18
+        style.dropdownBlur = nil
+        return style
+    }
+
     /// The gap between the sidebar and the panes, and between two panes:
     /// the design draws no rule there, only space — which still drags.
     static var splitStyle: SplitStyle {
@@ -55,33 +81,6 @@ struct ExplorerView: View {
                 }
                 .padding(EdgeInsets(top: 8, leading: 0, bottom: 0, trailing: 12))
             }
-            if let pending = session.pendingCopy {
-                ClashBar(session: session, pending: pending)
-            }
-            if let plan = session.pendingTransfer {
-                TransferClashBar(session: session, plan: plan)
-            }
-            if let request = session.remoteLogin {
-                LoginBar(session: session, request: request)
-            }
-            if session.profileDraft != nil {
-                ProfileNameBar(session: session)
-            }
-            if session.connectDraft != nil {
-                ConnectBar(session: session)
-            }
-            if let pending = session.pendingErase {
-                EraseBar(session: session, pending: pending)
-            }
-            if let target = session.pendingOverwrite {
-                OverwriteBar(session: session, target: target)
-            }
-            if let draft = session.compressDraft {
-                CompressBar(session: session, draft: draft)
-            }
-            if let request = session.passwordRequest {
-                PasswordBar(session: session, request: request)
-            }
             if let chooser = session.chooser {
                 ChooserBar(session: session, chooser: chooser)
             }
@@ -91,6 +90,27 @@ struct ExplorerView: View {
         .onDrop { urls in session.acceptDrop(urls) }
         .overlayLayer { TabGhost(session: session) }
         .overlayLayer { RightDragGhost(session: session) }
+        // A question — a clash, a password, a server — in the middle of the
+        // window over a dimmed one. A click outside it answers nothing: a
+        // dialog is put away by its own buttons, or Escape.
+        .overlay(
+            isPresented: Binding(get: { PromptDialog.isWaiting(session) }, set: { _ in }),
+            placement: OverlayPlacement { context in
+                let width = context.idealSize.width
+                let height = context.idealSize.height
+                let x = max(0, (context.viewport.width - width) / 2)
+                // A little above the middle, where the eye already is.
+                let y = max(0, (context.viewport.height - height) * 0.42)
+                return OverlayFrame(x: x, y: y, width: width, height: height)
+            },
+            style: PaneChrome.dialogStyle
+        ) {
+            if let fonts = explorerFonts {
+                PromptDialog(session: session).font(fonts.body)
+            } else {
+                PromptDialog(session: session)
+            }
+        }
         .overlay(
             isPresented: Binding(
                 get: { session.dropMenu != nil },
@@ -104,13 +124,13 @@ struct ExplorerView: View {
                 return OverlayFrame(x: x, y: y, width: width, height: height)
             },
             style: {
-                var style = MenuBarStyle.standard(theme: Theme.current).overlayStyle
+                var style = PaneChrome.menuStyle.overlayStyle
                 style.minWidth = 200
                 return style
             }()
         ) {
             if let menu = session.dropMenu {
-                DropChoiceMenu(session: session, menu: menu)
+                DropChoiceMenu(session: session, menu: menu).inExplorerFont()
             }
         }
     }
@@ -342,9 +362,6 @@ private struct TabGhost: View {
 
 // MARK: - Clashes
 
-/// One question for a drop whose names are partly taken, across the window
-/// under the panes — where the folder it is about is still in view, the same
-/// reason LavaEditor asks about unsaved changes in a bar and not a dialog.
 /// The picker's own row: what is being opened or the name to save under,
 /// which files to show, and the two ways out. Only when another app started
 /// this window as its file chooser.
@@ -353,7 +370,8 @@ private struct ChooserBar: View {
     let chooser: ChooserRequest
 
     var body: some View {
-        let theme = Theme.current
+        let look = ExplorerLook.current
+        let fonts = explorerFonts
         let saving = chooser.mode == .save
         let choosingFolder = chooser.mode == .folder
         let answer = choosingFolder ? session.folderAnswer.map { [$0] } : session.openAnswer
@@ -372,21 +390,27 @@ private struct ChooserBar: View {
         let canConfirm = saving
             ? !session.saveName.trimmingCharacters(in: .whitespaces).isEmpty
             : answer != nil || (!choosingFolder && session.selectedEntries.contains(where: \.isDirectory))
-        return HStack(padding: 10, alignment: .center, spacing: 10) {
+        return HStack(padding: 0, alignment: .center, spacing: 10) {
             if saving {
-                Text("Name", color: theme.textSecondary)
+                Text("Name", color: look.soft, font: fonts?.crumbSemi)
                 TextField(
                     text: $session.saveName,
+                    font: fonts?.body,
                     autoFocus: true,
                     selectionOnFocus: .leading(
                         Rename.stemLength(of: session.saveName, isDirectory: false)
                     ),
                     onSubmit: { session.confirmChoice() }
                 )
+                .padding(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
+                .background(look.card)
+                .border(look.divider)
+                .cornerRadius(12)
                 .flexGrow(1)
                 .agentId("chooser-name")
             } else {
-                Text(picked, color: answer == nil ? theme.textDim : theme.textPrimary, lineLimit: 1)
+                Text(picked, color: answer == nil ? look.soft : look.text,
+                     font: answer == nil ? fonts?.body : fonts?.bodySemi, lineLimit: 1)
                     .flexGrow(1)
                     .flexShrink(1)
                     .agentId("chooser-picked")
@@ -404,297 +428,15 @@ private struct ChooserBar: View {
                 )
                 .agentId("chooser-filter")
             } else if let only = chooser.filters.first {
-                Text(only.name, color: theme.textDim, lineLimit: 1)
+                Text(only.name, color: look.soft, font: fonts?.caption, lineLimit: 1)
             }
-            Button("Cancel") { session.cancelChoosing() }
-                .agentId("chooser-cancel")
-            Button(saving ? "Save" : choosingFolder ? "Choose" : "Open") {
+            DialogButton("Cancel", id: "chooser-cancel") { session.cancelChoosing() }
+            DialogButton(saving ? "Save" : choosingFolder ? "Choose" : "Open", prominent: true,
+                         id: "chooser-confirm") {
                 if canConfirm { session.confirmChoice() }
             }
-            .agentId("chooser-confirm")
         }
-        .background(theme.panel)
-    }
-}
-
-/// A locked zip, asking for its password. Enter is Extract, Escape is
-/// Cancel; a wrong password asks again, with the field empty.
-private struct PasswordBar: View {
-    @Bindable var session: ExplorerSession
-    let request: ExplorerSession.PasswordRequest
-
-    var body: some View {
-        let theme = Theme.current
-        let name = "\u{201C}\(request.archive.name)\u{201D}"
-        let message = request.wrong
-            ? "That password does not open \(name). Try again:"
-            : "\(name) is locked. Password:"
-        return HStack(padding: 10, alignment: .center, spacing: 10) {
-            Text(message, color: theme.textPrimary, lineLimit: 1)
-                .flexShrink(1)
-                .agentId("password-message")
-            TextField(
-                text: session.passwordBinding,
-                autoFocus: true,
-                secure: true,
-                onSubmit: { session.submitPassword() }
-            )
-            .flexGrow(1)
-            .agentId("password-field")
-            Button("Cancel") { session.cancelPassword() }
-                .agentId("password-cancel")
-            Button("Extract") { session.submitPassword() }
-                .agentId("password-confirm")
-        }
-        .background(theme.selectionFill)
-    }
-}
-
-/// Compress…: what to call the archive, what kind, and — for a zip — a
-/// password. Enter in either field is Compress; Escape is Cancel.
-private struct CompressBar: View {
-    @Bindable var session: ExplorerSession
-    let draft: ExplorerSession.CompressDraft
-
-    var body: some View {
-        let theme = Theme.current
-        let what = draft.sources.count == 1
-            ? "\u{201C}\((draft.sources[0] as NSString).lastPathComponent)\u{201D}"
-            : ExplorerSession.items(draft.sources.count)
-        return HStack(padding: 10, alignment: .center, spacing: 10) {
-            Text("Compress \(what) as", color: theme.textSecondary, lineLimit: 1)
-                .flexShrink(1)
-            TextField(
-                text: session.compressName,
-                autoFocus: true,
-                selectionOnFocus: .all,
-                onSubmit: { session.confirmCompress() }
-            )
-            .flexGrow(1)
-            .agentId("compress-name")
-            ComboBox(
-                selection: session.compressFormat,
-                items: ArchiveFormat.allCases.map {
-                    ComboBoxItem($0.title, tag: $0, detail: "." + $0.fileExtension)
-                },
-                width: .pt(170)
-            )
-            .agentId("compress-format")
-            if draft.format.supportsPassword {
-                TextField(
-                    text: session.compressPassword,
-                    placeholder: "Password (optional)",
-                    secure: true,
-                    onSubmit: { session.confirmCompress() }
-                )
-                .frame(width: .pt(170))
-                .agentId("compress-password")
-            }
-            Button("Cancel") { session.cancelCompress() }
-                .agentId("compress-cancel")
-            Button("Compress") { session.confirmCompress() }
-                .agentId("compress-confirm")
-        }
-        .background(theme.panel)
-    }
-}
-
-/// Save over a file already there — asked, never assumed.
-private struct OverwriteBar: View {
-    @Bindable var session: ExplorerSession
-    let target: String
-
-    var body: some View {
-        let name = (target as NSString).lastPathComponent
-        return HStack(padding: 8, alignment: .center, spacing: 8) {
-            Text(
-                "\u{201C}\(name)\u{201D} already exists. Replace it?",
-                color: Theme.current.textPrimary, lineLimit: 1
-            )
-            .flexShrink(1)
-            Spacer()
-            Button("Replace") { session.resolveOverwrite(true) }
-                .agentId("overwrite-replace")
-            Button("Cancel") { session.resolveOverwrite(false) }
-                .agentId("overwrite-cancel")
-        }
-        .background(Theme.current.selectionFill)
-    }
-}
-
-/// "Delete this for good?" — the one question before anything is removed
-/// rather than thrown away. Escape is Cancel.
-private struct EraseBar: View {
-    @Bindable var session: ExplorerSession
-    let pending: ExplorerSession.PendingErase
-
-    var body: some View {
-        HStack(padding: 8, alignment: .center, spacing: 8) {
-            Text(pending.message, color: Theme.current.textPrimary, lineLimit: 1)
-                .flexShrink(1)
-                .agentId("erase-message")
-            Spacer()
-            Button("Delete") { session.resolveErase(true) }
-                .agentId("erase-confirm")
-            Button("Cancel") { session.resolveErase(false) }
-                .agentId("erase-cancel")
-        }
-        .background(Theme.current.selectionFill)
-    }
-}
-
-private struct ClashBar: View {
-    @Bindable var session: ExplorerSession
-    let pending: ExplorerSession.PendingCopy
-
-    var body: some View {
-        let clashes = pending.plan.clashes
-        let total = pending.plan.items.count
-        let message = clashes.count == 1 && total == 1
-            ? "\u{201C}\(clashes[0].name)\u{201D} is already in \(pending.folderTitle)."
-            : "\(clashes.count) of \(ExplorerSession.items(total)) are already in "
-                + "\(pending.folderTitle)."
-        return HStack(padding: 8, alignment: .center, spacing: 8) {
-            Text(message, color: Theme.current.textPrimary, lineLimit: 1)
-                .flexShrink(1)
-                .agentId("clash-message")
-            Spacer()
-            Button("Replace") { session.resolveCopy(.replace) }
-                .agentId("clash-replace")
-            Button("Keep Both") { session.resolveCopy(.keepBoth) }
-                .agentId("clash-keep-both")
-            Button("Skip") { session.resolveCopy(.skip) }
-                .agentId("clash-skip")
-            Button("Cancel") { session.resolveCopy(nil) }
-                .agentId("clash-cancel")
-        }
-        .background(Theme.current.selectionFill)
-    }
-}
-
-/// The clash bar for a transfer to or from a server: the same one question
-/// for the whole drop, the same four answers.
-private struct TransferClashBar: View {
-    @Bindable var session: ExplorerSession
-    let plan: RemoteTransferPlan
-
-    var body: some View {
-        let clashes = plan.clashes
-        let total = plan.items.count
-        let folder = plan.destinationTitle
-        let message = clashes.count == 1 && total == 1
-            ? "\u{201C}\(clashes[0].name)\u{201D} is already in \(folder)."
-            : "\(clashes.count) of \(ExplorerSession.items(total)) are already in \(folder)."
-        return HStack(padding: 8, alignment: .center, spacing: 8) {
-            Text(message, color: Theme.current.textPrimary, lineLimit: 1)
-                .flexShrink(1)
-                .agentId("transfer-clash-message")
-            Spacer()
-            Button("Replace") { session.resolveTransfer(.replace) }
-                .agentId("transfer-replace")
-            Button("Keep Both") { session.resolveTransfer(.keepBoth) }
-                .agentId("transfer-keep-both")
-            Button("Skip") { session.resolveTransfer(.skip) }
-                .agentId("transfer-skip")
-            Button("Cancel") { session.resolveTransfer(nil) }
-                .agentId("transfer-cancel")
-        }
-        .background(Theme.current.selectionFill)
-    }
-}
-
-/// A server wants a password. Enter is Connect, Escape is Cancel; one that
-/// works is saved to the keyring, one that does not asks again.
-private struct LoginBar: View {
-    @Bindable var session: ExplorerSession
-    let request: RemoteLoginRequest
-
-    var body: some View {
-        let theme = Theme.current
-        let asksUser = request.server.user == nil
-        // SFTP got here only after every key was refused, which is worth
-        // saying: on a server with passwords switched off, typing one will
-        // not help, and the fix is in ~/.ssh/config.
-        let message = request.wrong
-            ? "\(request.server.title) did not take that password. Try again:"
-            : request.server.scheme == .sftp
-                ? "\(request.server.title) did not accept your SSH keys. Password or key passphrase:"
-                : "Log in to \(request.server.title):"
-        return HStack(padding: 10, alignment: .center, spacing: 10) {
-            Text(message, color: theme.textPrimary, lineLimit: 1)
-                .flexShrink(1)
-                .agentId("login-message")
-            if asksUser {
-                TextField(
-                    text: session.loginUser,
-                    placeholder: "User",
-                    autoFocus: true,
-                    onSubmit: { session.submitLogin() }
-                )
-                .frame(width: .pt(140))
-                .agentId("login-user")
-            }
-            TextField(
-                text: session.loginPassword,
-                placeholder: "Password",
-                autoFocus: !asksUser,
-                secure: true,
-                onSubmit: { session.submitLogin() }
-            )
-            .flexGrow(1)
-            .agentId("login-password")
-            Button("Cancel") { session.cancelLogin() }
-                .agentId("login-cancel")
-            Button("Connect") { session.submitLogin() }
-                .agentId("login-connect")
-        }
-        .background(theme.selectionFill)
-    }
-}
-
-/// Connect to Server…: an address, started for you.
-private struct ProfileNameBar: View {
-    @Bindable var session: ExplorerSession
-
-    var body: some View {
-        HStack(padding: 10, alignment: .center, spacing: 10) {
-            Text("New Profile", color: Theme.current.textSecondary)
-            TextField(
-                text: Binding(get: { session.profileDraft ?? "" }, set: { session.profileDraft = $0 }),
-                placeholder: "Work, Home, …", autoFocus: true,
-                onSubmit: { session.createProfile() }
-            )
-            .flexGrow(1)
-            .agentId("profile-name")
-            Button("Cancel") { session.profileDraft = nil }
-            Button("Create") { session.createProfile() }
-                .agentId("create-profile")
-        }
-        .background(Theme.current.panel)
-    }
-}
-
-private struct ConnectBar: View {
-    @Bindable var session: ExplorerSession
-
-    var body: some View {
-        let theme = Theme.current
-        return HStack(padding: 10, alignment: .center, spacing: 10) {
-            Text("Connect to", color: theme.textSecondary, lineLimit: 1)
-            TextField(
-                text: session.connectBinding,
-                placeholder: "sftp://user@host, ftp://host or ftps://host",
-                autoFocus: true,
-                onSubmit: { session.submitConnect() }
-            )
-            .flexGrow(1)
-            .agentId("connect-address")
-            Button("Cancel") { session.cancelConnect() }
-                .agentId("connect-cancel")
-            Button("Connect") { session.submitConnect() }
-                .agentId("connect-confirm")
-        }
-        .background(theme.panel)
+        .padding(EdgeInsets(top: 10, leading: 22, bottom: 4, trailing: 14))
     }
 }
 
@@ -723,16 +465,21 @@ private struct ExplorerTabs: View {
             }
             .flexGrow(0)
             .flexShrink(1)
-            HStack(width: .pt(30), height: .pt(30), padding: 0, alignment: .center, spacing: 0,
-                   onClick: { session.newTab() }) {
-                Icon([.path(ExplorerGlyphs.plus)], size: 15, color: look.soft, strokeWidth: 2.75,
-                     box: 30)
+            // In a stack of its own: padding on the button itself lands inside
+            // its node, which grew the hover disc to 34×36 round a + still
+            // drawn for 30×30.
+            VStack(padding: 0, spacing: 0) {
+                HStack(width: .pt(30), height: .pt(30), padding: 0, alignment: .center,
+                       spacing: 0, onClick: { session.newTab() }) {
+                    Icon([.path(ExplorerGlyphs.plus)], size: 15, color: look.soft,
+                         strokeWidth: 2.75, box: 30)
+                }
+                .hoverBackground(look.press)
+                .cornerRadius(15)
+                .cursor(.pointer)
+                .tooltip("New Tab")
+                .agentId("new-tab")
             }
-            .hoverBackground(look.press)
-            .cornerRadius(15)
-            .cursor(.pointer)
-            .tooltip("New Tab")
-            .agentId("new-tab")
             .padding(EdgeInsets(top: 0, leading: 4, bottom: 6, trailing: 0))
             .flexShrink(0)
             // What is left of the strip moves the window, as a title bar would.
@@ -2040,13 +1787,13 @@ private struct FileRow: View {
                     return OverlayFrame(x: x, y: y, width: width, height: height)
                 },
                 style: {
-                    var style = MenuBarStyle.standard(theme: theme).overlayStyle
+                    var style = PaneChrome.menuStyle.overlayStyle
                     style.minWidth = 220
                     return style
                 }()
             ) {
                 if session.contextEntry?.path == entry.path, session.contextPaneID == paneID {
-                    FileContextMenu(session: session, entry: entry)
+                    FileContextMenu(session: session, entry: entry).inExplorerFont()
                 }
             }
     }
@@ -2108,7 +1855,7 @@ private struct DropChoiceMenu: View {
         entries.append(.separator)
         entries.append(.item(MenuItemModel(id: MenuID("drop.cancel"), title: "Cancel")))
         return MenuDropdownPanel(
-            entries: entries,
+            entries: MenuGlyphMap.apply(entries, upload: menu.toServer),
             onActivate: { id in
                 switch id.raw {
                 case "drop.copy": session.resolveDropMenu(.copy)
@@ -2116,7 +1863,7 @@ private struct DropChoiceMenu: View {
                 default: session.resolveDropMenu(nil)
                 }
             },
-            style: .standard(theme: Theme.current)
+            style: PaneChrome.menuStyle
         )
         .agentId("drop-menu")
     }
@@ -2134,9 +1881,9 @@ private struct FileContextMenu: View {
         let handlers = session.handlers(for: entry)
         let defaultId = session.defaultHandlerId(for: entry)
         return MenuDropdownPanel(
-            entries: entries(handlers: handlers, defaultId: defaultId),
+            entries: MenuGlyphMap.apply(entries(handlers: handlers, defaultId: defaultId)),
             onActivate: { id in session.performContext(id.raw, entry: entry) },
-            style: .standard(theme: theme)
+            style: PaneChrome.menuStyle
         )
     }
 
@@ -2365,5 +2112,64 @@ private struct StatusBar: View {
         .cursor(.pointer)
         .flexShrink(0)
         .agentId(id)
+    }
+}
+
+extension View {
+    /// Figtree inside an overlay, which does not inherit the window's font.
+    @ViewBuilder
+    func inExplorerFont() -> some View {
+        if let fonts = explorerFonts {
+            self.font(fonts.body)
+        } else {
+            self
+        }
+    }
+}
+
+/// The glyph beside each row of the explorer's menus, by the row's id.
+enum MenuGlyphMap {
+    static let byID: [String: String] = [
+        "ctx.open": "M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6",
+        "ctx.open-tab": "M3 5h18v14H3zM3 9h18M12 12v5M9.5 14.5h5",
+        "ctx.open-with": ExplorerGlyphs.grid,
+        "ctx.set-default": "M20 6 9 17l-5-5",
+        "ctx.extract-here": "M21 8v13H3V8M1 3h22v5H1zM12 11v6M9 14l3 3 3-3",
+        "ctx.compress": "M21 8v13H3V8M1 3h22v5H1zM10 12h4",
+        "ctx.copy": "M8 8h12v12H8zM16 8V4H4v12h4",
+        "ctx.cut": "M6 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM20 4 8.12 15.88M14.47 14.48 20 20M8.12 8.12 12 12",
+        "ctx.paste": "M9 2h6v4H9zM16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2",
+        "ctx.rename": "M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z",
+        "ctx.trash": ExplorerGlyphs.trash,
+        "ctx.delete": "M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6",
+        "ctx.copy-path": "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71",
+        "ctx.favorite": ExplorerGlyphs.star,
+        "ctx.terminal": "M4 17l6-6-6-6M12 19h8",
+        "ctx.restore": "M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5",
+        "ctx.download": ExplorerGlyphs.down,
+        "drop.copy": "M8 8h12v12H8zM16 8V4H4v12h4",
+        "drop.move": "M5 12h14M12 5l7 7-7 7",
+        "drop.cancel": ExplorerGlyphs.cross,
+    ]
+
+    /// `entries` with each row's glyph, submenus included. A drop on a server
+    /// uploads, which gets the upload arrow rather than the copy pages.
+    static func apply(_ entries: [MenuEntry], upload: Bool = false) -> [MenuEntry] {
+        entries.map { entry in
+            switch entry {
+            case .item(var item):
+                if upload, item.id.raw == "drop.copy" {
+                    item.icon = "M12 21V9M7 14l5-5 5 5M5 3h14"
+                } else if item.icon == nil {
+                    item.icon = byID[item.id.raw]
+                }
+                return .item(item)
+            case .submenu(var node):
+                if node.glyph == nil { node.glyph = byID[node.id.raw] }
+                return .submenu(node)
+            default:
+                return entry
+            }
+        }
     }
 }

@@ -77,6 +77,7 @@ public enum FileIcon {
         "Music": "folder-music",
         "Pictures": "folder-pictures",
         "Videos": "folder-videos",
+        "Video": "folder-videos",
         "Templates": "folder-templates",
         "Public": "folder-publicshare",
     ]

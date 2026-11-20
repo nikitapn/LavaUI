@@ -129,6 +129,8 @@ struct ExplorerFonts {
     let display14: UIFont
     /// "Nothing here yet".
     let display18: UIFont
+    /// A dialog's question.
+    let display19: UIFont
 
     static func load(into editor: Editor) -> ExplorerFonts? {
         func face(_ file: String, _ size: Float, features: [String] = [],
@@ -158,13 +160,14 @@ struct ExplorerFonts {
               let kicker = face("Figtree-Bold", 11, letterSpacing: 0.1),
               let tag = face("Figtree-Regular", 11, letterSpacing: 0.02),
               let display14 = face("Caprasimo-Regular", 14),
-              let display18 = face("Caprasimo-Regular", 18)
+              let display18 = face("Caprasimo-Regular", 18),
+              let display19 = face("Caprasimo-Regular", 19)
         else { return nil }
         return ExplorerFonts(
             body: body, bodySemi: bodySemi, bodyTabular: bodyTabular,
             crumb: crumb, crumbSemi: crumbSemi, status: status, statusSemi: statusSemi,
             caption: caption, captionTabular: captionTabular, kicker: kicker, tag: tag,
-            display14: display14, display18: display18)
+            display14: display14, display18: display18, display19: display19)
     }
 }
 

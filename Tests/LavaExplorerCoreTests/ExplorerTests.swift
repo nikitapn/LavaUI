@@ -316,8 +316,28 @@ struct PlaceTests {
                     || $0 == "/home/somebody" || $0 == "/"
             }
         )
-        #expect(places.map(\.title) == ["Home", "Desktop", "Documents", "Computer", "Trash"])
+        #expect(places.map(\.title) == ["Home", "Documents", "Computer", "Trash"])
         #expect(places.contains { $0.path == "/mnt/papers" })
         #expect(!places.contains { $0.title == "Downloads" })
+        #expect(!places.contains { $0.title == "Desktop" }, "this desktop puts nothing there")
+    }
+
+    @Test("alphabetical, and Videos found as ~/Video when the XDG entry names home")
+    func videoFallback() {
+        let text = """
+            XDG_VIDEOS_DIR="$HOME/"
+            XDG_MUSIC_DIR="$HOME/Music"
+            """
+        let present: Set<String> = [
+            "/home/somebody/Video", "/home/somebody/Music", "/home/somebody/Pictures",
+            "/home/somebody/Documents", "/home/somebody/Downloads",
+        ]
+        let places = Places.standard(
+            home: "/home/somebody", userDirs: text, exists: { present.contains($0) }
+        )
+        #expect(places.map(\.title) == [
+            "Home", "Documents", "Downloads", "Music", "Pictures", "Video", "Computer", "Trash",
+        ])
+        #expect(places.first { $0.title == "Video" }?.path == "/home/somebody/Video")
     }
 }

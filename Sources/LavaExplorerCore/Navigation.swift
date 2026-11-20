@@ -166,8 +166,9 @@ public struct Place: Equatable, Sendable, Identifiable {
 }
 
 public enum Places {
-    /// Home, the XDG user directories that actually exist, the machine, and
-    /// the Trash.
+    /// Home, the XDG user directories that actually exist — alphabetical,
+    /// and without Desktop, which this desktop does not put anything on —
+    /// the machine, and the Trash.
     ///
     /// Missing folders are skipped rather than shown greyed: a place that
     /// cannot be opened is a lie, and this app has no "create this folder"
@@ -181,20 +182,35 @@ public enum Places {
         let home = FolderHistory.normalize(home)
         let dirs = parseUserDirs(userDirs ?? readUserDirs(home: home), home: home)
         var places: [Place] = [Place(title: "Home", path: home)]
-        let named: [(String, String)] = [
-            ("Desktop", "XDG_DESKTOP_DIR"),
-            ("Documents", "XDG_DOCUMENTS_DIR"),
-            ("Downloads", "XDG_DOWNLOAD_DIR"),
-            ("Pictures", "XDG_PICTURES_DIR"),
-            ("Music", "XDG_MUSIC_DIR"),
-            ("Videos", "XDG_VIDEOS_DIR"),
+        // The XDG entry where it names a folder of its own; otherwise the
+        // usual names under home, the first that exists — titled by its own
+        // name, so a `~/Video` is not called "Videos". An entry that names
+        // home itself (`XDG_VIDEOS_DIR="$HOME/"`, which is how a desktop says
+        // "none") falls back the same way.
+        let named: [(String, String, [String])] = [
+            ("Documents", "XDG_DOCUMENTS_DIR", ["Documents"]),
+            ("Downloads", "XDG_DOWNLOAD_DIR", ["Downloads"]),
+            ("Music", "XDG_MUSIC_DIR", ["Music"]),
+            ("Pictures", "XDG_PICTURES_DIR", ["Pictures"]),
+            ("Videos", "XDG_VIDEOS_DIR", ["Videos", "Video"]),
         ]
-        for (title, key) in named {
-            let fallback = (home as NSString).appendingPathComponent(title)
-            let path = dirs[key] ?? fallback
-            guard path != home, exists(path) else { continue }
-            if places.contains(where: { $0.path == path }) { continue }
-            places.append(Place(title: title, path: path))
+        for (title, key, fallbacks) in named {
+            var found: Place?
+            if let path = dirs[key], path != home, exists(path) {
+                found = Place(title: title, path: path)
+            } else {
+                for name in fallbacks {
+                    let path = (home as NSString).appendingPathComponent(name)
+                    if exists(path) {
+                        found = Place(title: name, path: path)
+                        break
+                    }
+                }
+            }
+            guard let place = found,
+                  !places.contains(where: { $0.path == place.path })
+            else { continue }
+            places.append(place)
         }
         places.append(Place(title: "Computer", path: "/"))
         places.append(Place(title: "Trash", path: TrashPath.uri))
