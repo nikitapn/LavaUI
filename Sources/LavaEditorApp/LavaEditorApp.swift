@@ -15,13 +15,16 @@ struct LavaEditorApp {
         // out of it in its initialiser.
         AppSettings.configure(appName: "LavaEditor")
 
+        // The windowed renderer changes directory to load its assets.
+        let launchDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath,
+                                  isDirectory: true)
         if !LavaHost.isClient { Theme.current = .paper }
         guard let editor = LavaHost.open(title: "LavaEditor", width: 1040, height: 640) else { exit(1) }
         LavaHost.setMinimumSize(editor: editor, width: 480, height: 280)
 
         let session = EditorSession(editor: editor)
         session.restoreSession()
-        session.openArguments(Array(CommandLine.arguments.dropFirst()))
+        session.openArguments(Array(CommandLine.arguments.dropFirst()), relativeTo: launchDirectory)
 
         LavaHost.run(
             editor: editor,
@@ -54,6 +57,14 @@ struct LavaEditorApp {
                             "Open Folder…", id: "file.open-folder",
                             shortcut: KeyShortcut(KeyCode.o, [.primary, .shift])
                         ) { session.openFolderDialog() }
+                        recentProjects(session, kind: .folder)
+                        MenuItem("Open Workspace…", id: "file.open-workspace") {
+                            session.openWorkspaceDialog()
+                        }
+                        recentProjects(session, kind: .workspace)
+                        MenuItem("Save Workspace As…", id: "file.save-workspace-as") {
+                            session.saveWorkspaceAs()
+                        }
                         Menu("Recent Files", id: "file.recent") {
                             if session.recentFiles.isEmpty {
                                 MenuItem("No Recent Files", id: "file.recent.empty",
@@ -151,11 +162,43 @@ struct LavaEditorApp {
                     }
                 }
             },
+            onRawKey: { event in
+                guard session.pendingWorkspace != nil else { return false }
+                if event.x > 0, event.button == KeyCode.escape {
+                    session.pendingWorkspace = nil
+                }
+                return true
+            },
             makeRoot: {
                 let appearance = EditorAppearance(theme: Theme.current)
-                return LavaEditorView(session: session, appearance: appearance)
+                return EditorWorkspaceWindow(session: session, appearance: appearance)
                     .theme(appearance.theme)
             }
         )
+    }
+
+    private static func recentProjects(_ session: EditorSession, kind: RecentProjectKind) -> Menu {
+        let noun = kind == .folder ? "Folder" : "Workspace"
+        let id = kind == .folder ? "file.recent-folders" : "file.recent-workspaces"
+        let paths = session.visibleRecentPaths(kind)
+        return Menu("Open Recent \(noun)", id: id) {
+            if paths.isEmpty {
+                MenuItem("No Recent \(noun)s", id: "\(id).empty", isEnabled: false) {}
+            }
+            for (index, path) in paths.enumerated() {
+                MenuItem(path, id: "\(id).\(index)") {
+                    let url = URL(fileURLWithPath: path)
+                    switch kind {
+                    case .folder: session.openFolder(url)
+                    case .workspace: session.openWorkspace(url)
+                    }
+                }
+            }
+            MenuSeparator()
+            MenuItem("Clear Recent \(noun)s", id: "\(id).clear",
+                     isEnabled: !(session.recentProjectPaths[kind] ?? []).isEmpty) {
+                session.clearRecentProjectPaths(kind)
+            }
+        }
     }
 }

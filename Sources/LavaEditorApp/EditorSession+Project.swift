@@ -16,11 +16,13 @@ extension EditorSession {
             notice = "\(root.path) is not a folder."
             return
         }
-        if project?.tree.root == root {
+        rememberProjectPath(root, kind: .folder)
+        if project?.tree.root.path == root.path {
             showsSidebar = true
             return
         }
         restoreProject(root.path, expanded: [])
+        followActive()
         showsSidebar = true
     }
 
@@ -46,7 +48,6 @@ extension EditorSession {
             }
         }
         self.project = project
-        followActive()
     }
 
     /// Opens a file from the tree in a tab, or brings its tab forward.
