@@ -12,6 +12,14 @@ enum PaneChrome {
     /// Shorter than the strip: the gap above is what makes the active tab
     /// read as a tab rather than a stripe.
     static let tabHeight: Float = 30
+
+    /// The gap between the sidebar and the panes, and between two panes:
+    /// the design draws no rule there, only space — which still drags.
+    static var splitStyle: SplitStyle {
+        let look = ExplorerLook.current
+        return SplitStyle(thickness: 10, lineThickness: 0, color: .clear, background: .clear,
+                          hover: look.press.opacity(0.5), active: look.accent300)
+    }
 }
 
 /// Places on the left; on the right, one or more panes, each a browser of its
@@ -23,17 +31,29 @@ struct ExplorerView: View {
     @Bindable var session: ExplorerSession
 
     var body: some View {
+        if let fonts = explorerFonts {
+            content.font(fonts.body)
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
         let dropX = session.dropMenu?.x ?? 0
         let dropY = session.dropMenu?.y ?? 0
         return VStack(flexGrow: 1, padding: 0, spacing: 0) {
             HSplitView(
                 fraction: $session.sidebarFraction,
                 minLeading: 140,
-                minTrailing: 360
+                minTrailing: 360,
+                style: PaneChrome.splitStyle
             ) {
                 Sidebar(session: session)
             } trailing: {
-                PaneTree.build(session, session.layout.root)
+                VStack(flexGrow: 1, padding: 0, spacing: 0) {
+                    PaneTree.build(session, session.layout.root)
+                }
+                .padding(EdgeInsets(top: 8, leading: 0, bottom: 0, trailing: 12))
             }
             if let pending = session.pendingCopy {
                 ClashBar(session: session, pending: pending)
@@ -67,7 +87,7 @@ struct ExplorerView: View {
             }
             StatusBar(session: session)
         }
-        .background(Theme.current.background)
+        .background(ExplorerLook.current.surface)
         .onDrop { urls in session.acceptDrop(urls) }
         .overlayLayer { TabGhost(session: session) }
         .overlayLayer { RightDragGhost(session: session) }
@@ -110,7 +130,8 @@ private enum PaneTree {
             switch split.axis {
             case .horizontal:
                 return AnyView(
-                    HSplitView(fraction: fraction, minLeading: 240, minTrailing: 240) {
+                    HSplitView(fraction: fraction, minLeading: 240, minTrailing: 240,
+                               style: PaneChrome.splitStyle) {
                         build(session, split.first)
                     } trailing: {
                         build(session, split.second)
@@ -118,7 +139,8 @@ private enum PaneTree {
                 )
             case .vertical:
                 return AnyView(
-                    VSplitView(fraction: fraction, minTop: 160, minBottom: 160) {
+                    VSplitView(fraction: fraction, minTop: 160, minBottom: 160,
+                               style: PaneChrome.splitStyle) {
                         build(session, split.first)
                     } bottom: {
                         build(session, split.second)
@@ -136,17 +158,24 @@ private struct PaneView: View {
     var body: some View {
         let pane = session.layout.pane(id: paneID)
         let active = session.layout.activePaneID == paneID
+        // The outline that says which pane the keys go to — only when there
+        // is more than one to choose between.
+        let ringed = active && session.layout.panes.count > 1
         return VStack(flexGrow: 1, padding: 0, spacing: 0) {
             if let pane {
-                ExplorerTabs(session: session, pane: pane, active: active)
-                Toolbar(session: session, paneID: paneID, tab: pane.tabs.current)
-                if let draft = session.bulkRenameDraft, draft.tabID == pane.tabs.current.id {
-                    BulkRenamePane(session: session, draft: draft)
-                } else {
-                    FilePane(session: session, paneID: paneID, tab: pane.tabs.current)
+                ExplorerTabs(session: session, pane: pane, active: active, ringed: ringed)
+                PaneCard(session: session, pane: pane, ringed: ringed) {
+                    Toolbar(session: session, paneID: paneID, tab: pane.tabs.current)
+                    if let draft = session.bulkRenameDraft, draft.tabID == pane.tabs.current.id {
+                        BulkRenamePane(session: session, draft: draft)
+                    } else {
+                        FilePane(session: session, paneID: paneID, tab: pane.tabs.current)
+                    }
+                    PaneFooter(session: session, tab: pane.tabs.current, active: active)
                 }
             }
         }
+        .padding(EdgeInsets(top: 4, leading: 0, bottom: 0, trailing: 0))
         // Before anything in the pane handles the press, so the row, button
         // or field it lands on already acts on this pane.
         .onAnyPress { _ in session.activatePane(paneID) }
@@ -677,23 +706,152 @@ private struct ExplorerTabs: View {
     @Bindable var session: ExplorerSession
     let pane: ExplorerPane
     let active: Bool
+    let ringed: Bool
+
+    static let height: Float = 40
+    static let radius: Float = 16
 
     var body: some View {
-        TabStrip(onNew: { session.newTab() }) {
-            ForEach(pane.tabs.tabs) { tab in
-                TabStripItem(tab.title, selected: tab.id == pane.tabs.currentID,
-                             emphasized: active, closeID: "close-tab-\(tab.id)",
-                             onSelect: { session.selectTab(id: tab.id) },
-                             onClose: { session.closeTab(id: tab.id) })
-                    .background(session.dropHover == .tab(tab.id)
-                                ? Theme.current.accent.opacity(0.28) : .clear)
-                    .onFrame { session.noteTabFrame(tab.id, $0) }
-                    .onDragGesture { session.dragTab(tab.id, $0) }
-                    .onDrop(
-                        targeted: { session.setDropHover(.tab(tab.id), $0) },
-                        springLoaded: { session.selectTab(id: tab.id) }
-                    ) { session.dropOnTab(id: tab.id, $0) }
-                    .agentId("tab-\(tab.id)")
+        let look = ExplorerLook.current
+        return HStack(height: .pt(Self.height), padding: 0, alignment: .end, spacing: 4) {
+            ScrollView(.horizontal, showsIndicator: false) {
+                HStack(height: .pt(Self.height), padding: 0, alignment: .end, spacing: 4) {
+                    ForEach(pane.tabs.tabs) { tab in
+                        item(tab, look: look)
+                    }
+                }
+            }
+            .flexGrow(0)
+            .flexShrink(1)
+            HStack(width: .pt(30), height: .pt(30), padding: 0, alignment: .center, spacing: 0,
+                   onClick: { session.newTab() }) {
+                Icon([.path(ExplorerGlyphs.plus)], size: 15, color: look.soft, strokeWidth: 2.75,
+                     box: 30)
+            }
+            .hoverBackground(look.press)
+            .cornerRadius(15)
+            .cursor(.pointer)
+            .tooltip("New Tab")
+            .agentId("new-tab")
+            .padding(EdgeInsets(top: 0, leading: 4, bottom: 6, trailing: 0))
+            .flexShrink(0)
+            // What is left of the strip moves the window, as a title bar would.
+            Spacer()
+                .frame(height: .pt(Self.height), minWidth: 48)
+                .windowDrag()
+        }
+    }
+
+    /// A tab: a folder, the name, a close button. The current one is the
+    /// card's own colour and runs into it, square at the bottom.
+    private func item(_ tab: ExplorerTab, look: ExplorerLook) -> some View {
+        let fonts = explorerFonts
+        let on = tab.id == pane.tabs.currentID
+        let aimedAt = session.dropHover == .tab(tab.id)
+        let font = on ? fonts?.bodySemi : fonts?.body
+        let width = min(200, font?.measure(tab.title).width ?? 120)
+        let ringed = ringed && on
+        let card = look.card, ring = look.accent300
+        return HStack(padding: 0, alignment: .center, spacing: 2) {
+            HStack(padding: 0, alignment: .center, spacing: 8,
+                   onClick: { session.selectTab(id: tab.id) }) {
+                Icon([.fill(ExplorerGlyphs.folder)], size: 14,
+                     color: on ? look.sage600 : look.faint)
+                Text(tab.title, color: on ? look.text : look.soft, font: font, lineLimit: 1)
+                    .frame(width: .pt(width))
+            }
+            .padding(EdgeInsets(top: 9, leading: 10, bottom: 11, trailing: 4))
+            HStack(width: .pt(22), height: .pt(22), padding: 0, alignment: .center, spacing: 0,
+                   onClick: { session.closeTab(id: tab.id) }) {
+                Icon([.path(ExplorerGlyphs.cross)], size: 12, color: on ? look.text : look.soft,
+                     strokeWidth: 2.75, box: 22)
+            }
+            .hoverBackground(look.accent200)
+            .cornerRadius(11)
+            .agentId("close-tab-\(tab.id)")
+        }
+        .padding(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 6))
+        .background(aimedAt ? look.accent300 : (on ? card : Color.clear))
+        .hoverBackground(on ? card : look.press.opacity(0.5))
+        .cornerRadius(Self.radius)
+        .underlay {
+            // Square at the bottom where the current tab meets the card, and
+            // the active pane's outline round its other three sides.
+            Canvas(label: "tab-join", width: .pct(100), height: .pct(100)) { list, frame in
+                guard on else { return }
+                if ringed {
+                    list.roundedRect(x: frame.x - 2, y: frame.y - 2, w: frame.w + 4,
+                                     h: frame.h + 2, color: ring, radius: Self.radius + 2)
+                }
+                list.rect(x: frame.x, y: frame.y + Self.radius, w: frame.w,
+                          h: frame.h - Self.radius, color: card)
+            }
+        }
+        .cursor(.pointer)
+        .onFrame { session.noteTabFrame(tab.id, $0) }
+        .onDragGesture { session.dragTab(tab.id, $0) }
+        .onDrop(
+            targeted: { session.setDropHover(.tab(tab.id), $0) },
+            springLoaded: { session.selectTab(id: tab.id) }
+        ) { session.dropOnTab(id: tab.id, $0) }
+        .agentId("tab-\(tab.id)")
+    }
+}
+
+/// A pane's card: the toolbar, the files and the footer on the lightest
+/// colour, rounded — square at the top left while its first tab is the
+/// current one, so tab and card read as one shape.
+private struct PaneCard<Content: View>: View {
+    @Bindable var session: ExplorerSession
+    let pane: ExplorerPane
+    let ringed: Bool
+    let content: Content
+
+    static var radius: Float { 20 }
+
+    init(session: ExplorerSession, pane: ExplorerPane, ringed: Bool,
+         @ViewBuilder content: () -> Content) {
+        self.session = session
+        self.pane = pane
+        self.ringed = ringed
+        self.content = content()
+    }
+
+    var body: some View {
+        let look = ExplorerLook.current
+        let card = look.card, ring = look.accent300
+        let firstIsCurrent = pane.tabs.tabs.first?.id == pane.tabs.currentID
+        let ringed = ringed
+        let session = session
+        let currentTab = pane.tabs.currentID
+        return VStack(flexGrow: 1, padding: 0, spacing: 0) {
+            content
+        }
+        .background(card)
+        .cornerRadius(Self.radius)
+        .clipped()
+        .underlay {
+            Canvas(label: "pane-card", width: .pct(100), height: .pct(100)) { list, frame in
+                let r = Self.radius
+                if ringed {
+                    list.roundedRect(x: frame.x - 2, y: frame.y - 2, w: frame.w + 4,
+                                     h: frame.h + 4, color: ring, radius: r + 2)
+                    if firstIsCurrent {
+                        list.rect(x: frame.x - 2, y: frame.y - 2, w: r + 2, h: r + 2,
+                                  color: ring)
+                    }
+                }
+                if firstIsCurrent {
+                    list.rect(x: frame.x, y: frame.y, w: r, h: r, color: card)
+                }
+            }
+        }
+        .overlayLayer {
+            // Where the current tab joins the card the outline is not drawn:
+            // the two are one shape.
+            Canvas(label: "pane-join", width: .pct(100), height: .pct(100)) { list, frame in
+                guard ringed, let tab = session.tabFrames[currentTab] else { return }
+                list.rect(x: tab.x, y: frame.y - 2, w: tab.w, h: 2, color: card)
             }
         }
     }
@@ -708,90 +866,153 @@ private struct Toolbar: View {
     let tab: ExplorerTab
 
     var body: some View {
-        let draft = Binding(
-            get: { session.pathDraft(in: paneID) },
-            set: { session.setPathDraft($0, in: paneID) }
-        )
-        return HStack(padding: 8, alignment: .center, spacing: 8) {
-            iconButton("back", tip: "Back", enabled: tab.history.canGoBack, id: "back") {
-                session.goBack()
-            }
-            iconButton(
-                "forward", tip: "Forward", enabled: tab.history.canGoForward, id: "forward"
-            ) {
-                session.goForward()
-            }
-            iconButton("up", tip: "Enclosing Folder", enabled: tab.history.canGoUp, id: "up") {
-                session.goUp()
-            }
+        let look = ExplorerLook.current
+        // A press anywhere in a pane makes it the active one first, so the
+        // session's current tab is this one by the time any of these runs.
+        let canMake = !TrashPath.isTrash(tab.listing.path) && tab.listing.error == nil
+        return HStack(padding: 0, alignment: .center, spacing: 4) {
+            roundButton(ExplorerGlyphs.back, tip: "Back", enabled: tab.history.canGoBack,
+                        id: "back") { session.goBack() }
+            roundButton(ExplorerGlyphs.forward, tip: "Forward",
+                        enabled: tab.history.canGoForward, id: "forward") { session.goForward() }
+            roundButton(ExplorerGlyphs.up, tip: "Enclosing Folder", enabled: tab.history.canGoUp,
+                        id: "up") { session.goUp() }
+            address(look)
+                .flexGrow(1)
+                .flexShrink(1)
+                .padding(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
+            roundButton(ExplorerGlyphs.newFolder, tip: "New Folder", enabled: canMake,
+                        id: "new-folder", stroke: 2.5) { session.startNewFolder() }
+            viewSwitch(look)
+        }
+        .padding(EdgeInsets(top: 12, leading: 12, bottom: 8, trailing: 12))
+    }
+
+    /// Where this tab is, as crumbs to click — or, while it is being edited
+    /// (Ctrl+L, or a click on the bar's empty end), the path as text.
+    @ViewBuilder
+    private func address(_ look: ExplorerLook) -> some View {
+        if session.editingPathPane == paneID {
+            let draft = Binding(
+                get: { session.pathDraft(in: paneID) },
+                set: { session.setPathDraft($0, in: paneID) }
+            )
             TextField(
                 text: draft,
                 placeholder: "Path",
                 // Ctrl+L: the whole address, so typing replaces it.
                 selectionOnFocus: .all,
-                // The field was pressed to be typed in, which made this pane
-                // the active one — so the session's own draft is this one.
-                // The keyboard goes back to the files, as a browser's does
-                // to the page: the address has been used.
+                // The keyboard goes back to the files, as a browser's does to
+                // the page: the address has been used.
                 onSubmit: {
                     session.editingPathPane = nil
                     session.go(session.pathDraft)
                 }
             )
             .focused(session.pathFocus(in: paneID))
-            .padding(2)
-            .background(Theme.current.background)
-            .cornerRadius(4)
-            .flexGrow(1)
+            .padding(EdgeInsets(top: 3, leading: 12, bottom: 3, trailing: 12))
+            .frame(height: .pt(32))
+            .background(look.well)
+            .border(look.accent)
+            .cornerRadius(16)
             .agentId("path-field")
-            // A press anywhere in a pane makes it the active one first, so
-            // the session's current tab is this one by the time this runs.
-            let canMake = !TrashPath.isTrash(tab.listing.path) && tab.listing.error == nil
-            iconButton("folder-plus", tip: "New Folder", enabled: canMake, id: "new-folder") {
-                session.startNewFolder()
-            }
-            // Shows the view it switches to, as a button does — the one in
-            // use needs no picture, it is on screen.
-            iconButton(
-                tab.viewMode == .icons ? "view-list" : "view-grid",
-                tip: tab.viewMode == .icons ? "Show as List" : "Show as Icons",
-                enabled: true, id: "toggle-view"
-            ) {
-                session.setViewMode(tab.viewMode == .icons ? .list : .icons)
-            }
-            // A state rather than an action: lit while hidden files show.
-            iconButton(
-                tab.showHidden ? "eye" : "eye-off",
-                tip: tab.showHidden ? "Hide Hidden Files" : "Show Hidden Files",
-                enabled: true, on: tab.showHidden, id: "toggle-hidden"
-            ) {
-                session.toggleHidden()
-            }
+        } else {
+            crumbs(look)
         }
-        .frame(height: .pt(44))
-        .background(Theme.current.panel)
     }
 
-    private func iconButton(
-        _ glyph: String, tip: String, enabled: Bool, on: Bool = false, id: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        let theme = Theme.current
-        let color = !enabled
-            ? theme.textDim.opacity(0.6)
-            : (on ? theme.textPrimary : theme.textSecondary)
-        return HStack(
-            width: .pt(32), height: .pt(30), padding: 0,
-            alignment: .center, spacing: 0,
-            onClick: enabled ? action : nil
-        ) {
-            Spacer()
-            Glyph(name: glyph, color: color, size: 18)
+    private func crumbs(_ look: ExplorerLook) -> some View {
+        let fonts = explorerFonts
+        let all = Crumb.of(tab.listing.path)
+        // The bar's room: the pane, less the six buttons and the paddings.
+        let room = (session.paneWidths[paneID] ?? 600) - 4 * 32 - 62 - 24 - 24 - 16
+        let shown = Crumb.fitting(all, in: room, font: fonts?.crumb)
+        let paneID = paneID
+        return HStack(height: .pt(32), padding: 0, alignment: .center, spacing: 0,
+                      onClick: { session.editingPathPane = paneID }) {
+            ForEach(Array(shown.enumerated()), id: \.offset) { index, crumb in
+                if index > 0 {
+                    Icon([.path(ExplorerGlyphs.chevronRight)], size: 12, color: look.faint,
+                         strokeWidth: 3)
+                }
+                crumbButton(crumb, last: index == shown.count - 1, look: look)
+            }
             Spacer()
         }
-        .background(on ? theme.selectionFill : Color.clear)
-        .hoverBackground(enabled ? (on ? theme.selectionFill : theme.hover) : Color.clear)
-        .cornerRadius(6)
+        .padding(EdgeInsets(top: 3, leading: 4, bottom: 3, trailing: 4))
+        .background(look.well)
+        .cornerRadius(16)
+        .clipped()
+        .cursor(.text)
+        .tooltip(tab.listing.path)
+        .agentId("path-crumbs")
+    }
+
+    private func crumbButton(_ crumb: Crumb, last: Bool, look: ExplorerLook) -> some View {
+        let fonts = explorerFonts
+        let ink = last ? look.text : look.soft
+        return HStack(padding: 0, alignment: .center, spacing: 6,
+                      onClick: { session.go(crumb.path) }) {
+            if let glyph = crumb.glyph {
+                Icon([.path(glyph)], size: 13, color: ink, strokeWidth: 2.5)
+            }
+            if !crumb.label.isEmpty {
+                Text(crumb.label, color: ink, font: last ? fonts?.crumbSemi : fonts?.crumb,
+                     lineLimit: 1)
+                    .flexShrink(1)
+            }
+        }
+        .padding(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
+        .background(last ? look.card : Color.clear)
+        .hoverBackground(look.card)
+        .cornerRadius(13)
+        .cursor(.pointer)
+        .flexShrink(last ? 0 : 1)
+        .agentId("crumb-\(crumb.path)")
+    }
+
+    /// List or icons, as two halves of one switch.
+    private func viewSwitch(_ look: ExplorerLook) -> some View {
+        HStack(padding: 3, alignment: .center, spacing: 0) {
+            segment(ExplorerGlyphs.list, on: tab.viewMode == .list, tip: "Show as List",
+                    id: "view-list", look: look) { session.setViewMode(.list) }
+            segment(ExplorerGlyphs.grid, on: tab.viewMode == .icons, tip: "Show as Icons",
+                    id: "view-icons", look: look) { session.setViewMode(.icons) }
+        }
+        .background(look.well)
+        .cornerRadius(16)
+        .flexShrink(0)
+        .agentId("toggle-view")
+    }
+
+    private func segment(
+        _ glyph: String, on: Bool, tip: String, id: String, look: ExplorerLook,
+        action: @escaping () -> Void
+    ) -> some View {
+        HStack(width: .pt(28), height: .pt(26), padding: 0, alignment: .center, spacing: 0,
+               onClick: action) {
+            Icon([.path(glyph)], size: 14, color: on ? look.text : look.soft,
+                 strokeWidth: 2.6, box: 28)
+        }
+        .background(on ? look.card : Color.clear)
+        .cornerRadius(13)
+        .cursor(.pointer)
+        .tooltip(tip)
+        .agentId(id)
+    }
+
+    private func roundButton(
+        _ glyph: String, tip: String, enabled: Bool, id: String, stroke: Float = 2.75,
+        action: @escaping () -> Void
+    ) -> some View {
+        let look = ExplorerLook.current
+        return HStack(width: .pt(32), height: .pt(32), padding: 0, alignment: .center,
+                      spacing: 0, onClick: enabled ? action : nil) {
+            Icon([.path(glyph)], size: 16, color: enabled ? look.icon : look.icon.opacity(0.35),
+                 strokeWidth: stroke, box: 32)
+        }
+        .hoverBackground(enabled ? look.press : Color.clear)
+        .cornerRadius(16)
         .cursor(enabled ? .pointer : .arrow)
         .flexShrink(0)
         // Even while disabled: a greyed arrow is the one whose meaning a
@@ -801,59 +1022,159 @@ private struct Toolbar: View {
     }
 }
 
+/// One step of the address bar.
+struct Crumb: Equatable {
+    var label: String
+    var path: String
+    /// Drawn before the label: the house for home.
+    var glyph: String?
+
+    /// Home and the folders under it; or the root and the folders under it;
+    /// or a server and the folders on it. The Trash is one crumb.
+    static func of(_ path: String, home: String = NSHomeDirectory()) -> [Crumb] {
+        if TrashPath.isTrash(path) {
+            return [Crumb(label: "Trash", path: path, glyph: ExplorerGlyphs.trash)]
+        }
+        if let url = RemoteURL(path) {
+            var out = [Crumb(label: url.server.title,
+                             path: RemoteURL(server: url.server, path: "/").string,
+                             glyph: ExplorerGlyphs.server)]
+            var acc = ""
+            for part in url.path.split(separator: "/") {
+                acc += "/" + part
+                out.append(Crumb(label: String(part),
+                                 path: RemoteURL(server: url.server, path: acc).string))
+            }
+            return out
+        }
+        var out: [Crumb]
+        var rest: Substring
+        var acc: String
+        if path == home || path.hasPrefix(home + "/") {
+            out = [Crumb(label: "Home", path: home, glyph: ExplorerGlyphs.home)]
+            rest = path.dropFirst(home.count)
+            acc = home
+        } else {
+            out = [Crumb(label: "Computer", path: "/", glyph: ExplorerGlyphs.computer)]
+            rest = Substring(path)
+            acc = ""
+        }
+        for part in rest.split(separator: "/") {
+            acc += "/" + part
+            out.append(Crumb(label: String(part), path: acc))
+        }
+        return out
+    }
+
+    /// What fits in `room`: all of it, or the first crumb (icon only), a "…"
+    /// that goes up one, and as many of the last as there is room for.
+    static func fitting(_ crumbs: [Crumb], in room: Float, font: UIFont?) -> [Crumb] {
+        func width(_ c: Crumb) -> Float {
+            (font?.measure(c.label).width ?? Float(c.label.count) * 7) + 20
+                + (c.glyph == nil ? 0 : 19) + 12
+        }
+        guard crumbs.count > 2, crumbs.map(width).reduce(0, +) > room else { return crumbs }
+        let first = Crumb(label: "", path: crumbs[0].path, glyph: crumbs[0].glyph)
+        let parent = crumbs[crumbs.count - 2]
+        let ellipsis = Crumb(label: "…", path: parent.path)
+        var tail: [Crumb] = [crumbs[crumbs.count - 1]]
+        var used = width(first) + width(ellipsis) + width(tail[0])
+        for crumb in crumbs.dropFirst().dropLast().reversed() {
+            let w = width(crumb)
+            guard used + w <= room else { break }
+            used += w
+            tail.insert(crumb, at: 0)
+        }
+        // The ellipsis only stands for something when crumbs were left out.
+        return tail.count == crumbs.count - 1 ? [crumbs[0]] + tail : [first, ellipsis] + tail
+    }
+}
+
+/// Under a pane's files: how many there are, and what is selected.
+private struct PaneFooter: View {
+    @Bindable var session: ExplorerSession
+    let tab: ExplorerTab
+    let active: Bool
+
+    var body: some View {
+        let look = ExplorerLook.current
+        let fonts = explorerFonts
+        let listing = tab.listing
+        let folders = listing.folderCount, files = listing.fileCount
+        let counts = "\(folders) folder\(folders == 1 ? "" : "s") · "
+            + "\(files) file\(files == 1 ? "" : "s")"
+        let selection = tab.selection
+        let info: String
+        if selection.count > 1 {
+            info = "\(selection.count) selected"
+        } else if let path = tab.selected,
+                  let entry = listing.entries.first(where: { $0.path == path }) {
+            info = entry.isDirectory ? "“\(entry.name)” selected"
+                : "“\(entry.name)” · \(entry.sizeLabel)"
+        } else {
+            info = ""
+        }
+        return HStack(padding: 0, alignment: .center, spacing: 8) {
+            Text(counts, color: look.soft, font: fonts?.captionTabular, lineLimit: 1)
+                .flexShrink(1)
+            Spacer()
+            Text(info, color: look.soft, font: fonts?.captionTabular, lineLimit: 1)
+                .flexShrink(1)
+        }
+        .padding(EdgeInsets(top: 7, leading: 20, bottom: 7, trailing: 20))
+        .underlay {
+            Canvas(label: "footer-rule", width: .pct(100), height: .pct(100)) { list, frame in
+                list.rect(x: frame.x, y: frame.y, w: frame.w, h: 1, color: look.divider)
+            }
+        }
+    }
+}
+
 // MARK: - Sidebar
 
-/// Places, under a title row that holds the window buttons — the one strip
-/// that is always in the top-left corner, however the panes are split.
+/// Places, under the window buttons — the one strip that is always in the
+/// top-left corner, however the panes are split. `File Explorer.dc.html`'s
+/// sidebar: the profile as a pill, then sections of rounded rows on the
+/// window's own surface.
 private struct Sidebar: View {
     @Bindable var session: ExplorerSession
 
     var body: some View {
-        VStack(flexGrow: 1, padding: 0, spacing: 0) {
+        let look = ExplorerLook.current
+        return VStack(flexGrow: 1, padding: 0, spacing: 0) {
             HStack(
-                height: .pt(PaneChrome.stripHeight), padding: 0,
+                height: .pt(PaneChrome.stripHeight + 8), padding: 0,
                 alignment: .center, spacing: 0
             ) {
                 if WindowBridge.drawsOwnChrome {
-                    WindowControls()
+                    WindowControls(style: WindowControlsStyle(
+                        size: 13, spacing: 8, close: look.accent, minimize: look.accent400,
+                        maximize: look.sage))
                         .windowChrome()
-                        .padding(8)
+                        .padding(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 8))
                 }
                 Spacer()
-                    .frame(height: .pt(PaneChrome.stripHeight), minWidth: 24)
+                    .frame(height: .pt(PaneChrome.stripHeight + 8), minWidth: 24)
                     .windowDrag()
             }
             ScrollView(.vertical) {
-                VStack(padding: 8, spacing: 2) {
+                VStack(padding: 0, spacing: 2) {
                     if session.chooser == nil {
-                        sectionHeader("PROFILE: \(session.profiles.selected.name)", icon: "section-profile", expanded: session.profilePickerExpanded) {
-                            session.profilePickerExpanded.toggle()
-                        }
+                        profilePill(look)
                         if session.profilePickerExpanded {
                             ForEach(session.profiles.profiles) { profile in
-                                HStack(padding: 0, alignment: .center, spacing: 8, onClick: {
+                                row(title: profile.name, glyph: ExplorerGlyphs.home,
+                                    on: profile.id == session.profiles.selectedID,
+                                    id: "profile-\(profile.id)") {
                                     session.selectProfile(profile.id)
-                                }) {
-                                    Text(profile.name, color: Theme.current.textPrimary, lineLimit: 1)
-                                    Spacer()
-                                    if profile.id == session.profiles.selectedID {
-                                        Text("✓", color: Theme.current.accent)
-                                    }
                                 }
-                                .padding(EdgeInsets(top: 10, leading: 32, bottom: 10, trailing: 10))
-                                .background(profile.id == session.profiles.selectedID
-                                            ? Theme.current.selectionFill : Color.clear)
-                                .hoverBackground(Theme.current.hover)
-                                .cornerRadius(4)
-                                .cursor(.pointer)
-                                .agentId("profile-\(profile.id)")
                             }
-                            Button("New Profile…") { session.profileDraft = "" }
-                                .padding(EdgeInsets(top: 0, leading: 22, bottom: 0, trailing: 0))
-                                .agentId("new-profile")
+                            row(title: "New Profile…", glyph: ExplorerGlyphs.plus, on: false,
+                                id: "new-profile") { session.profileDraft = "" }
                         }
+                        Spacer(flexGrow: 0).frame(height: .pt(10))
                     }
-                    sectionHeader("PLACES", icon: "section-places", expanded: session.placesExpanded) {
+                    sectionHeader("Places", expanded: session.placesExpanded) {
                         session.placesExpanded.toggle()
                     }
                     if session.placesExpanded {
@@ -861,7 +1182,8 @@ private struct Sidebar: View {
                             placeRow(place)
                         }
                     }
-                    sectionHeader("FAVORITES", icon: "section-favorites", expanded: session.favoritesExpanded) {
+                    sectionGap
+                    sectionHeader("Favorites", expanded: session.favoritesExpanded) {
                         session.favoritesExpanded.toggle()
                     }
                     if session.favoritesExpanded {
@@ -869,11 +1191,11 @@ private struct Sidebar: View {
                             favoriteRow(path)
                         }
                         if session.favorites.isEmpty {
-                            Text("Right-click a folder to add", color: Theme.current.textDim)
-                                .padding(EdgeInsets(top: 10, leading: 32, bottom: 10, trailing: 10))
+                            note("Right-click a folder to add")
                         }
                     }
-                    sectionHeader("DEVICES", icon: "section-devices", expanded: session.devicesExpanded) {
+                    sectionGap
+                    sectionHeader("Devices", expanded: session.devicesExpanded) {
                         session.devicesExpanded.toggle()
                     }
                     if session.devicesExpanded {
@@ -881,16 +1203,13 @@ private struct Sidebar: View {
                             deviceRow(volume)
                         }
                         if let error = session.devicesError {
-                            Text(error, color: Theme.current.textDim, lineLimit: 2)
-                                .padding(EdgeInsets(top: 10, leading: 32, bottom: 10, trailing: 10))
-                                .tooltip(error)
+                            note(error).tooltip(error)
                         } else if session.devices.isEmpty {
-                            Text(session.devicesLoaded ? "No devices" : "Looking for devices…",
-                                 color: Theme.current.textDim)
-                                .padding(EdgeInsets(top: 10, leading: 32, bottom: 10, trailing: 10))
+                            note(session.devicesLoaded ? "No devices" : "Looking for devices…")
                         }
                     }
-                    sectionHeader("SERVERS", icon: "section-servers", expanded: session.serversExpanded) {
+                    sectionGap
+                    sectionHeader("Servers", expanded: session.serversExpanded) {
                         session.serversExpanded.toggle()
                     }
                     if session.serversExpanded {
@@ -899,68 +1218,144 @@ private struct Sidebar: View {
                         }
                     }
                 }
+                .padding(EdgeInsets(top: 0, leading: 14, bottom: 12, trailing: 10))
             }
         }
-        .background(Theme.current.panel)
+    }
+
+    private var sectionGap: some View {
+        Spacer(flexGrow: 0).frame(height: .pt(8))
+    }
+
+    /// Who this window is browsing as — a pill with the profile's initial,
+    /// opening the list of profiles under it.
+    private func profilePill(_ look: ExplorerLook) -> some View {
+        let fonts = explorerFonts
+        let name = session.profiles.selected.name
+        // Whose desktop this is, as the design draws it: the user's initial
+        // beside the profile's name.
+        let initial = String(NSUserName().prefix(1)).uppercased()
+        let open = session.profilePickerExpanded
+        return HStack(padding: 0, alignment: .center, spacing: 10,
+                      onClick: { session.profilePickerExpanded.toggle() }) {
+            HStack(width: .pt(28), height: .pt(28), padding: 0, alignment: .center, spacing: 0) {
+                Spacer()
+                Text(initial, color: look.onAccent,
+                     font: fonts?.display14)
+                Spacer()
+            }
+            .background(look.accent)
+            .cornerRadius(14)
+            VStack(flexGrow: 1, padding: 0, spacing: 0) {
+                Text("PROFILE", color: look.soft, font: fonts?.kicker, lineLimit: 1)
+                Text(name, color: look.text, font: fonts?.bodySemi, lineLimit: 1)
+            }
+            .flexShrink(1)
+            Icon(open ? ExplorerGlyphs.chevronDown : ExplorerGlyphs.chevronRight, size: 14,
+                 color: look.soft, strokeWidth: 2.75)
+        }
+        .padding(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 10))
+        .background(look.card)
+        .hoverBackground(look.accent100)
+        .cornerRadius(22)
+        .cursor(.pointer)
+        .agentId("section-profile")
     }
 
     private func sectionHeader(
-        _ title: String, icon: String, expanded: Bool, toggle: @escaping () -> Void
+        _ title: String, expanded: Bool, toggle: @escaping () -> Void
     ) -> some View {
-        HStack(padding: 0, alignment: .center, spacing: 8, onClick: toggle) {
-            Glyph(name: icon, color: Theme.current.textDim, size: 18)
-            Text(title, color: Theme.current.textDim, lineLimit: 1)
+        let look = ExplorerLook.current
+        return HStack(padding: 0, alignment: .center, spacing: 8, onClick: toggle) {
+            Text(title.uppercased(), color: look.soft, font: explorerFonts?.kicker, lineLimit: 1)
                 .flexShrink(1)
             Spacer()
-            DisclosureChevron(isExpanded: expanded, color: Theme.current.textDim)
+            Icon(expanded ? ExplorerGlyphs.chevronDown : ExplorerGlyphs.chevronRight, size: 12,
+                 color: look.soft, strokeWidth: 3)
         }
-        .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
-        .hoverBackground(Theme.current.hover)
-        .cornerRadius(4)
+        .padding(EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10))
+        .cornerRadius(14)
         .cursor(.pointer)
         .agentId("section-\(title.lowercased())")
     }
 
-    private func deviceRow(_ volume: DiskVolume) -> some View {
-        let theme = Theme.current
-        let selected = DiskVolume.selected(in: session.devices, path: session.listing.path) == volume.id
-        let busy = session.deviceBusy == volume.id
-        let detail = busy ? "Working…" : (volume.mountPoint ?? "Click to mount")
-        return HStack(padding: 0, alignment: .center, spacing: 12,
-                      onClick: { session.openDevice(volume) }) {
-            Glyph(name: "place-computer", color: selected ? theme.textPrimary : theme.textDim, size: 18)
-            VStack(padding: 0, spacing: 2) {
-                Text(volume.title, color: selected ? theme.textPrimary : theme.textSecondary, lineLimit: 1)
-                Text(detail, color: theme.textDim, lineLimit: 1)
+    private func note(_ text: String) -> some View {
+        Text(text, color: ExplorerLook.current.soft, font: explorerFonts?.caption, lineLimit: 2)
+            .padding(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 10))
+    }
+
+    /// One row: a glyph, the title — and under it a line of detail when there
+    /// is one — then whatever `trailing` puts at the end (eject, forget).
+    private func row<Trailing: View>(
+        title: String, sub: String? = nil, glyph: String, on: Bool, aimedAt: Bool = false,
+        id: String, action: @escaping () -> Void,
+        @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
+        let look = ExplorerLook.current
+        let fonts = explorerFonts
+        let fill = aimedAt ? look.accent300 : (on ? look.accent200 : Color.clear)
+        return HStack(padding: 0, alignment: .center, spacing: 11, onClick: action) {
+            Icon(glyph, size: 17, color: on ? look.accent700 : look.soft, strokeWidth: 2.25)
+            VStack(padding: 0, spacing: 0) {
+                Text(title, color: on ? look.accent800 : look.text,
+                     font: on ? fonts?.bodySemi : fonts?.body, lineLimit: 1)
+                if let sub {
+                    Text(sub, color: look.soft, font: fonts?.caption, lineLimit: 1)
+                }
             }
             .flexShrink(1)
             Spacer()
+            trailing()
+        }
+        .padding(EdgeInsets(top: 7, leading: 12, bottom: 7, trailing: 6))
+        .frame(minHeight: 34)
+        .background(fill)
+        .hoverBackground(on ? look.accent200 : look.press)
+        .cornerRadius(17)
+        .cursor(.pointer)
+        .agentId(id)
+    }
+
+    private func row(
+        title: String, sub: String? = nil, glyph: String, on: Bool, aimedAt: Bool = false,
+        id: String, action: @escaping () -> Void
+    ) -> some View {
+        row(title: title, sub: sub, glyph: glyph, on: on, aimedAt: aimedAt, id: id,
+            action: action) { EmptyView() }
+    }
+
+    /// The small round button at a row's end.
+    private func endButton(
+        _ glyph: String, size: Float, tip: String, id: String, action: @escaping () -> Void
+    ) -> some View {
+        let look = ExplorerLook.current
+        return HStack(width: .pt(26), height: .pt(26), padding: 0, alignment: .center,
+                      spacing: 0, onClick: action) {
+            Icon([.path(glyph)], size: size, color: look.soft, strokeWidth: 2.75, box: 26)
+        }
+        .hoverBackground(look.accent200)
+        .cornerRadius(13)
+        .tooltip(tip)
+        .agentId(id)
+    }
+
+    private func deviceRow(_ volume: DiskVolume) -> some View {
+        // The device holding the folder, lit only when no place or favourite
+        // names the folder itself: Home is not also "Linux".
+        let path = session.listing.path
+        let named = session.places.contains { FolderHistory.normalize($0.path) == path }
+            || session.favorites.contains(path)
+        let selected = !named
+            && DiskVolume.selected(in: session.devices, path: path) == volume.id
+        let busy = session.deviceBusy == volume.id
+        let detail = busy ? "Working…" : (volume.mountPoint ?? "Click to mount")
+        return row(title: volume.title, sub: detail, glyph: ExplorerGlyphs.drive, on: selected,
+                   id: "device-\(volume.device)", action: { session.openDevice(volume) }) {
             if volume.canUnmount && !busy {
-                HStack(padding: 5, alignment: .center, onClick: { session.unmountDevice(volume) }) {
-                    Canvas(label: "Unmount", width: .pt(14), height: .pt(14)) { list, frame in
-                        let cx = frame.x + 7
-                        let cy = frame.y + 7
-                        list.line(x1: cx - 4, y1: cy + 1, x2: cx, y2: cy - 4,
-                                  color: theme.textDim, width: 1.5)
-                        list.line(x1: cx, y1: cy - 4, x2: cx + 4, y2: cy + 1,
-                                  color: theme.textDim, width: 1.5)
-                        list.line(x1: cx - 4, y1: cy + 1, x2: cx + 4, y2: cy + 1,
-                                  color: theme.textDim, width: 1.5)
-                        list.line(x1: cx - 4, y1: cy + 4, x2: cx + 4, y2: cy + 4,
-                                  color: theme.textDim, width: 1.5)
-                    }
-                }
-                .hoverBackground(theme.hover)
-                .cornerRadius(4)
-                .tooltip("Unmount \(volume.title)")
-                .agentId("unmount-\(volume.device)")
+                endButton(ExplorerGlyphs.eject, size: 13, tip: "Unmount \(volume.title)",
+                          id: "unmount-\(volume.device)") { session.unmountDevice(volume) }
             }
         }
-        .padding(EdgeInsets(top: 9, leading: 32, bottom: 9, trailing: 6))
-        .background(selected ? theme.selectionFill : Color.clear)
-        .hoverBackground(selected ? theme.selectionFill : theme.hover)
-        .cornerRadius(6)
-        .cursor(.pointer)
         .tooltip("\(volume.device) · \(volume.model) · \(volume.filesystem)\n\(detail)")
         .onDrop { urls in
             if let path = volume.mountPoint {
@@ -970,114 +1365,43 @@ private struct Sidebar: View {
                 ViewInvalidation.markDirty()
             }
         }
-        .agentId("device-\(volume.device)")
     }
 
     private func favoriteRow(_ path: String) -> some View {
-        let theme = Theme.current
-        let on = session.listing.path == path
-        return HStack(
-            padding: 0, alignment: .center, spacing: 12,
-            onClick: { session.go(path) }
-        ) {
-            Glyph(name: RemoteURL.isRemote(path) ? "place-server" : "place-folder",
-                  color: on ? theme.textPrimary : theme.textDim, size: 18)
-            Text(ExplorerSession.favoriteTitle(path),
-                 color: on ? theme.textPrimary : theme.textSecondary, lineLimit: 1)
-                .flexShrink(1)
-            Spacer()
-            HStack(padding: 4, alignment: .center, onClick: { session.removeFavorite(path) }) {
-                Mark(.cross, size: 8, color: theme.textDim)
-            }
-            .hoverBackground(theme.hover)
-            .cornerRadius(4)
-            .tooltip("Remove from Favorites")
+        row(title: ExplorerSession.favoriteTitle(path),
+            glyph: RemoteURL.isRemote(path) ? ExplorerGlyphs.server : ExplorerGlyphs.star,
+            on: session.listing.path == path, id: "favorite-\(path)",
+            action: { session.go(path) }) {
+            endButton(ExplorerGlyphs.cross, size: 12, tip: "Remove from Favorites",
+                      id: "unfavorite-\(path)") { session.removeFavorite(path) }
         }
-        .padding(EdgeInsets(top: 9, leading: 32, bottom: 9, trailing: 6))
-        .background(on ? theme.selectionFill : Color.clear)
-        .hoverBackground(on ? theme.selectionFill : theme.hover)
-        .cornerRadius(6)
-        .cursor(.pointer)
         .tooltip(path)
-        .agentId("favorite-\(path)")
     }
 
     /// A server lately used: a click goes back, a drop uploads to its login
     /// folder, and the cross forgets it — its password too.
     private func serverRow(_ url: RemoteURL) -> some View {
-        let theme = Theme.current
-        let on = RemoteURL(session.listing.path)?.server == url.server
-        let aimedAt = session.dropHover == .place(url.string)
-        let fill = aimedAt
-            ? theme.accent.opacity(0.28)
-            : (on ? theme.selectionFill : Color.clear)
-        return HStack(
-            padding: 0, alignment: .center, spacing: 12,
-            onClick: { session.go(url.string) }
-        ) {
-            Glyph(name: "place-server", color: on ? theme.textPrimary : theme.textDim, size: 18)
-            Text(
-                url.server.title,
-                color: on ? theme.textPrimary : theme.textSecondary,
-                lineLimit: 1
-            )
-            .flexShrink(1)
-            Spacer()
-            HStack(padding: 4, alignment: .center, onClick: { session.forgetServer(url) }) {
-                Mark(.cross, size: 8, color: theme.textDim)
-            }
-            .hoverBackground(theme.hover)
-            .cornerRadius(4)
-            .tooltip("Forget Server")
-            .agentId("forget-\(url.server.host)")
+        row(title: url.server.title, glyph: ExplorerGlyphs.server,
+            on: RemoteURL(session.listing.path)?.server == url.server,
+            aimedAt: session.dropHover == .place(url.string),
+            id: "server-\(url.server.host)", action: { session.go(url.string) }) {
+            endButton(ExplorerGlyphs.cross, size: 12, tip: "Forget Server",
+                      id: "forget-\(url.server.host)") { session.forgetServer(url) }
         }
-        .padding(EdgeInsets(top: 9, leading: 32, bottom: 9, trailing: 6))
-        .background(fill)
-        .hoverBackground(on ? theme.selectionFill : theme.hover)
-        .cornerRadius(6)
-        .cursor(.pointer)
         .tooltip(url.string)
         .onDrop(targeted: { session.setDropHover(.place(url.string), $0) }) { urls in
             session.upload(urls.map(\.path), into: url)
         }
-        .agentId("server-\(url.server.host)")
     }
 
     private func placeRow(_ place: Place) -> some View {
-        let theme = Theme.current
-        let on = FolderHistory.normalize(place.path) == session.listing.path
-        let aimedAt = session.dropHover == .place(place.path)
-        let fill = aimedAt
-            ? theme.accent.opacity(0.28)
-            : (on ? theme.selectionFill : Color.clear)
-        // One clickable row rather than a clickable `Text` beside a picture:
-        // a `Text` with a click carries its own hover fill at the width of its
-        // glyphs, and the row's would sit around it.
-        return HStack(
-            padding: 0, alignment: .center, spacing: 12,
-            onClick: { session.go(place.path) }
-        ) {
-            Glyph(
-                name: ExplorerIcons.place(place),
-                color: on ? theme.textPrimary : theme.textDim,
-                size: 18
-            )
-            Text(
-                place.title,
-                color: on ? theme.textPrimary : theme.textSecondary,
-                lineLimit: 1
-            )
-            .flexShrink(1)
-        }
-        .padding(EdgeInsets(top: 9, leading: 32, bottom: 9, trailing: 10))
-        .background(fill)
-        .hoverBackground(on ? theme.selectionFill : theme.hover)
-        .cornerRadius(6)
-        .cursor(.pointer)
+        row(title: place.title, glyph: ExplorerGlyphs.place(place),
+            on: FolderHistory.normalize(place.path) == session.listing.path,
+            aimedAt: session.dropHover == .place(place.path),
+            id: "place-\(place.title.lowercased())", action: { session.go(place.path) })
         .onDrop(targeted: { session.setDropHover(.place(place.path), $0) }) { urls in
             session.dropOnPlace(place, urls)
         }
-        .agentId("place-\(place.title.lowercased())")
     }
 }
 
@@ -1087,6 +1411,28 @@ private struct FilePane: View {
     @Bindable var session: ExplorerSession
     let paneID: Int
     let tab: ExplorerTab
+
+    private var active: Bool { session.layout.activePaneID == paneID }
+
+    /// A folder with nothing to show: a sage disc, a line in the display
+    /// face and a sentence under it.
+    private func emptyState(title: String, detail: String) -> some View {
+        let look = ExplorerLook.current
+        let fonts = explorerFonts
+        return VStack(flexGrow: 1, padding: 0, alignment: .center, spacing: 10) {
+            Spacer(flexGrow: 0).frame(height: .pt(56))
+            HStack(width: .pt(72), height: .pt(72), padding: 0, alignment: .center, spacing: 0) {
+                Icon([.path(ExplorerGlyphs.folder)], size: 32, color: look.sage600,
+                     strokeWidth: 2, box: 72)
+            }
+            .background(look.sage100)
+            .cornerRadius(36)
+            Text(title, color: look.text, font: fonts?.display18, lineLimit: 1)
+            Text(detail, color: look.soft, font: fonts?.body, align: .top)
+                .padding(EdgeInsets(top: 0, leading: 24, bottom: 0, trailing: 24))
+            Spacer()
+        }
+    }
 
     var body: some View {
         let listing = tab.listing
@@ -1100,22 +1446,23 @@ private struct FilePane: View {
             }
             // Columns to sort by and resize belong to rows; the icon view
             // sorts from the View menu.
-            if tab.viewMode == .list { header }
+            if tab.viewMode == .list, !listing.entries.isEmpty, listing.error == nil { header }
             if let draft = session.newFolderDraft, draft.tabID == tab.id,
                draft.directory == listing.path
             {
                 NewFolderRow(session: session)
             }
             if let error = listing.error {
-                Text(error, color: Theme.current.textDim)
-                    .padding(16)
+                emptyState(title: "Can’t open this folder", detail: error)
                     .agentId("listing-error")
-                Spacer()
             } else if listing.entries.isEmpty {
-                Text("This folder is empty", color: Theme.current.textDim)
-                    .padding(16)
-                    .agentId("listing-empty")
-                Spacer()
+                emptyState(
+                    title: TrashPath.isTrash(listing.path) ? "The Trash is empty" : "Nothing here yet",
+                    detail: TrashPath.isTrash(listing.path)
+                        ? "Things you delete wait here until it is emptied."
+                        : "This folder is empty. Drop files here to copy them in."
+                )
+                .agentId("listing-empty")
             } else if tab.viewMode == .icons {
                 ScrollView(.vertical, position: session.scrollPosition(for: tab.id)) {
                     LazyVGrid(
@@ -1127,12 +1474,14 @@ private struct FilePane: View {
                     ) { entry in
                         FileRow(
                             session: session, paneID: paneID, tabID: tab.id, entry: entry,
-                            selected: tab.selection.contains(entry.path), tile: true
+                            selected: tab.selection.contains(entry.path), tile: true,
+                            activePane: active, columns: columnLayout
                         )
                     }
+                    .padding(EdgeInsets(top: 4, leading: 10, bottom: 10, trailing: 10))
                 }
                 .flexGrow(1)
-                .onFrame { frame in session.noteGridWidth(paneID, frame.w) }
+                .onFrame { frame in session.noteGridWidth(paneID, frame.w - 20) }
             } else {
                 ScrollView(.vertical, position: session.scrollPosition(for: tab.id)) {
                     LazyVStack(
@@ -1143,9 +1492,11 @@ private struct FilePane: View {
                     ) { entry in
                         FileRow(
                             session: session, paneID: paneID, tabID: tab.id, entry: entry,
-                            selected: tab.selection.contains(entry.path)
+                            selected: tab.selection.contains(entry.path),
+                            activePane: active, columns: columnLayout
                         )
                     }
+                    .padding(EdgeInsets(top: 0, leading: 0, bottom: 10, trailing: 0))
                 }
                 .flexGrow(1)
             }
@@ -1166,29 +1517,37 @@ private struct FilePane: View {
     /// The row's geometry, so a column's heading and its separators sit
     /// where the rows put that column: the same side padding, and each
     /// separator the width of the gap between two cells.
+    private var columnLayout: ColumnLayout {
+        ColumnLayout(paneWidth: session.paneWidths[paneID] ?? 800, columns: session.columns)
+    }
+
     private var header: some View {
-        let columns = session.columns
+        let layout = columnLayout
         let paneID = self.paneID
         return HStack(
             height: .pt(FileListMetrics.headerHeight), alignment: .center, spacing: 0
         ) {
-            sortHeader(.name)
-                .padding(.leading, FileListMetrics.sidePadding)
+            sortHeader(.name, trailing: false)
                 .flexGrow(1)
                 .flexShrink(1)
-            columnEdge(.nameSize)
-            sortHeader(.size)
-                .frame(width: .pt(columns.size))
-            columnEdge(.sizeModified)
-            sortHeader(.modified)
-                .frame(width: .pt(columns.modified))
+            if let size = layout.size {
+                columnEdge(.nameSize)
+                sortHeader(.size, trailing: true)
+                    .frame(width: .pt(size))
+                columnEdge(.sizeModified)
+            } else {
+                Spacer(flexGrow: 0).frame(width: .pt(FileListMetrics.gap))
+            }
+            sortHeader(.modified, trailing: true)
+                .frame(width: .pt(layout.modified))
         }
-        .padding(.horizontal, FileListMetrics.sidePadding)
-        .background(Theme.current.panel)
+        .padding(EdgeInsets(top: 0, leading: FileListMetrics.nameInset,
+                            bottom: 0, trailing: FileListMetrics.trailingInset))
         .onFrame { frame in
             session.noteColumnRoom(
                 paneID,
-                frame.w - 2 * FileListMetrics.sidePadding - 2 * FileListMetrics.gap
+                frame.w - FileListMetrics.nameInset - FileListMetrics.trailingInset
+                    - 2 * FileListMetrics.gap
             )
         }
     }
@@ -1206,12 +1565,13 @@ private struct FilePane: View {
             alignment: .center,
             spacing: 0
         ) {
+            // Only while dragged: the design's columns have no rules between
+            // them, and the edge is found by the pointer turning into one.
             Spacer(flexGrow: 0)
                 .frame(width: .pt(line), height: .pt(18))
-                .background(dragging ? theme.accent : theme.border)
+                .background(dragging ? theme.accent : Color.clear)
         }
         .padding(.leading, (FileListMetrics.gap - line) / 2)
-        .hoverBackground(theme.hover)
         .cursor(.resizeLeftRight)
         .onDragGesture(minimumDistance: 1) { value in
             session.dragColumnEdge(edge, in: paneID, value)
@@ -1222,29 +1582,40 @@ private struct FilePane: View {
     /// What the Trash is and the one thing to do with all of it. Restore is
     /// per item, on the right-click.
     private func trashBar(empty: Bool) -> some View {
-        HStack(padding: 8, alignment: .center, spacing: 8) {
+        let look = ExplorerLook.current
+        return HStack(padding: 0, alignment: .center, spacing: 8) {
             Text(
                 "Right-click an item to put it back where it came from",
-                color: Theme.current.textDim, lineLimit: 1
+                color: look.soft, font: explorerFonts?.caption, lineLimit: 1
             )
             .flexShrink(1)
             Spacer()
             if !empty {
-                Button("Empty Trash") { session.askToEmptyTrash() }
+                Text("Empty Trash", color: look.accent800, font: explorerFonts?.crumbSemi,
+                     hoverFill: look.accent200, onClick: { session.askToEmptyTrash() })
+                    .padding(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+                    .background(look.accent100)
+                    .cornerRadius(13)
+                    .cursor(.pointer)
                     .agentId("empty-trash")
             }
         }
+        .padding(EdgeInsets(top: 0, leading: 20, bottom: 6, trailing: 16))
     }
 
-    private func sortHeader(_ sort: FileSort) -> some View {
+    private func sortHeader(_ sort: FileSort, trailing: Bool) -> some View {
+        let look = ExplorerLook.current
         let on = tab.sort == sort
-        let mark = on ? (tab.sortDescending ? " ▼" : " ▲") : ""
+        let mark = on ? (tab.sortDescending ? " ↓" : " ↑") : ""
         // In the Trash the date is when it was thrown away.
         let title = sort == .modified && TrashPath.isTrash(tab.listing.path)
             ? "Deleted" : sort.title
         return Text(
-            title + mark,
-            color: on ? Theme.current.textPrimary : Theme.current.textDim,
+            title.uppercased() + mark,
+            color: on ? look.text : look.soft,
+            font: explorerFonts?.kicker,
+            lineLimit: 1,
+            align: trailing ? .trailing : .leading,
             onClick: { session.setSort(sort) }
         )
         .cursor(.pointer)
@@ -1258,15 +1629,15 @@ private struct NewFolderRow: View {
     @Bindable var session: ExplorerSession
 
     var body: some View {
-        let theme = Theme.current
+        let look = ExplorerLook.current
         return HStack(
-            height: .pt(FileListMetrics.rowHeight + 8),
-            padding: FileListMetrics.sidePadding,
+            height: .pt(FileListMetrics.rowHeight + 6),
+            padding: 0,
             alignment: .center,
-            spacing: FileListMetrics.gap
+            spacing: 11
         ) {
-            Text("▣", color: theme.accent)
-                .frame(width: .pt(FileListMetrics.iconSize))
+            Icon([.fill(ExplorerGlyphs.folder)], size: FileListMetrics.iconSize,
+                 color: look.sage600)
             TextField(
                 text: session.newFolderName,
                 autoFocus: true,
@@ -1275,31 +1646,70 @@ private struct NewFolderRow: View {
             )
             .flexGrow(1)
             .agentId("new-folder-name")
-            Text("Enter to create · Esc to cancel", color: theme.textDim, lineLimit: 1)
+            Text("Enter to create · Esc to cancel", color: look.soft,
+                 font: explorerFonts?.caption, lineLimit: 1)
                 .flexShrink(1)
         }
-        .frame(width: .pct(100))
-        .background(theme.selectionFill.opacity(0.5))
+        .padding(EdgeInsets(top: 0, leading: FileListMetrics.nameInset - FileListMetrics.gutter,
+                            bottom: 0, trailing: FileListMetrics.trailingInset))
+        .background(look.accent100)
+        .cornerRadius(12)
+        .padding(EdgeInsets(top: 0, leading: FileListMetrics.gutter, bottom: 4,
+                            trailing: FileListMetrics.gutter))
+    }
+}
+
+/// Which columns a pane has room for, the design's container queries: no
+/// Size under 440 points, and the date without its time under 360.
+struct ColumnLayout: Equatable {
+    var size: Float?
+    var modified: Float
+    var dateOnly: Bool
+
+    init(paneWidth: Float, columns: ListColumns) {
+        if paneWidth <= 360 {
+            size = nil
+            modified = 88
+            dateOnly = true
+        } else if paneWidth <= 440 {
+            size = nil
+            modified = 132
+            dateOnly = false
+        } else {
+            size = columns.size
+            modified = columns.modified
+            dateOnly = false
+        }
+    }
+
+    func date(_ date: Date?) -> String {
+        let full = Formatters.modified(date)
+        return dateOnly ? String(full.prefix(10)) : full
     }
 }
 
 /// Shared by the header and the rows, which have to agree for a column's
 /// separator to sit in the gap the rows leave before it.
 enum FileListMetrics {
-    static let headerHeight: Float = 32
+    static let headerHeight: Float = 30
     /// Every row is this tall, which is what lets the list be lazy and a
     /// row's place in it be worked out from its index.
-    static let rowHeight: Float = 28
-    static let sidePadding: Float = 4
+    static let rowHeight: Float = 38
+    /// Between the card's edge and a row's rounded fill.
+    static let gutter: Float = 10
+    /// From the card's edge to a row's glyph, and to the Name heading.
+    static let nameInset: Float = 28
+    /// From the card's edge to the end of the last column.
+    static let trailingInset: Float = 20
     /// The glyph's column, and the box a thumbnail is fitted into.
-    static let iconSize: Float = 22
+    static let iconSize: Float = 19
     static let gap: Float = 8
 }
 
 /// The icon view's cell: how big a tile is, and what is inside it.
 enum TileMetrics {
     static let width: Float = 112
-    static let padding: Float = 6
+    static let padding: Float = 8
     /// Room for the picture, two lines of name and the gaps between — from
     /// the font, which the display scale sizes. A fixed number fitted the
     /// font it was tried with, and the second line ran off the bottom of the
@@ -1312,10 +1722,11 @@ enum TileMetrics {
     }
     /// Space between tiles, both ways. `ExplorerSession.noteGridWidth` works
     /// out the column count from it, the same way `LazyVGrid` does.
-    static let spacing: Float = 4
-    /// The height a thumbnail is fitted into, and the side of the shapes
-    /// drawn for everything else.
-    static let icon: Float = 80
+    static let spacing: Float = 6
+    /// The height a thumbnail is fitted into; the design's glyph is drawn
+    /// at `glyph` inside it.
+    static let icon: Float = 64
+    static let glyph: Float = 46
     /// The width a thumbnail is fitted into: the tile's, less its padding. A
     /// landscape photo — most of them — would otherwise be fitted to a square
     /// and shown at two thirds of the width there is.
@@ -1343,38 +1754,30 @@ private struct BigIcon: View {
     let size: Float
 
     var body: some View {
-        let theme = Theme.current
-        let ext = (entry.name as NSString).pathExtension.uppercased()
-        // Sized with `.frame`, not `VStack(width:)`: a column that states its
-        // own width is painted `theme.panel`, which put a grey square behind
-        // every icon.
-        return VStack(alignment: .center, spacing: 0) {
-            Spacer()
-            if let icon = ExplorerIcons.file(entry) {
-                Image(
-                    path: icon, width: .pt(size * 0.8), height: .pt(size * 0.8),
-                    contentMode: .fit
-                )
-            } else if entry.isDirectory {
-                Spacer(flexGrow: 0)
-                    .frame(width: .pt(size * 0.86), height: .pt(size * 0.64))
-                    .background(theme.accent.opacity(0.8))
-                    .cornerRadius(8)
-            } else {
-                VStack(
-                    width: .pt(size * 0.62), height: .pt(size * 0.8),
-                    alignment: .center, spacing: 0
-                ) {
-                    Spacer()
-                    Text(String(ext.prefix(5)), color: theme.textSecondary, lineLimit: 1)
-                    Spacer()
-                }
-                .background(theme.inset)
-                .cornerRadius(6)
-            }
-            Spacer()
+        FileGlyph(entry: entry, size: TileMetrics.glyph, stroke: 1.5)
+            .frame(width: .pt(size), height: .pt(size), alignment: .center)
+    }
+}
+
+/// The design's picture for a file or folder: a filled folder — in the accent
+/// for one the desktop knows by name, sage otherwise — or a page with a mark
+/// for its kind.
+private struct FileGlyph: View {
+    let entry: FileEntry
+    let size: Float
+    var stroke: Float = 2
+
+    var body: some View {
+        let look = ExplorerLook.current
+        if entry.isDirectory {
+            Icon([.fill(ExplorerGlyphs.folder)], size: size,
+                 color: ExplorerGlyphs.isSpecialFolder(entry) ? look.accent600 : look.sage600)
+        } else {
+            let kind = ExplorerGlyphs.kind(entry)
+            Icon([.path(ExplorerGlyphs.page), .path(kind.mark)], size: size,
+                 color: kind == .font ? look.accent600 : look.soft, strokeWidth: stroke,
+                 centersInk: false)
         }
-        .frame(width: .pt(size), height: .pt(size))
     }
 }
 
@@ -1388,6 +1791,11 @@ private struct FileRow: View {
     /// only in what is inside: selection, clicks, the context menu, dragging
     /// out and dropping in are the same code for both.
     var tile = false
+    /// Whether this row's pane is the one the keys go to: its selection is
+    /// the accent, another pane's is grey.
+    var activePane = true
+    /// Which columns the pane has room for.
+    var columns = ColumnLayout(paneWidth: 800, columns: ListColumns())
 
     var body: some View {
         // A folder takes a drop into itself. A file does not, and a drop on it
@@ -1412,11 +1820,11 @@ private struct FileRow: View {
     }
 
     private var fill: Color {
-        let theme = Theme.current
+        let look = ExplorerLook.current
         let aimedAt = session.dropHover == .folder(paneID: paneID, path: entry.path)
         return aimedAt
-            ? theme.accent.opacity(0.28)
-            : (selected ? theme.selectionFill : Color.clear)
+            ? look.accent300
+            : (selected ? (activePane ? look.accent200 : look.press) : Color.clear)
     }
 
     private var renaming: Bool {
@@ -1453,54 +1861,70 @@ private struct FileRow: View {
     }
 
     private var rowContent: some View {
-        let theme = Theme.current
+        let look = ExplorerLook.current
+        let fonts = explorerFonts
+        let tag = entry.isDirectory ? nil : ExplorerGlyphs.kind(entry).tag
         return HStack(
-            height: .pt(FileListMetrics.rowHeight),
-            padding: FileListMetrics.sidePadding,
-            alignment: .center,
-            spacing: FileListMetrics.gap,
-            onPointer: pointer
+            height: .pt(FileListMetrics.rowHeight), padding: 0, alignment: .center, spacing: 0
         ) {
-            if let thumbnail = session.thumbnail(for: entry) {
-                Image(
-                    path: thumbnail.path,
-                    width: .pt(FileListMetrics.iconSize),
-                    height: .pt(FileListMetrics.iconSize),
-                    contentMode: .fit
-                )
-            } else if let icon = ExplorerIcons.file(entry) {
-                Image(
-                    path: icon,
-                    width: .pt(FileListMetrics.iconSize),
-                    height: .pt(FileListMetrics.iconSize),
-                    contentMode: .fit
-                )
-            } else {
-                Text(
-                    entry.isDirectory ? "▣" : "▤",
-                    color: entry.isDirectory ? theme.accent : theme.textDim
-                )
-                .frame(width: .pt(FileListMetrics.iconSize))
+            HStack(
+                height: .pt(FileListMetrics.rowHeight),
+                padding: 0,
+                alignment: .center,
+                spacing: FileListMetrics.gap,
+                onPointer: pointer
+            ) {
+                HStack(padding: 0, alignment: .center, spacing: 11) {
+                    if let thumbnail = session.thumbnail(for: entry) {
+                        Image(
+                            path: thumbnail.path,
+                            width: .pt(FileListMetrics.iconSize),
+                            height: .pt(FileListMetrics.iconSize),
+                            contentMode: .fit
+                        )
+                    } else {
+                        FileGlyph(entry: entry, size: FileListMetrics.iconSize)
+                    }
+                    if renaming {
+                        renameField.flexGrow(1)
+                    } else {
+                        Text(entry.name, color: entry.isHidden ? look.soft : look.text,
+                             font: selected ? fonts?.bodySemi : fonts?.body, lineLimit: 1)
+                            .flexShrink(1)
+                        if let tag {
+                            Text(tag, color: look.accent800, font: fonts?.tag)
+                                .padding(EdgeInsets(top: 1, leading: 8, bottom: 1, trailing: 8))
+                                .background(look.accent100)
+                                .cornerRadius(9)
+                                .flexShrink(0)
+                        }
+                    }
+                }
+                .flexGrow(1)
+                .flexShrink(1)
+                .clipped()
+                if let size = columns.size {
+                    Text(entry.sizeLabel, color: look.soft, font: fonts?.bodyTabular,
+                         lineLimit: 1, align: .trailing)
+                        .frame(width: .pt(size))
+                }
+                Text(columns.date(entry.modified), color: look.soft,
+                     font: fonts?.bodyTabular, lineLimit: 1, align: .trailing)
+                    .frame(width: .pt(columns.modified))
             }
-            if renaming {
-                renameField.flexGrow(1)
-            } else {
-                // A little further from the icon than the columns are from
-                // each other: the name belongs to the picture beside it.
-                Text(entry.name, color: theme.textPrimary, lineLimit: 1)
-                    .padding(.leading, 4)
-                    .flexGrow(1)
-            }
-            Text(entry.sizeLabel, color: theme.textDim, lineLimit: 1)
-                .frame(width: .pt(session.columns.size))
-            Text(Formatters.modified(entry.modified), color: theme.textDim, lineLimit: 1)
-                .frame(width: .pt(session.columns.modified))
+            .padding(EdgeInsets(top: 0, leading: FileListMetrics.nameInset - FileListMetrics.gutter,
+                                bottom: 0,
+                                trailing: FileListMetrics.trailingInset - FileListMetrics.gutter))
+            // No hover tint. A list scrolled under a still pointer slides row
+            // after row beneath it, and a tint that follows reads as the list
+            // flickering — which is why file managers do not light rows up.
+            .background(fill)
+            .cornerRadius(12)
+            .flexGrow(1)
         }
-        // No hover tint. A list scrolled under a still pointer slides row
-        // after row beneath it, and a tint that follows reads as the list
-        // flickering — which is why file managers do not light rows up.
+        .padding(EdgeInsets(top: 0, leading: FileListMetrics.gutter, bottom: 0,
+                            trailing: FileListMetrics.gutter))
         .frame(width: .pct(100))
-        .background(fill)
     }
 
     /// The picture at its own proportions, standing on the name: a box the
@@ -1531,7 +1955,7 @@ private struct FileRow: View {
     }
 
     private var tileContent: some View {
-        let theme = Theme.current
+        let look = ExplorerLook.current
         let inner = TileMetrics.pictureWidth
         return VStack(
             width: .pt(TileMetrics.width),
@@ -1552,12 +1976,14 @@ private struct FileRow: View {
                 // Two lines, centred under the picture: most names fit, and a
                 // long one shows its start and enough of the rest to tell it
                 // from its neighbours.
-                Text(entry.name, color: theme.textPrimary, lineLimit: 2, align: .top)
+                Text(entry.name, color: entry.isHidden ? look.soft : look.text,
+                     font: selected ? explorerFonts?.crumbSemi : explorerFonts?.crumb,
+                     lineLimit: 2, align: .top)
                     .frame(width: .pt(inner))
             }
         }
         .background(fill)
-        .cornerRadius(6)
+        .cornerRadius(16)
     }
 
     /// A local row goes out as an OS drag, which any app can take. A server's
@@ -1860,26 +2286,84 @@ private struct StatusBar: View {
     @Bindable var session: ExplorerSession
 
     var body: some View {
-        HStack(padding: 0, alignment: .center, spacing: 8) {
-            Text(session.status, color: Theme.current.textDim, lineLimit: 1)
-                .flexShrink(1)
-                .agentId("status")
-            if session.archiveWorkRunning || session.transferRunning {
-                Text("Cancel", color: Theme.current.accent, onClick: {
-                    if session.transferRunning {
-                        session.cancelTransfer()
-                    } else {
-                        session.cancelArchiveWork()
+        let look = ExplorerLook.current
+        let fonts = explorerFonts
+        let busy = session.archiveWorkRunning || session.transferRunning
+        let hidden = session.tabSet.current.showHidden
+        let dual = session.layout.panes.count > 1
+        return HStack(padding: 0, alignment: .center, spacing: 12) {
+            HStack(padding: 0, alignment: .center, spacing: 6) {
+                Icon([.path(ExplorerGlyphs.folder)], size: 14, color: look.soft,
+                     strokeWidth: 2.75)
+                if let notice = session.notice {
+                    Text(notice, color: look.text, font: fonts?.status, lineLimit: 1)
+                        .flexShrink(1)
+                } else {
+                    Text(Self.folder(session.listing.path), color: look.soft,
+                         font: fonts?.status, lineLimit: 1)
+                        .flexShrink(1)
+                    if let entry = session.selectedEntry {
+                        Text(entry.name, color: look.text, font: fonts?.statusSemi, lineLimit: 1)
+                            .flexShrink(1)
                     }
-                })
-                .padding(EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4))
-                .agentId("archive-cancel")
+                }
+                if busy {
+                    Text("Cancel", color: look.accent800, font: fonts?.statusSemi,
+                         hoverFill: look.accent200, onClick: {
+                             if session.transferRunning {
+                                 session.cancelTransfer()
+                             } else {
+                                 session.cancelArchiveWork()
+                             }
+                         })
+                        .padding(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
+                        .cornerRadius(10)
+                        .agentId("archive-cancel")
+                }
             }
-            Spacer()
-            Text(session.title, color: Theme.current.textSecondary)
+            .flexGrow(1)
+            .flexShrink(1)
+            .clipped()
+            .agentId("status")
+            Text(session.deviceLabel, color: look.sage800, font: fonts?.tag, lineLimit: 1)
+                .padding(EdgeInsets(top: 3, leading: 10, bottom: 3, trailing: 10))
+                .background(look.sage100)
+                .cornerRadius(12)
+                .flexShrink(0)
+            pill(hidden ? "Hidden shown" : "Hidden off", glyph: ExplorerGlyphs.eye, on: hidden,
+                 id: "toggle-hidden") { session.toggleHidden() }
+            pill(dual ? "Dual pane" : "Single pane", glyph: ExplorerGlyphs.columns, on: dual,
+                 id: "toggle-dual") { session.toggleDualPane() }
         }
-        .padding(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
-        .frame(height: .pt(28))
-        .background(Theme.current.panel)
+        .padding(EdgeInsets(top: 8, leading: 22, bottom: 8, trailing: 14))
+    }
+
+    /// "~/Downloads/" for a folder under home, the path itself elsewhere —
+    /// with the slash when a selected name follows it.
+    static func folder(_ path: String, home: String = NSHomeDirectory()) -> String {
+        var shown = path == home ? "~" : path.hasPrefix(home + "/")
+            ? "~" + path.dropFirst(home.count) : path
+        if !shown.hasSuffix("/") { shown += "/" }
+        return shown
+    }
+
+    /// A switch in the status bar: lit sage while on.
+    private func pill(
+        _ title: String, glyph: String, on: Bool, id: String, action: @escaping () -> Void
+    ) -> some View {
+        let look = ExplorerLook.current
+        let ink = on ? look.sage800 : look.soft
+        return HStack(padding: 0, alignment: .center, spacing: 6, onClick: action) {
+            Icon([.path(glyph)], size: 13, color: ink, strokeWidth: 2.75)
+            Text(title, color: ink, font: explorerFonts?.statusSemi, lineLimit: 1)
+        }
+        .padding(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+        .background(on ? look.sage200 : Color.clear)
+        .border(look.divider)
+        .hoverBackground(on ? look.sage200 : look.press.opacity(0.6))
+        .cornerRadius(14)
+        .cursor(.pointer)
+        .flexShrink(0)
+        .agentId(id)
     }
 }

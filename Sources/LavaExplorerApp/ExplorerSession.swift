@@ -647,10 +647,18 @@ final class ExplorerSession: @unchecked Sendable {
     /// themselves. Not observed — they change on layout, and nothing is drawn
     /// from them directly.
     @ObservationIgnored var paneFrames: [Int: PaneRect] = [:]
-    @ObservationIgnored private var tabFrames: [Int: PaneRect] = [:]
+    @ObservationIgnored private(set) var tabFrames: [Int: PaneRect] = [:]
+
+    /// Each pane's width, observed: what the pane drops when it is narrow —
+    /// the Size column, the time, the middle of its address — is decided in
+    /// `body`, and a split or a dragged divider changes it with no other
+    /// state changing. Written only when it moves, so a layout pass that
+    /// reports the same width does not ask for another.
+    private(set) var paneWidths: [Int: Float] = [:]
 
     func notePaneFrame(_ paneID: Int, _ frame: CanvasFrame) {
         paneFrames[paneID] = PaneRect(x: frame.x, y: frame.y, w: frame.w, h: frame.h)
+        if abs((paneWidths[paneID] ?? -1) - frame.w) >= 1 { paneWidths[paneID] = frame.w }
     }
 
     func noteTabFrame(_ tabID: Int, _ frame: CanvasFrame) {
@@ -882,6 +890,43 @@ final class ExplorerSession: @unchecked Sendable {
         dismissContext()
         layout.openTab(path: path ?? NSHomeDirectory(), source: source)
         ViewInvalidation.markDirty()
+    }
+
+    /// The status bar's Dual pane switch. One pane: the folder it shows
+    /// opens again in a second pane on its right. More than one: every tab
+    /// moves into the active pane, and the others close as they empty.
+    func toggleDualPane() {
+        dismissContext()
+        let target = layout.activePaneID
+        if layout.panes.count > 1 {
+            for pane in layout.panes where pane.id != target {
+                for tab in pane.tabs.tabs {
+                    layout.moveTab(tab.id, to: target)
+                }
+            }
+            layout.activate(pane: target)
+        } else {
+            layout.openTab(path: listing.path, source: source)
+            layout.splitTab(layout.activePane.tabs.currentID, beside: target, on: .right)
+        }
+        // Frames of panes and tabs that have gone must not be aimed at.
+        let livePanes = Set(layout.panes.map(\.id))
+        paneFrames = paneFrames.filter { livePanes.contains($0.key) }
+        ViewInvalidation.markDirty()
+    }
+
+    /// What the status bar's tag says the shown folder is on.
+    var deviceLabel: String {
+        let path = listing.path
+        if TrashPath.isTrash(path) { return "Trash" }
+        if let url = RemoteURL(path) {
+            return "\(url.server.scheme.rawValue.uppercased()) · \(url.server.host)"
+        }
+        if let id = DiskVolume.selected(in: devices, path: path),
+           let volume = devices.first(where: { $0.id == id }) {
+            return "\(volume.title) · \(volume.mountPoint ?? "")"
+        }
+        return "Computer · /"
     }
 
     func closeTab(id: Int) {

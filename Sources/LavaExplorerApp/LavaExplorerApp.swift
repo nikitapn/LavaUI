@@ -10,8 +10,8 @@ import LavaUI
 /// rename yet. A double-click on a folder goes in; a double-click on a file
 /// asks the desktop to open it.
 enum Layout {
-    static let initialWidth: Float = 960
-    static let initialHeight: Float = 640
+    static let initialWidth: Float = 1100
+    static let initialHeight: Float = 680
     static let minWidth: Float = 640
     static let minHeight: Float = 360
 }
@@ -47,6 +47,8 @@ struct LavaExplorerApp {
         LavaHost.setMinimumSize(
             editor: editor, width: Layout.minWidth, height: Layout.minHeight
         )
+        // Figtree and Caprasimo, as `File Explorer.dc.html` sets them.
+        explorerFonts = ExplorerFonts.load(into: editor)
         Theme.current = .nebula
 
         let session = ExplorerSession(
