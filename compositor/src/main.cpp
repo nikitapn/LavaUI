@@ -2100,6 +2100,10 @@ struct ClientSurface {
     float magnification = 1.f;
     /// How much colour the frost keeps after the blur; 1 is unchanged.
     float saturation = 1.f;
+    /// The margin of desktop captured left of and above the plate, which is
+    /// where the plate sits in its canvas. See `frostCanvasBox`.
+    int marginLeft = 0;
+    int marginTop = 0;
     std::unique_ptr<lava::CanvasSurface> canvas;
     wlr_scene_buffer *node = nullptr;
     std::string key;
@@ -4873,7 +4877,9 @@ class SurfaceRegistry : public lava::CompositorHost {
     for (auto &plate : surface.frostPlates) {
       if (plate.node == nullptr) continue;
       const wlr_box box = frostBox(surface, plate);
-      wlr_scene_node_set_position(&plate.node->node, box.x, box.y);
+      // The canvas holds a margin of desktop round the plate.
+      wlr_scene_node_set_position(&plate.node->node, box.x - plate.marginLeft,
+                                  box.y - plate.marginTop);
       // Each one lands directly under the content, so the last placed ends up
       // the lowest of them. Plates do not overlap each other in any layout
       // that has more than one — a menu and its fly-out sit side by side —
@@ -5305,8 +5311,11 @@ class SurfaceRegistry : public lava::CompositorHost {
 
       ClientSurface::FrostPlate &plate = surface.frostPlates[index];
       const wlr_box frostRect = frostBox(surface, plate);
-      const int frostW = frostRect.width;
-      const int frostH = frostRect.height;
+      const wlr_box canvasRect = frostCanvasBox(surface, plate, *on);
+      const int frostW = canvasRect.width;
+      const int frostH = canvasRect.height;
+      plate.marginLeft = frostRect.x - canvasRect.x;
+      plate.marginTop = frostRect.y - canvasRect.y;
 
       const wlr_box src = plateSourceBox(surface, plate, *on);
       const int srcX = src.x;
@@ -5339,7 +5348,11 @@ class SurfaceRegistry : public lava::CompositorHost {
       plate.key = "frost:" + std::to_string(surface.id) + ":" +
                   std::to_string(index);
       const float frost = frostCornerRadius(surface, plate);
-      plate.canvas->setCornerRadius(frost, true, true);
+      // No window mask: the canvas is the plate plus a margin, and the
+      // composite cuts the frost to the plate's own outline.
+      plate.canvas->setCornerRadius(0.f, false, false);
+      plate.canvas->setFrostRect(plate.marginLeft, plate.marginTop, frostRect.width,
+                                 frostRect.height);
 
       // Prefer a GPU import of the capture: same DRM node, the other
       // VkDevice. The CPU path is the fallback when the buffer is shm or
@@ -5390,12 +5403,36 @@ class SurfaceRegistry : public lava::CompositorHost {
     placeBackdrop(surface);
   }
 
-  /// Where in `on`'s buffer a plate is cropped from: its frost box, clipped
-  /// to the output and scaled to buffer pixels.
-  wlr_box plateSourceBox(const ClientSurface &surface,
+  /// A plate's frost box grown by the blur's reach, clipped to `on`: what is
+  /// captured and blurred. Blurred to its own edge only, a plate repeated its
+  /// edge row into its last rows, and a colour running along under it showed
+  /// as a strip of that colour inside the glass. With the margin the blur at
+  /// the edge mixes in what is really there, as a browser's backdrop-filter
+  /// does; the composite still cuts it to the plate.
+  wlr_box frostCanvasBox(const ClientSurface &surface,
                          const ClientSurface::FrostPlate &plate,
                          const Output &on) const {
     const wlr_box frost = frostBox(surface, plate);
+    if (frost.width < 1 || frost.height < 1) return frost;
+    wlr_box layoutBox{};
+    wlr_output_layout_get_box(server_->output_layout, on.wlr, &layoutBox);
+    // Kawase at this radius reaches about twice as far.
+    const int margin = std::clamp(static_cast<int>(std::ceil(plate.radius * 2.f)), 0, 96);
+    const int x0 = std::max(frost.x - margin, layoutBox.x);
+    const int y0 = std::max(frost.y - margin, layoutBox.y);
+    const int x1 = std::min(frost.x + frost.width + margin, layoutBox.x + layoutBox.width);
+    const int y1 = std::min(frost.y + frost.height + margin, layoutBox.y + layoutBox.height);
+    if (x1 <= x0 || y1 <= y0) return frost;
+    return wlr_box{x0, y0, x1 - x0, y1 - y0};
+  }
+
+  /// Where in `on`'s buffer a plate is cropped from: its frost box with the
+  /// blur's margin round it, clipped to the output and scaled to buffer
+  /// pixels.
+  wlr_box plateSourceBox(const ClientSurface &surface,
+                         const ClientSurface::FrostPlate &plate,
+                         const Output &on) const {
+    const wlr_box frost = frostCanvasBox(surface, plate, on);
     wlr_box layoutBox{};
     wlr_output_layout_get_box(server_->output_layout, on.wlr, &layoutBox);
     const float scale = on.wlr->scale > 0.f ? on.wlr->scale : 1.f;
@@ -5539,13 +5576,14 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (surface.bar) {
       surface.bar->setCornerRadius(radius, true, false);
     }
-    // The frost plate is the whole frame, so it takes every corner the
-    // outline has. Square frost under a rounded window is the tab in the
-    // screenshot.
-    for (auto &plate : surface.frostPlates) {
-      if (!plate.canvas) continue;
-      plate.canvas->setCornerRadius(frostCornerRadius(surface, plate), true,
-                                    true);
+    // The frost takes the outline's corners too — square frost under a
+    // rounded window is a tab — but through its composite, which is given the
+    // radius at capture (`frostWithTexture`): a mask on its canvas would round
+    // the margin of desktop round the plate instead. So a new outline is a
+    // new capture.
+    if (!surface.frostPlates.empty()) {
+      surface.frostMoved = true;
+      scheduleBackdropRefresh();
     }
   }
 

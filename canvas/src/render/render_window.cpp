@@ -2278,10 +2278,17 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       if (contentScopes.empty()) break;
       const canvas::DrawCommand open = contentScopes.back();
       contentScopes.pop_back();
-      // Punch the source to the outline *before* the blur. A square
-      // capture blurred at a rounded corner pulls the corner's bright
-      // wallpaper into the curve as a one-pixel spark.
-      if (open.param > 0) {
+      // A compositor frost plate is the one scope whose End carries an
+      // adaptive strength (`.blur()` sends 0) — not the one with a corner: a
+      // docked panel is square, and taken for a `.blur()` it was padded out
+      // over the margin of desktop round it and frosted the whole canvas.
+      // A plate is blurred whole and cut once, by the composite below:
+      // punching the capture to the outline first blurred transparency into
+      // the corners, and the sharp desktop showed through them. Only with no
+      // blur — the capture is drawn as it is — does it need cutting here.
+      const bool plate = cmd.param > 0;
+      if (plate && open.param > 0 &&
+          (!blur_.ready() || !blur_.sceneReady())) {
         quads_.pushCornerMask({open.x, open.y}, {open.w, open.h},
                               static_cast<float>(open.param));
       }
@@ -2293,7 +2300,10 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       // *outward*, and clipping the composite to the layout rect would slice
       // that falloff off square, which is the one artefact that makes a blur
       // read as a bug rather than as softness.
-      const float pad = std::ceil(radius * 3.f);
+      // Not a plate's, which is cut to its own rect: what lies around it in
+      // the canvas is the margin of desktop it was captured with so that its
+      // edges blur against what is really there (`CanvasSurface::setFrostRect`).
+      const float pad = plate ? 0.f : std::ceil(radius * 3.f);
       const float x0 = std::max(0.f, open.x - pad);
       const float y0 = std::max(0.f, open.y - pad);
       const float x1 = std::min(viewW, open.x + open.w + pad);

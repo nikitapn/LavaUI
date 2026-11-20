@@ -531,8 +531,16 @@ bool CanvasSurface::frostWithTexture(int id, float radius, float cornerRadius,
 
   canvas::DrawCommand begin{};
   begin.kind = static_cast<uint32_t>(canvas::DrawCommandKind::BeginContentBlur);
-  begin.w = static_cast<float>(width_);
-  begin.h = static_cast<float>(height_);
+  // The plate's own rect, inside a canvas that holds a margin round it.
+  if (frostRect_.w > 0 && frostRect_.h > 0) {
+    begin.x = static_cast<float>(frostRect_.x);
+    begin.y = static_cast<float>(frostRect_.y);
+    begin.w = static_cast<float>(frostRect_.w);
+    begin.h = static_cast<float>(frostRect_.h);
+  } else {
+    begin.w = static_cast<float>(width_);
+    begin.h = static_cast<float>(height_);
+  }
   begin.aux = radius;
   // Same slot backdrop blur uses: the composite has to know the outline,
   // or it paints a square tab behind a rounded window.

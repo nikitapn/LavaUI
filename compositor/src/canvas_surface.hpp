@@ -310,6 +310,13 @@ class CanvasSurface {
   /// Same frost, but the pixels stay on the GPU: `src` is the wlroots
   /// capture's dma-buf, cropped to `srcX,srcY,srcW,srcH`. False if the
   /// import or blit failed — the caller can still do the CPU path.
+  /// Where the plate is inside this canvas, when the canvas is larger: the
+  /// capture carries a margin of the desktop round the plate, so the blur at
+  /// the plate's edges mixes in what is really beyond them rather than
+  /// repeating the edge row — which smeared whatever colour ran along a
+  /// plate's edge across its last rows. Zero width is the whole canvas.
+  void setFrostRect(int x, int y, int w, int h) { frostRect_ = {x, y, w, h}; }
+
   bool frostFromDmabuf(const wlr_dmabuf_attributes &src, int srcX, int srcY,
                        int srcW, int srcH, float radius,
                        const std::string &key, float cornerRadius = 0.f,
@@ -459,6 +466,9 @@ class CanvasSurface {
   /// under it that much larger, about its centre. See `BackdropGlass`.
   /// `saturation` is what CSS's `saturate()` does to the frost after the
   /// blur; 1 leaves it.
+  struct FrostRect { int x = 0, y = 0, w = 0, h = 0; };
+  FrostRect frostRect_;
+
   bool frostWithTexture(int id, float radius, float cornerRadius,
                         float refractPx, float frost, float rim,
                         float magnification, float saturation = 1.f);
