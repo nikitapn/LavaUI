@@ -15,7 +15,7 @@ struct NetworkWindow: View {
 
     var body: some View {
         let blocks = isList ? NetworkBlock.listBlocks(network) : NetworkBlock.blocks(network)
-        return ScrollingCard(padding: NetworkBlock.padding) {
+        return ScrollingCard(padding: NetworkBlock.padding, fits: NetworkBlock.height(of: blocks)) {
             ForEach(blocks) { block in
                 row(block).frame(height: .pt(block.height))
             }

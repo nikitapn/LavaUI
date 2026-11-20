@@ -18,7 +18,7 @@ struct VolumeWindow: View {
 
     var body: some View {
         let blocks = SoundBlock.blocks(pulse)
-        return ScrollingCard(padding: SoundBlock.padding) {
+        return ScrollingCard(padding: SoundBlock.padding, fits: SoundBlock.height(of: blocks)) {
             ForEach(blocks) { block in
                 row(block).frame(height: .pt(block.height))
             }

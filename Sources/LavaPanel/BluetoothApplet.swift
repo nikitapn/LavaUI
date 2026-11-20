@@ -15,7 +15,7 @@ struct BluetoothWindow: View {
 
     var body: some View {
         let blocks = isSearch ? BluetoothBlock.searchBlocks(bluetooth) : BluetoothBlock.blocks(bluetooth)
-        return ScrollingCard(padding: BluetoothBlock.padding) {
+        return ScrollingCard(padding: BluetoothBlock.padding, fits: BluetoothBlock.height(of: blocks)) {
             ForEach(blocks) { block in
                 row(block).frame(height: .pt(block.height))
             }

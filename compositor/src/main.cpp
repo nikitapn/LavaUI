@@ -2180,6 +2180,12 @@ struct ClientSurface {
   /// list and above the panels; this is what makes a press that misses it
   /// destroy it. The context menu has its own grab and is not one of these.
   bool popup = false;
+  /// The rectangle in the parent's coordinates a popup hangs off, kept so a
+  /// popup that changes size (`ResizePopup`) is placed by the same rule.
+  int32_t popupAnchorX = 0;
+  int32_t popupAnchorY = 0;
+  uint32_t popupAnchorW = 0;
+  uint32_t popupAnchorH = 0;
 
   /// Where this window sits among the others on its workspace.
   ///
@@ -3689,11 +3695,36 @@ class SurfaceRegistry : public lava::CompositorHost {
     opened->menu = true;
     opened->popup = true;
     opened->parentId = parentId;
+    opened->popupAnchorX = anchorX;
+    opened->popupAnchorY = anchorY;
+    opened->popupAnchorW = anchorW;
+    opened->popupAnchorH = anchorH;
     placePopup(*opened, *parent, anchorX, anchorY, anchorW, anchorH);
     wlr_log(WLR_INFO, "popup: surface %u '%s' of %u at %d,%d %ux%u", id,
             title.c_str(), parentId, opened->x, opened->y, opened->width,
             opened->height);
     return id;
+  }
+
+  /// See `ResizePopup`. The new size, then the same placement as at open:
+  /// a card that grows past the bottom of the work area flips above its
+  /// anchor rather than hanging off the screen.
+  void resizePopup(uint32_t id, uint32_t width, uint32_t height) override {
+    ClientSurface *surface = find(id);
+    if (surface == nullptr || !surface->popup) return;
+    const ClientSurface *parent = find(surface->parentId);
+    if (parent == nullptr) return;
+    // The work area caps it, as it does a menu: a card taller than the
+    // screen scrolls inside the height it was given.
+    const WorkArea area = workAreaAt(parent->x + surface->popupAnchorX,
+                                     parent->y + surface->popupAnchorY);
+    if (area.height > 0 && height > area.height) height = area.height;
+    if (width == surface->width && height == surface->height) return;
+    resizeSurface(*surface, width, height);
+    placePopup(*surface, *parent, surface->popupAnchorX, surface->popupAnchorY,
+               surface->popupAnchorW, surface->popupAnchorH);
+    wlr_log(WLR_DEBUG, "popup: surface %u now %ux%u at %d,%d", id,
+            surface->width, surface->height, surface->x, surface->y);
   }
 
   /// Just below the anchor, which is a rectangle in the parent's own

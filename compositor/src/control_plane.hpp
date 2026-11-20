@@ -312,6 +312,10 @@ struct CompositorHost {
       const std::string &title, uint32_t parentId, int32_t anchorX,
       int32_t anchorY, uint32_t anchorW, uint32_t anchorH) = 0;
 
+  /// See `ResizePopup`. Ignored for a surface that is not a popup.
+  virtual void resizePopup(uint32_t surfaceId, uint32_t width,
+                           uint32_t height) = 0;
+
   virtual bool destroySurface(uint32_t surfaceId) = 0;
   virtual bool surfaceExists(uint32_t surfaceId) const = 0;
 

@@ -207,8 +207,7 @@ enum CursorShape: u32 {
   /// Vertical drag: a horizontal divider, a row edge.
   resizeUpDown,
   /// No image at all while the pointer is over the view that asked: a video
-  /// in fullscreen with its controls faded. Last, so a compositor that
-  /// predates it reads an unknown shape and shows its default arrow.
+  /// in fullscreen with its controls faded.
   hidden,
 };
 
@@ -664,15 +663,12 @@ message BackdropSaturation {
 
 /// One thing a plate does to the desktop under it. They stack: a plate is
 /// blurred, then bent and lit, then grained, whatever order they are listed
-/// in. Named one of a list rather than fields of the plate because a message
-/// cannot grow — adding a field changes the layout every client built against
-/// the older stubs reads — and a new kind of effect can be added here as a new
-/// arm, which a compositor that does not know it skips.
+/// in. A list of effects rather than fields of the plate, so a plate states
+/// only what it uses and a new kind of effect is a new arm.
 alias BackdropEffect = one of {
   blur: BackdropBlur;
   glass: BackdropGlass;
   frost: BackdropFrost;
-  /// Last, so the arms before it keep their indices.
   saturation: BackdropSaturation;
 };
 
@@ -1334,6 +1330,15 @@ interface Compositor {
   /// callers to skip it.
   void ReleaseImage(id: in u32);
 
+  /// The `Images` object: the same two registrations as above, decoded off
+  /// the compositor's event loop. A client asks once and uses it for every
+  /// image from then on; see `Images`.
+  ///
+  /// Handed out here rather than published beside this object's reference,
+  /// because it is this object's to give: one reference to find, and a client
+  /// that reached this compositor has reached its images too.
+  void GetImages(images: out object);
+
   // ─── Surfaces ──────────────────────────────────────────────────────────
   //
   // A surface is one window on the renderer's display, driven by one client's
@@ -1374,6 +1379,39 @@ interface Compositor {
                     appId: in string)
       raises(ArenaNotFound);
 
+  /// `CreateSurface`, with what kind of window it is decided at the same
+  /// moment — see `WindowTraits`. `parentId` non-zero makes it a dialog of
+  /// that surface, as `CreateDialogSurface` does.
+  ///
+  /// One call rather than a setter per trait, because two of them only mean
+  /// anything at creation: a single-instance check made after the window
+  /// exists has already lost to a second launch, and a window that takes
+  /// its remembered frame and is only then told it is fixed has been placed
+  /// by the user's last session anyway. Dispatched on the loop like every
+  /// call here, so two launches racing each other are answered one after
+  /// the other and exactly one of them gets a window.
+
+  u32 CreateWindow(arenaId: in string, width: in u32, height: in u32,
+                   title: in string, frame: in WindowFrame,
+                   appId: in string, parentId: in u32,
+                   traits: in WindowTraits)
+      raises(ArenaNotFound, AlreadyRunning);
+
+  /// `CreateSurface` for a dialog: a window that belongs to another.
+  ///
+  /// A dialog neither takes nor leaves its application's remembered frame —
+  /// a file picker opened at the file manager's size, and resizing it resized
+  /// the file manager next time — and it opens centred over `parentId` rather
+  /// than where the application last was. `parentId` is any surface, another
+  /// client's included: the picker is a process of its own, and the window it
+  /// answers to is the one that asked. 0, or a surface that has gone, is a
+  /// dialog with nothing to centre on.
+
+  u32 CreateDialogSurface(arenaId: in string, width: in u32, height: in u32,
+                          title: in string, frame: in WindowFrame,
+                          appId: in string, parentId: in u32)
+      raises(ArenaNotFound);
+
   /// Asks for a *panel*: a surface docked to a screen edge.
   ///
   /// A separate call rather than a flag on `CreateSurface`, because the
@@ -1407,79 +1445,70 @@ interface Compositor {
                   thickness: in u32, reserve: in boolean,
                   title: in string, appId: in string) raises(ArenaNotFound);
 
-  /// Asks for the surface a context menu is drawn into.
+  /// Changes how deep a panel is, and how much of that depth windows are laid
+  /// out around.
   ///
-  /// A third way to create a surface, for the same reason `CreatePanel` was a
-  /// second one: what the caller decides is different again. A window chooses
-  /// its size and the compositor chooses where it goes; a panel chooses its
-  /// depth and the compositor chooses the rest; a menu chooses **neither**.
-  /// It is put where the pointer was, at the size it says it measured, and
-  /// both of those arrive later — with `ShowMenu` — because neither is known
-  /// when the process starts.
+  /// Two numbers because they stopped being the same one. A panel is normally
+  /// both — a 32-pixel strip that reserves 32 pixels — but a panel with a
+  /// *menu* on it has to be able to draw a dropdown, and a dropdown does not
+  /// fit in the strip that owns it. So the panel grows its surface to the room
+  /// the menu needs while reserving the strip it always did: the windows
+  /// underneath do not move, and the open menu is drawn over them.
   ///
-  /// What the compositor does differently with one of these is the whole
-  /// reason it is its own kind:
+  /// It also decides what the panel takes clicks in, and that falls out rather
+  /// than being a second thing to set: a surface is hit-tested where it is,
+  /// so a grown panel receives the click that lands outside the open menu —
+  /// which is exactly the click that should close it.
   ///
-  ///   * it is stacked **above panels**, in its own scene tree. A menu that
-  ///     opened under the panel would be a menu the top of the screen
-  ///     cannot use.
-  ///   * it is **hidden** until `ShowMenu` and again after the reply, so a
-  ///     resident menu process costs the desktop nothing between menus —
-  ///     no composite, and nothing in the way of a fullscreen client's
-  ///     direct scanout.
-  ///   * while it is up the compositor holds a **pointer grab**: a press
-  ///     anywhere else dismisses the menu and is swallowed rather than
-  ///     landing in whatever was underneath. That is what every other menu
-  ///     on the desktop does, and doing it here rather than in the client is
-  ///     what makes it work over a foreign window, which a client cannot
-  ///     hit-test.
-  ///   * it is not in the window list, has no title bar, and never appears
-  ///     in the switcher.
-  ///
-  /// `width` and `height` are what the client expects its largest menu to
-  /// need. They size the arena and nothing else — every menu is drawn at the
-  /// size `ShowMenu` names.
-  ///
-  /// One per client. Asking twice returns the surface already open.
-  u32 CreateMenuSurface(arenaId: in string, width: in u32, height: in u32,
-                        appId: in string) raises(ArenaNotFound);
+  /// `reserved` may not exceed `thickness`; it is clamped if it does. A window
+  /// that was maximized against the old reservation is re-fitted to the new
+  /// one, because a maximized window is a promise about the work area rather
+  /// than a size someone chose.
+  void SetPanelThickness(surfaceId: in u32, thickness: in u32,
+                         reserved: in u32) raises(SurfaceNotFound);
 
-  // ─── Window state ──────────────────────────────────────────────────────
-  //
-  // The three things a title bar did, for the client that drew its own
-  // instead. Nothing here is new *behaviour* — the compositor already moves,
-  // maximizes and hides windows when its own buttons are pressed; these are
-  // the same paths, reached from the other side of the boundary.
-  //
-  // Asked for rather than done, which is the whole reason they are calls. A
-  // client cannot place its own window: it has no idea where it is, what else
-  // is on screen, which workspace it is on, or where the panel that a maximize
-  // must not cover ends. It knows exactly one thing the compositor does not —
-  // that the pointer just went down on something the app considers a title bar
-  // — and that is what it sends.
-  //
-  // A `server`-framed window may call these too. The strip is a convenience,
-  // not a lock, and an app with a menu item that maximizes should not need a
-  // different window to have one.
+  /// A borderless popup of `parentId`, hanging off `anchor`.
+  ///
+  /// The sound slider and the About card. A window was the wrong shape for
+  /// both: a title bar, a place in the window list, and a position the
+  /// compositor picks by cascading. What they are is a menu that is not a
+  /// list of rows — the panel draws the contents, and the compositor does
+  /// the three things a client cannot. The anchor is a rectangle in the
+  /// parent's own coordinates (the icon); the popup is placed just below
+  /// it, shifted so it stays on the output, and flipped above the anchor
+  /// when there is no room below. It is not in the window list, it does
+  /// not take focus, and it has no frame.
+  ///
+  /// While it is up, a press that misses it dismisses it and is swallowed.
+  /// "Misses it" is mostly other windows, which the panel cannot hit-test,
+  /// so the grab lives here — the same reason the context menu's does.
+  /// Dismissing destroys the surface; the client's input stream ending is
+  /// how it learns, which is already how a window learns it was closed.
 
-  /// "The user has grabbed this window; take the pointer and move it."
+  u32 CreatePopupSurface(arenaId: in string, width: in u32, height: in u32,
+                         title: in string, parentId: in u32,
+                         anchorX: in i32, anchorY: in i32,
+                         anchorW: in u32, anchorH: in u32)
+      raises(ArenaNotFound);
+
+  /// A popup of this client's is now `width`×`height`.
   ///
-  /// The client-side decoration counterpart of pressing a title bar, and it
-  /// carries no coordinates for the same reason `ScrollUnclaimed` does not:
-  /// the compositor still has the pointer that produced the press, and a
-  /// position from the client would be a position it could aim anywhere.
+  /// A card is opened at the size of what it holds, and what it holds can
+  /// change while it is up: the network card learns about VPNs a moment
+  /// after it opens, and was left scrolling a list there was room to show.
+  /// The compositor resizes the surface and places it again under the anchor
+  /// `CreatePopupSurface` was given — still below it, still flipped above
+  /// when there is no room — and the client hears the new size as a
+  /// `Resize`, like any window's. Ignored for a surface that is not a popup.
+
+  void ResizePopup(surfaceId: in u32, width: in u32, height: in u32);
+
+  /// Gives the surface back: the window closes and the arena is released.
   ///
-  /// The move ends when the button comes up, which the compositor sees and
-  /// the client does not — from the moment this returns, the pointer is the
-  /// compositor's and the client stops receiving motion. The release it would
-  /// otherwise never see is delivered anyway, synthetically, before the grab
-  /// starts: a client left believing a button is still down is a client with a
-  /// stuck drag, and that is a worse bug than a release that arrives early.
-  ///
-  /// Ignored, deliberately, when no button is down. Without that check a
-  /// client could call this at any time and have the window follow the cursor
-  /// until the next click, which is not a window manager anybody asked for.
-  void BeginMove(surfaceId: in u32) raises(SurfaceNotFound);
+  /// Not the only way a surface ends — closing the input stream does it too,
+  /// and so does the user closing the window — but it is the one a client
+  /// that never subscribed to input can use.
+  void DestroySurface(surfaceId: in u32) raises(SurfaceNotFound);
 
   /// The smallest this window is willing to be, in pixels.
   ///
@@ -1504,149 +1533,6 @@ interface Compositor {
   /// what every existing client is saying by never calling this.
   void SetMinSize(surfaceId: in u32, minWidth: in u32, minHeight: in u32)
       raises(SurfaceNotFound);
-
-  /// Fills the work area, or puts the window back where it was. Returns the
-  /// state it ended in.
-  ///
-  /// A toggle rather than `SetMaximized(bool)`, because the client does not
-  /// know which state it is in and has no way to find out: the user can
-  /// maximize a window from the compositor's own button or a keybinding, and a
-  /// client tracking its own idea of the answer would drift out of step with
-  /// the first one of those. The return value is how it paints the button.
-  ///
-  /// The *work* area, not the output: a maximized window that covered the
-  /// panel would hide the one thing on screen meant to always be reachable.
-  boolean ToggleMaximize(surfaceId: in u32) raises(SurfaceNotFound);
-
-  /// Maximizes the window, or puts it back, whichever it is now.
-  ///
-  /// The one time a client *does* know the answer is the one it is asking
-  /// for: a window that opens maximized (`LavaClient.open(fillScreen:
-  /// .maximized)` — the launcher, the switcher). A toggle there would be a
-  /// guess about the state it opened in, and the compositor restores a
-  /// remembered frame — maximized included — before the client says anything,
-  /// so the guess can be wrong. Naming the state cannot.
-  void SetMaximized(surfaceId: in u32, on: in boolean) raises(SurfaceNotFound);
-
-  /// Hides the window without ending it. The client keeps its surface, its
-  /// arena and its input stream.
-  ///
-  /// Frames published while minimized cost the compositor nothing to accept
-  /// and are not drawn, so a client need not know it happened — and today it
-  /// is not told, because there is nothing it could usefully do with the news
-  /// that a `Resize` does not already say.
-  ///
-  /// Getting it back is the compositor's business: `ActivateWindow` from a
-  /// panel that walked `ListWindows`, or Alt+Shift+M, which brings back
-  /// every window the workspace has hidden.
-  void Minimize(surfaceId: in u32) raises(SurfaceNotFound);
-
-  /// Changes how deep a panel is, and how much of that depth windows are laid
-  /// out around.
-  ///
-  /// Two numbers because they stopped being the same one. A panel is normally
-  /// both — a 32-pixel strip that reserves 32 pixels — but a panel with a
-  /// *menu* on it has to be able to draw a dropdown, and a dropdown does not
-  /// fit in the strip that owns it. So the panel grows its surface to the room
-  /// the menu needs while reserving the strip it always did: the windows
-  /// underneath do not move, and the open menu is drawn over them.
-  ///
-  /// It also decides what the panel takes clicks in, and that falls out rather
-  /// than being a second thing to set: a surface is hit-tested where it is,
-  /// so a grown panel receives the click that lands outside the open menu —
-  /// which is exactly the click that should close it.
-  ///
-  /// `reserved` may not exceed `thickness`; it is clamped if it does. A window
-  /// that was maximized against the old reservation is re-fitted to the new
-  /// one, because a maximized window is a promise about the work area rather
-  /// than a size someone chose.
-  void SetPanelThickness(surfaceId: in u32, thickness: in u32,
-                         reserved: in u32) raises(SurfaceNotFound);
-
-  /// Every window, and again whenever the set or any of it changes.
-  ///
-  /// The other half of `SubscribeActiveWindow`, and the one a *dock* needs:
-  /// focus says which window is in front, this says which windows exist. Until
-  /// it, a panel could show a clock and nothing else about the desktop it sat
-  /// on — and `Minimize` was a button that hid a window nothing could bring
-  /// back, because nothing could name it.
-  ///
-  /// Sent on every change that a shell would draw differently: a window
-  /// opening or closing, a title changing, focus moving, a window being
-  /// minimized or restored, and a workspace switch. Not on move or resize —
-  /// this carries no geometry, so nothing a dock draws depends on them.
-  ///
-  /// Bidirectional for the reason the other streams are: the reverse half is
-  /// what flow control meters and what tells the compositor the shell is still
-  /// there, not because a shell has anything to say.
-  bidi_stream<WindowListAck, WindowList> SubscribeWindows();
-
-  /// Whether this panel's strip is clear of windows, and again whenever that
-  /// changes.
-  ///
-  /// For a dock that hides itself: auto-hide is right when a window is in the
-  /// way and wrong when the desktop behind it is empty, and the difference is
-  /// something only the compositor can see. A panel knows its own rectangle
-  /// and nothing about what overlaps it.
-  ///
-  /// Sent on subscription, and afterwards only when the answer changes — not
-  /// on every window move. Dragging a window across the bottom of the screen
-  /// is two messages, on the frames it crosses the edge of the strip, however
-  /// many motion events it took.
-  ///
-  /// `bidi_stream` like the rest, and the reason is the servant's shape rather
-  /// than anything the client has to say. A `server_stream` servant in NPRPC
-  /// is a *generator*: it returns a coroutine that the stream manager resumes
-  /// once per credit and pulls values out of, which is right for a stream that
-  /// can produce on demand — a file, a video, N rows. This one cannot. Its
-  /// values are pushed, irregularly, by the compositor's own loop when a
-  /// window moves, so the coroutine would have to suspend on an awaiter until
-  /// there is news and whoever resumed it would do the transport write: the
-  /// Wayland loop, writing into a ring a wedged client has stopped draining,
-  /// which is the one thing every subscription here is built to avoid. Putting
-  /// that write back on its own thread means rebuilding `StreamPump` inside a
-  /// coroutine.
-  ///
-  /// The bidirectional form hands the servant an ordinary writer instead, and
-  /// that moves straight into the pump every other subscription already uses.
-  /// The acks are flow control and liveness, as everywhere else here.
-  ///
-  /// The subscription also ends when the surface does — `DestroySurface`, or
-  /// the client exiting — which is the same signal the input stream is torn
-  /// down by.
-  bidi_stream<PanelAreaAck, PanelArea> SubscribePanelArea(surfaceId: in u32)
-      raises(SurfaceNotFound);
-
-  /// The system colour theme, and again whenever Settings changes it.
-  ///
-  /// Bidirectional for the same reason the other state streams are, and it is
-  /// a sharper reason than "the acks are flow control" — see
-  /// `SubscribePanelArea`, where it is written out. Briefly: a `server_stream`
-  /// servant is a generator the stream manager pulls from, and none of these
-  /// streams can produce on demand; they are pushed by the compositor when
-  /// something changes. The bidirectional form is the one that hands the
-  /// servant a writer it can keep.
-  ///
-  /// The first message is the theme at subscription, so a client that
-  /// starts after Settings already picked nebula is nebula on its first
-  /// frame rather than dark-until-someone-clicks.
-  bidi_stream<ThemeAck, SystemTheme> SubscribeSystemTheme();
-
-  /// Brings a window forward: restores it if minimized, raises it, focuses it.
-  ///
-  /// What a dock icon does when it is clicked, and the counterpart to
-  /// `Minimize` — which until now put windows somewhere nothing could reach.
-  ///
-  /// Deliberately three things in one call rather than three calls a shell
-  /// sequences itself. "Activate" is a single intention, and a shell that had
-  /// to spell it out could spell it out differently — restoring without
-  /// raising, focusing without restoring — leaving windows in states no
-  /// gesture in the desktop produces.
-  ///
-  /// A window on another workspace is *not* followed by switching to it: that
-  /// would move the user somewhere they did not ask to go. It is restored and
-  /// raised on its own workspace, where they will find it when they arrive.
-  void ActivateWindow(surfaceId: in u32) raises(SurfaceNotFound);
 
   /// Where a surface takes pointer input, in its own coordinates.
   ///
@@ -1674,251 +1560,27 @@ interface Compositor {
   void SetInputRegion(surfaceId: in u32, rects: in vector<InputRect>)
       raises(SurfaceNotFound);
 
-  /// The pointer image while the pointer is inside this surface.
+  /// Everything about the desktop behind this surface, in one call: every
+  /// plate, and on each everything it does. An empty list is no backdrop.
   ///
-  /// A client cannot set the cursor: there is one pointer, it belongs to the
-  /// seat, and the compositor is the only thing that can see what else is
-  /// under it. So this is a *preference* stored against the surface, applied
-  /// while the pointer is over that surface and dropped the moment it is not
-  /// — which is what stops a client that asked for a resize arrow and then
-  /// stopped answering from leaving that arrow on the whole desktop.
+  /// One call rather than one per part. There used to be six — the blur, a
+  /// region list, a region list with glass, the bend, the grain — and a
+  /// client could only send them one at a time, so a frame could be
+  /// composited with the new bend and the old grain.
   ///
-  /// Sent when the pointer crosses from one view to another, which the client
-  /// learns from the `NodeHover` event the renderer already sends it. The
-  /// round trip is real but it is not in the way: the hover *tint* is drawn
-  /// by the renderer without asking anyone, and only the cursor waits for
-  /// this.
-  ///
-  /// `[unreliable]`, for the reason `Present` is: it is on the pointer's path,
-  /// it arrives in bursts as the pointer crosses a toolbar, and a client that
-  /// blocked on each one would put a shared-memory round trip between the
-  /// pointer and every frame. The cost of a lost one is the wrong cursor
-  /// until the pointer crosses something else, which is also what happens
-  /// when a client is simply slow to answer.
-  [unreliable] void SetCursor(surfaceId: in u32, shape: in CursorShape);
+  /// The plates are what the desktop under the surface looks like, not
+  /// decoration on it: a whole-surface plate (`w`, `h` 0) for a frosted
+  /// window, a rectangle per popup for a panel whose surface is mostly empty.
+  /// Each is captured and drawn on its own, so two may overlap and a menu and
+  /// its fly-out are two plates with desktop between them.
 
-  /// The desktop's look, for a client matching its own surfaces to it.
-  ///
-  /// A call rather than a stream, unlike the focus next door, because of how
-  /// often the answer changes: focus changes whenever the user clicks, and
-  /// this changes when somebody edits a config file and sends SIGHUP. A client
-  /// that read it at startup is right for the rest of the session in every
-  /// case except that one, where it is stale until it restarts — worth saying
-  /// out loud, and worth turning into a stream on the day a setting here can
-  /// change for a better reason than a hand edit.
-  ///
-  /// No surface id: this describes the desktop, and every window on it gets
-  /// the same answer.
-  Appearance GetAppearance();
-
-  // ─── Settings ──────────────────────────────────────────────────────────
-  //
-  // For the app that exists to change them. Every setter applies to the
-  // running compositor first and then writes `lava.conf`, so what the user
-  // sees and what the file says cannot disagree.
-
-  /// Sets the desktop's look, now and for the next session.
-  ///
-  /// Live because it can be: the radius and the shadow are numbers the
-  /// renderer reads per frame, so every window on screen takes the new ones
-  /// without being told anything. That is what makes a slider here worth
-  /// having rather than a text field and an Apply button.
-  ///
-  /// Values are clamped to what the compositor will draw, so a client does
-  /// not have to know the limits — call `GetAppearance` afterwards to see
-  /// what was actually taken.
-  void SetAppearance(appearance: in Appearance) raises(SettingsWriteFailed);
-
-  /// The system colour theme Lava windows should wear.
-  ///
-  /// A name, not a palette: see `SystemTheme`. The running value, so a
-  /// settings app that just opened is not guessing from the config file.
-  SystemTheme GetSystemTheme();
-
-  /// Sets the system colour theme, now and for the next session.
-  ///
-  /// Every subscribed client is told; a Lava window that uses `Theme.current`
-  /// retints without restarting. Written to `lava.conf` as `[theme] name=…`.
-  void SetSystemTheme(theme: in SystemTheme) raises(SettingsWriteFailed);
-
-  /// What the desktop is painted with now.
-  ///
-  /// Reports what is *up*, which after a failed picture is the background that
-  /// survived rather than the one that was asked for. A settings app that
-  /// re-reads this after a `WallpaperUnreadable` therefore sees the truth on
-  /// screen, and its controls go back to matching the desktop.
-  Wallpaper GetWallpaper();
-
-  /// Sets the desktop background, now and for the next session.
-  ///
-  /// The picture is decoded before anything changes, so the failure case
-  /// leaves the desktop exactly as it was: a mistyped path raises
-  /// `WallpaperUnreadable` and the old background stays up and stays saved.
-  /// This is the one setter here that can refuse, and it is why it can —
-  /// every other setting on this interface is a number or a name that cannot
-  /// be wrong in a way the compositor could detect in advance.
-  ///
-  /// Written to `lava.conf` as a `[background]` block.
-  void SetWallpaper(wallpaper: in Wallpaper)
-      raises(WallpaperUnreadable, SettingsWriteFailed);
-
-  /// The keyboard as it is set up now.
-  KeyboardSettings GetKeyboard();
-
-  /// Changes the keyboard, now and for the next session.
-  ///
-  /// wlroots hands the new keymap to every connected client as a side effect,
-  /// so a layout change reaches applications that are already running — which
-  /// is the difference between this and editing the file, where it only
-  /// reaches them on SIGHUP.
-  void SetKeyboard(settings: in KeyboardSettings) raises(SettingsWriteFailed);
-
-  /// Every layout and variant this machine's xkb knows about.
-  ///
-  /// From the compositor because xkb is the compositor's dependency: a client
-  /// would have to guess where the rules files live, and a client on a
-  /// machine where they live somewhere else would guess wrong and show an
-  /// empty list rather than an error.
-  vector<KeyboardLayout> ListKeyboardLayouts();
-
-  /// Every shortcut the compositor takes for itself.
-  ///
-  /// So a settings app can show them, and so a user can find out that Alt+M
-  /// minimizes without reading `main.cpp`. Compiled in for now, hence no
-  /// setter — see `KeyBinding`.
-  vector<KeyBinding> ListKeyBindings();
-
-  /// Every screen the compositor has, in layout order.
-  vector<OutputInfo> ListOutputs();
-
-  /// Every mode a screen can run at, best first.
-  ///
-  /// Separate from `ListOutputs` because a screen has dozens of modes and a
-  /// settings app needs them only for the one the user is looking at.
-  /// Modes that match in width, height and refresh are collapsed: EDID
-  /// often lists the same size twice with picture-aspect or blanking flags
-  /// this message does not carry, and a client keying a list on that
-  /// triple would otherwise see duplicate ids.
-  vector<OutputMode> ListOutputModes(name: in string) raises(OutputNotFound);
-
-  /// Reconfigures a screen, now and for the next session.
-  ///
-  /// A rejected mode does not cost the session: the compositor falls back to
-  /// the display's preferred mode rather than leaving a screen showing
-  /// nothing, which is the one failure a user cannot recover from without
-  /// another machine. The fallback is visible through `ListOutputs`, so a
-  /// client can tell that what it asked for is not what it got.
-  void SetOutput(request: in OutputRequest)
-      raises(OutputNotFound, SettingsWriteFailed);
-
-  /// Makes this screen the primary, now and for the next session.
-  ///
-  /// The panel moves here immediately. An empty name means no preference
-  /// — the screen at the layout origin, which is where the panel sat
-  /// before this existed. Unplugging the primary does not forget the
-  /// name: another screen stands in until it comes back. `ListOutputs`
-  /// always reports the screen that is actually hosting the panel.
-  void SetPrimaryOutput(name: in string)
-      raises(OutputNotFound, SettingsWriteFailed);
-
-  /// How the screens share the desktop: `"extend"` or `"mirror"`.
-  ///
-  /// Extend gives each screen its own piece of the layout. Mirror puts
-  /// the same picture on every screen, aligned at the origin. The value
-  /// is what is stored, not what two screens happening to sit on top of
-  /// each other would look like.
-  string GetArrangement();
-
-  /// Sets extend or mirror, now and for the next session.
-  ///
-  /// Anything other than `"mirror"` (and the aliases `"clone"` / `"same"`)
-  /// is taken as extend. Switching to extend spreads screens that were
-  /// stacked; switching to mirror does not forget their extend positions,
-  /// so switching back puts them where they were.
-  void SetArrangement(mode: in string) raises(SettingsWriteFailed);
-
-  /// The focused window, now and whenever it changes.
-  ///
-  /// The compositor owns focus, so a panel has no way to know it — the same
-  /// shape of hole `SubscribeInput` filled for the pointer. Without it a
-  /// global menu cannot exist at all: the menu on a panel is the *active*
-  /// window's, and nothing else in this system can say which that is.
-  ///
-  /// A stream rather than a call, for what focus is: it changes when the user
-  /// clicks, not when a panel asks, and a panel polling for it would be a
-  /// round trip per frame to learn nothing has happened. The first event is
-  /// the state at subscription, so a panel that starts after the windows do
-  /// is not blank until the next click.
-  ///
-  /// Bidirectional for the reason `SubscribeInput` is, and not because the
-  /// panel has anything to say: the reverse half is what NPRPC's flow control
-  /// meters and what makes the compositor notice a panel that has gone away,
-  /// instead of writing focus changes into a socket nobody reads. `FocusAck`
-  /// carries the id the panel actually applied, which also makes "the panel is
-  /// showing the wrong window's menu" a question with an answer.
-  ///
-  /// Nothing here asks *for* focus. Being told is a panel's business; taking
-  /// the keyboard from the window the user is typing in is not, and this
-  /// interface deliberately has no call for it.
-  bidi_stream<FocusAck, ActiveWindow> SubscribeActiveWindow();
-
-  /// The menu to open, and again every time the user asks for one.
-  ///
-  /// The subscription a **context menu client** holds: right-clicking the
-  /// desktop or a window's non-client area produces a `MenuRequest` here,
-  /// and the client answers with a `MenuReply` naming what was chosen. The
-  /// compositor does the rest — it owns every action on the menu, which is
-  /// why it can be sure the item that was clicked is still a thing that can
-  /// be done.
-  ///
-  /// Bidirectional for the reason the other state streams are, and here the
-  /// reverse half carries real news rather than only flow control: the reply
-  /// *is* the result. See `SubscribePanelArea` for why a `server_stream`
-  /// servant is the wrong shape for anything the compositor's loop pushes.
-  ///
-  /// `surfaceId` is this client's menu surface, from `CreateMenuSurface`.
-  /// Passing an ordinary window is refused: the compositor is about to place
-  /// this surface at the pointer and grab for it, and doing that to somebody's
-  /// text editor is not a request it should honour.
-  ///
-  /// **One subscriber.** A second one is refused rather than fanned out to:
-  /// two processes drawing the desktop's context menu is not a configuration
-  /// with a right answer, and the failure would show up as two menus and one
-  /// grab. The session's own menu client is started like the panel and the
-  /// dock — see `[shell]` in `lava.conf`.
-  ///
-  /// A desktop with nobody subscribed simply has no context menu. The right
-  /// click still clears focus, the way it did before this existed.
-  bidi_stream<MenuReply, MenuRequest> SubscribeMenu(surfaceId: in u32)
+  void SetBackdrop(surfaceId: in u32, plates: in vector<BackdropPlate>)
       raises(SurfaceNotFound);
 
-  /// "I have laid out the menu for `serial`; it is `width` × `height`."
-  ///
-  /// The client's half of opening a menu, and the reason the surface is not
-  /// simply shown when the request goes out: only the client can measure the
-  /// list. It has the face, the padding and the shortcut column; the
-  /// compositor has the item strings and no idea what they come to in pixels.
-  ///
-  /// The compositor resizes the surface, places it against the anchor the
-  /// request carried, unconstrains it into the output's work area — flipping
-  /// it above the pointer or left of it rather than letting it run off the
-  /// screen, the same rule `xdg_popup` gets — takes the grab and reveals it.
-  /// The reveal waits for a frame drawn at the new size, like any other
-  /// window's first frame, so a menu never appears at the previous menu's
-  /// dimensions.
-  ///
-  /// Ignored for a `serial` that is not the open request. A client that
-  /// measured a menu the user has already dismissed is not wrong; it is late,
-  /// and the answer to late is nothing at all.
-  void ShowMenu(surfaceId: in u32, serial: in u32, width: in u32,
-                height: in u32) raises(SurfaceNotFound);
-
-  /// Gives the surface back: the window closes and the arena is released.
-  ///
-  /// Not the only way a surface ends — closing the input stream does it too,
-  /// and so does the user closing the window — but it is the one a client
-  /// that never subscribed to input can use.
-  void DestroySurface(surfaceId: in u32) raises(SurfaceNotFound);
+  // ─── Frames and input ──────────────────────────────────────────────────
+  //
+  // What a client sends every frame, and what it is sent back: its input, and
+  // the pointer image over it.
 
   /// "A frame is committed on this surface; come and get it."
   ///
@@ -2004,8 +1666,6 @@ interface Compositor {
   /// it is supervised, and should not behave differently if it is.
   [unreliable] void Heartbeat(surfaceId: in u32);
 
-  // ─── Input ─────────────────────────────────────────────────────────────
-
   /// The reverse channel: the renderer owns the window, so it owns the mouse
   /// and the keyboard, and an app that draws into shared memory has no other
   /// way to learn a pointer moved.
@@ -2047,6 +1707,564 @@ interface Compositor {
   /// after, and it is a stream error like any other.
   bidi_stream<InputAck, InputEvent> SubscribeInput(surfaceId: in u32)
       raises(SurfaceNotFound);
+
+  /// The pointer image while the pointer is inside this surface.
+  ///
+  /// A client cannot set the cursor: there is one pointer, it belongs to the
+  /// seat, and the compositor is the only thing that can see what else is
+  /// under it. So this is a *preference* stored against the surface, applied
+  /// while the pointer is over that surface and dropped the moment it is not
+  /// — which is what stops a client that asked for a resize arrow and then
+  /// stopped answering from leaving that arrow on the whole desktop.
+  ///
+  /// Sent when the pointer crosses from one view to another, which the client
+  /// learns from the `NodeHover` event the renderer already sends it. The
+  /// round trip is real but it is not in the way: the hover *tint* is drawn
+  /// by the renderer without asking anyone, and only the cursor waits for
+  /// this.
+  ///
+  /// `[unreliable]`, for the reason `Present` is: it is on the pointer's path,
+  /// it arrives in bursts as the pointer crosses a toolbar, and a client that
+  /// blocked on each one would put a shared-memory round trip between the
+  /// pointer and every frame. The cost of a lost one is the wrong cursor
+  /// until the pointer crosses something else, which is also what happens
+  /// when a client is simply slow to answer.
+  [unreliable] void SetCursor(surfaceId: in u32, shape: in CursorShape);
+
+  // ─── Window state ──────────────────────────────────────────────────────
+  //
+  // The three things a title bar did, for the client that drew its own
+  // instead. Nothing here is new *behaviour* — the compositor already moves,
+  // maximizes and hides windows when its own buttons are pressed; these are
+  // the same paths, reached from the other side of the boundary.
+  //
+  // Asked for rather than done, which is the whole reason they are calls. A
+  // client cannot place its own window: it has no idea where it is, what else
+  // is on screen, which workspace it is on, or where the panel that a maximize
+  // must not cover ends. It knows exactly one thing the compositor does not —
+  // that the pointer just went down on something the app considers a title bar
+  // — and that is what it sends.
+  //
+  // A `server`-framed window may call these too. The strip is a convenience,
+  // not a lock, and an app with a menu item that maximizes should not need a
+  // different window to have one.
+
+  /// "The user has grabbed this window; take the pointer and move it."
+  ///
+  /// The client-side decoration counterpart of pressing a title bar, and it
+  /// carries no coordinates for the same reason `ScrollUnclaimed` does not:
+  /// the compositor still has the pointer that produced the press, and a
+  /// position from the client would be a position it could aim anywhere.
+  ///
+  /// The move ends when the button comes up, which the compositor sees and
+  /// the client does not — from the moment this returns, the pointer is the
+  /// compositor's and the client stops receiving motion. The release it would
+  /// otherwise never see is delivered anyway, synthetically, before the grab
+  /// starts: a client left believing a button is still down is a client with a
+  /// stuck drag, and that is a worse bug than a release that arrives early.
+  ///
+  /// Ignored, deliberately, when no button is down. Without that check a
+  /// client could call this at any time and have the window follow the cursor
+  /// until the next click, which is not a window manager anybody asked for.
+  void BeginMove(surfaceId: in u32) raises(SurfaceNotFound);
+
+  /// Fills the work area, or puts the window back where it was. Returns the
+  /// state it ended in.
+  ///
+  /// A toggle rather than `SetMaximized(bool)`, because the client does not
+  /// know which state it is in and has no way to find out: the user can
+  /// maximize a window from the compositor's own button or a keybinding, and a
+  /// client tracking its own idea of the answer would drift out of step with
+  /// the first one of those. The return value is how it paints the button.
+  ///
+  /// The *work* area, not the output: a maximized window that covered the
+  /// panel would hide the one thing on screen meant to always be reachable.
+  boolean ToggleMaximize(surfaceId: in u32) raises(SurfaceNotFound);
+
+  /// Maximizes the window, or puts it back, whichever it is now.
+  ///
+  /// The one time a client *does* know the answer is the one it is asking
+  /// for: a window that opens maximized (`LavaClient.open(fillScreen:
+  /// .maximized)` — the launcher, the switcher). A toggle there would be a
+  /// guess about the state it opened in, and the compositor restores a
+  /// remembered frame — maximized included — before the client says anything,
+  /// so the guess can be wrong. Naming the state cannot.
+  void SetMaximized(surfaceId: in u32, on: in boolean) raises(SurfaceNotFound);
+
+  /// Hides the window without ending it. The client keeps its surface, its
+  /// arena and its input stream.
+  ///
+  /// Frames published while minimized cost the compositor nothing to accept
+  /// and are not drawn, so a client need not know it happened — and today it
+  /// is not told, because there is nothing it could usefully do with the news
+  /// that a `Resize` does not already say.
+  ///
+  /// Getting it back is the compositor's business: `ActivateWindow` from a
+  /// panel that walked `ListWindows`, or Alt+Shift+M, which brings back
+  /// every window the workspace has hidden.
+  void Minimize(surfaceId: in u32) raises(SurfaceNotFound);
+
+  /// Fills the output with this surface, or gives it back its old geometry.
+  ///
+  /// For a client whose whole purpose is to cover the screen — a screenshot
+  /// tool showing a frozen desktop, a presenter, a lock screen. The
+  /// compositor already does this for foreign windows that ask through
+  /// xdg-shell; this is the same thing said over the control plane, which is
+  /// the only way a Lava client can say anything about its own frame.
+  ///
+  /// The surface is resized to the output and drawn above the panel and the
+  /// dock, with no title bar and no shadow. Turning it off restores what it
+  /// had before, which the compositor remembered rather than the client.
+  void SetFullscreen(surfaceId: in u32, on: in boolean)
+      raises(SurfaceNotFound);
+
+  /// Brings a window forward: restores it if minimized, raises it, focuses it.
+  ///
+  /// What a dock icon does when it is clicked, and the counterpart to
+  /// `Minimize` — which until now put windows somewhere nothing could reach.
+  ///
+  /// Deliberately three things in one call rather than three calls a shell
+  /// sequences itself. "Activate" is a single intention, and a shell that had
+  /// to spell it out could spell it out differently — restoring without
+  /// raising, focusing without restoring — leaving windows in states no
+  /// gesture in the desktop produces.
+  ///
+  /// A window on another workspace is *not* followed by switching to it: that
+  /// would move the user somewhere they did not ask to go. It is restored and
+  /// raised on its own workspace, where they will find it when they arrive.
+  void ActivateWindow(surfaceId: in u32) raises(SurfaceNotFound);
+
+  // ── The panel's Window menu ──────────────────────────────────────────────
+  //
+  // What a window's title-bar context menu does, for a window with no title
+  // bar: a Lava client that draws its own chrome has no non-client area to
+  // right-click. The panel offers them for whichever window is active, and
+  // any client may ask for any window — the same as `Minimize` — because
+  // each is something the user could already do to it by hand.
+
+  /// Pins a window above the rest of its workspace, or stops. An overlay
+  /// (the launcher, the switcher) is above pinned windows already and is
+  /// left alone.
+  void SetAlwaysOnTop(surfaceId: in u32, on: in boolean) raises(SurfaceNotFound);
+
+  /// Moves a window to the middle of the work area of the output it is on.
+  /// Nothing for a maximized or fullscreen window, which has nowhere to go.
+  void CenterWindow(surfaceId: in u32) raises(SurfaceNotFound);
+
+  /// Asks a window to close: a Wayland or X11 client gets its close request
+  /// and may still ask to save; a Lava client's surface ends, as the title
+  /// bar's close button does.
+  void CloseWindow(surfaceId: in u32) raises(SurfaceNotFound);
+
+  // ─── The desktop ───────────────────────────────────────────────────────
+  //
+  // What the shell's own clients need to know about everything else on
+  // screen: the windows, the active one, whether one is in a panel's way, and
+  // which workspace is showing.
+
+  /// Every window, and again whenever the set or any of it changes.
+  ///
+  /// The other half of `SubscribeActiveWindow`, and the one a *dock* needs:
+  /// focus says which window is in front, this says which windows exist. Until
+  /// it, a panel could show a clock and nothing else about the desktop it sat
+  /// on — and `Minimize` was a button that hid a window nothing could bring
+  /// back, because nothing could name it.
+  ///
+  /// Sent on every change that a shell would draw differently: a window
+  /// opening or closing, a title changing, focus moving, a window being
+  /// minimized or restored, and a workspace switch. Not on move or resize —
+  /// this carries no geometry, so nothing a dock draws depends on them.
+  ///
+  /// Bidirectional for the reason the other streams are: the reverse half is
+  /// what flow control meters and what tells the compositor the shell is still
+  /// there, not because a shell has anything to say.
+  bidi_stream<WindowListAck, WindowList> SubscribeWindows();
+
+  /// The focused window, now and whenever it changes.
+  ///
+  /// The compositor owns focus, so a panel has no way to know it — the same
+  /// shape of hole `SubscribeInput` filled for the pointer. Without it a
+  /// global menu cannot exist at all: the menu on a panel is the *active*
+  /// window's, and nothing else in this system can say which that is.
+  ///
+  /// A stream rather than a call, for what focus is: it changes when the user
+  /// clicks, not when a panel asks, and a panel polling for it would be a
+  /// round trip per frame to learn nothing has happened. The first event is
+  /// the state at subscription, so a panel that starts after the windows do
+  /// is not blank until the next click.
+  ///
+  /// Bidirectional for the reason `SubscribeInput` is, and not because the
+  /// panel has anything to say: the reverse half is what NPRPC's flow control
+  /// meters and what makes the compositor notice a panel that has gone away,
+  /// instead of writing focus changes into a socket nobody reads. `FocusAck`
+  /// carries the id the panel actually applied, which also makes "the panel is
+  /// showing the wrong window's menu" a question with an answer.
+  ///
+  /// Nothing here asks *for* focus. Being told is a panel's business; taking
+  /// the keyboard from the window the user is typing in is not, and this
+  /// interface deliberately has no call for it.
+  bidi_stream<FocusAck, ActiveWindow> SubscribeActiveWindow();
+
+  /// Whether this panel's strip is clear of windows, and again whenever that
+  /// changes.
+  ///
+  /// For a dock that hides itself: auto-hide is right when a window is in the
+  /// way and wrong when the desktop behind it is empty, and the difference is
+  /// something only the compositor can see. A panel knows its own rectangle
+  /// and nothing about what overlaps it.
+  ///
+  /// Sent on subscription, and afterwards only when the answer changes — not
+  /// on every window move. Dragging a window across the bottom of the screen
+  /// is two messages, on the frames it crosses the edge of the strip, however
+  /// many motion events it took.
+  ///
+  /// `bidi_stream` like the rest, and the reason is the servant's shape rather
+  /// than anything the client has to say. A `server_stream` servant in NPRPC
+  /// is a *generator*: it returns a coroutine that the stream manager resumes
+  /// once per credit and pulls values out of, which is right for a stream that
+  /// can produce on demand — a file, a video, N rows. This one cannot. Its
+  /// values are pushed, irregularly, by the compositor's own loop when a
+  /// window moves, so the coroutine would have to suspend on an awaiter until
+  /// there is news and whoever resumed it would do the transport write: the
+  /// Wayland loop, writing into a ring a wedged client has stopped draining,
+  /// which is the one thing every subscription here is built to avoid. Putting
+  /// that write back on its own thread means rebuilding `StreamPump` inside a
+  /// coroutine.
+  ///
+  /// The bidirectional form hands the servant an ordinary writer instead, and
+  /// that moves straight into the pump every other subscription already uses.
+  /// The acks are flow control and liveness, as everywhere else here.
+  ///
+  /// The subscription also ends when the surface does — `DestroySurface`, or
+  /// the client exiting — which is the same signal the input stream is torn
+  /// down by.
+  bidi_stream<PanelAreaAck, PanelArea> SubscribePanelArea(surfaceId: in u32)
+      raises(SurfaceNotFound);
+
+  /// The workspace on screen and every workspace's name — see
+  /// `WorkspaceNames`. Answered on the loop, from the config as it stands
+  /// after the last SIGHUP.
+
+  WorkspaceNames GetWorkspaces();
+
+  /// Names the workspaces, for a settings app: `names[i]` for workspace `i`
+  /// (0-based), every one of them — a missing entry or an empty string is a
+  /// workspace with no name. Applied at once, so the next app to ask
+  /// `GetWorkspaces` sees them, then saved to `[workspaces]`.
+  ///
+  /// The compositor cleans each name before keeping it: spaces round it go,
+  /// and so does anything the config file could not hold — a `#` starts a
+  /// comment there and a line break ends the line. Read the names back with
+  /// `GetWorkspaces` to see what was kept. Applications already running are
+  /// not told; a name decides which profile an app *opens* with.
+
+  void SetWorkspaceNames(names: in vector<string>) raises(SettingsWriteFailed);
+
+  /// Shows workspace `index`, 0-based, as Mod+1…9 does. Out of range, or
+  /// the one already on screen, does nothing. For the panel's Workspaces
+  /// menu.
+  void SwitchWorkspace(index: in u32);
+
+  /// Hides every window, or brings them back, as Mod+D does.
+  void ToggleShowDesktop();
+
+  // ─── Capture ───────────────────────────────────────────────────────────
+  //
+  // Pictures of what is on screen: one window for the switcher and the dock's
+  // previews, the whole screen for LavaShot.
+
+  /// A PNG of what this window currently looks like.
+  ///
+  /// `surfaceId` is any id from `SubscribeWindows`, not only the caller's own
+  /// surface. A LavaUI window is read back from its canvas framebuffer. A
+  /// foreign Wayland or X11 window is read from the buffer it last committed
+  /// — shm via a CPU map, GPU clients via `wlr_texture_read_pixels`. That is
+  /// how automation (and anything that needs a file) reads a window. The
+  /// app switcher does **not** use this: it emits `ImageSurface` and the
+  /// compositor imports the dma-buf in place. Pixels already live here.
+  ///
+  /// Also what automation uses. A LavaUI client has no framebuffer of its
+  /// own, so the one agent command that checks what the user would *see* has
+  /// to ask the process that drew it.
+  ///
+  /// Region in framebuffer pixels; `w`/`h` ≤ 0 means the whole surface, and
+  /// `maxSide` > 0 downsamples so the longer encoded edge fits — a full 4K
+  /// window is several megabytes of PNG that no assertion (and no 3D card)
+  /// needed. Region crop is honoured for Lava surfaces; foreign windows
+  /// currently return the whole buffer (then `maxSide`).
+  ///
+  /// Bytes, not base64. The agent's protocol is JSON and wants text, but that
+  /// is the client's protocol, not the renderer's: encoding here would put a
+  /// third more bytes on the wire and a decode at the far end in service of
+  /// something the compositor does not speak.
+  Capture CaptureSurface(surfaceId: in u32, x: in i32, y: in i32,
+                         w: in i32, h: in i32, maxSide: in i32)
+      raises(SurfaceNotFound, CaptureFailed);
+
+  /// Forget the cached poster for a window, so the next `ImageSurface` that
+  /// names it imports the buffer that window is showing *now*.
+  ///
+  /// Posters are cached per `(surface, maxSide)` because a shelf of twenty
+  /// windows must not re-import twenty dma-bufs on every frame. The switcher
+  /// never needs to say this: it is spawned per invocation, and the cache is
+  /// dropped when its overlay opens and again when it closes. A dock is the
+  /// opposite kind of client — it lives for the whole session — so hovering
+  /// an icon a second time would otherwise show the picture taken the first
+  /// time, which is a screenshot of the past presented as a preview.
+  ///
+  /// Cheap: dropping a poster costs one texture, and the next resolve is a
+  /// dma-buf import on the same device, not a readback. Say it once when the
+  /// preview opens rather than per frame — a poster re-imported every frame
+  /// is a capture of the whole shelf at 60 Hz.
+  ///
+  /// An unknown id is a no-op rather than an error: a window that closed
+  /// between the hover and this call has no poster to drop, which is the
+  /// answer the caller wanted.
+  void ForgetWindowPoster(surfaceId: in u32);
+
+  /// The whole screen, written to a file, and the path to it.
+  ///
+  /// A *path* and not the bytes, which is the one design decision in this
+  /// call. A shared-memory reply is capped at 512 KiB — a screenful of PNG is
+  /// past that at 1280x720 and nowhere near it at 4K — and a picture that
+  /// sometimes fits is worse than one that never does. Both processes are on
+  /// the same machine and the same filesystem, so the file *is* the transfer,
+  /// and it costs one write and one read instead of a copy through a ring.
+  ///
+  /// It also makes the ordinary case free: the client hands the path straight
+  /// back to `RegisterImage`, and the pixels never leave the compositor at all.
+  ///
+  /// The file is the caller's from the moment this returns — nothing deletes
+  /// it, and a client that takes twenty screenshots and exits leaves twenty
+  /// files in the temporary directory unless it cleans up after itself.
+  ///
+  /// The output the pointer is on, with every window on it, foreign and Lava
+  /// alike, and the wallpaper behind them. Composited into a buffer of its own
+  /// rather than read back from the front buffer, so it costs one offscreen
+  /// frame and needs nothing to be on screen at the time.
+  ///
+  /// `includeSelf` false leaves the *calling* surface out of the picture,
+  /// which is what a screenshot tool wants and cannot arrange for itself: by
+  /// the time it can ask, its own window is already up. Its shadow and its
+  /// frost plate go with it — a window that is not in the shot must not leave
+  /// a soft rectangle where it was.
+  ///
+  /// The crop is in framebuffer pixels and `w`/`h` <= 0 means the whole
+  /// screen. Cropping here rather than in the client is not an optimisation:
+  /// a Lava client has no codec, so a region of a PNG is not something it can
+  /// take for itself.
+  ///
+  /// `maxSide` > 0 downsamples so the longer encoded edge fits. A screenshot
+  /// wants 0: the point of it is the pixels that were there.
+  string CaptureScreen(surfaceId: in u32, includeSelf: in boolean,
+                       x: in i32, y: in i32, w: in i32, h: in i32,
+                       maxSide: in i32)
+      raises(SurfaceNotFound, CaptureFailed);
+
+  // ─── The menu client ───────────────────────────────────────────────────
+  //
+  // The process that draws every menu: the compositor's own context menu and
+  // the menus clients ask for below. It is told what to show and answers
+  // with its size and the row that was chosen.
+
+  /// Asks for the surface a context menu is drawn into.
+  ///
+  /// A third way to create a surface, for the same reason `CreatePanel` was a
+  /// second one: what the caller decides is different again. A window chooses
+  /// its size and the compositor chooses where it goes; a panel chooses its
+  /// depth and the compositor chooses the rest; a menu chooses **neither**.
+  /// It is put where the pointer was, at the size it says it measured, and
+  /// both of those arrive later — with `ShowMenu` — because neither is known
+  /// when the process starts.
+  ///
+  /// What the compositor does differently with one of these is the whole
+  /// reason it is its own kind:
+  ///
+  ///   * it is stacked **above panels**, in its own scene tree. A menu that
+  ///     opened under the panel would be a menu the top of the screen
+  ///     cannot use.
+  ///   * it is **hidden** until `ShowMenu` and again after the reply, so a
+  ///     resident menu process costs the desktop nothing between menus —
+  ///     no composite, and nothing in the way of a fullscreen client's
+  ///     direct scanout.
+  ///   * while it is up the compositor holds a **pointer grab**: a press
+  ///     anywhere else dismisses the menu and is swallowed rather than
+  ///     landing in whatever was underneath. That is what every other menu
+  ///     on the desktop does, and doing it here rather than in the client is
+  ///     what makes it work over a foreign window, which a client cannot
+  ///     hit-test.
+  ///   * it is not in the window list, has no title bar, and never appears
+  ///     in the switcher.
+  ///
+  /// `width` and `height` are what the client expects its largest menu to
+  /// need. They size the arena and nothing else — every menu is drawn at the
+  /// size `ShowMenu` names.
+  ///
+  /// One per client. Asking twice returns the surface already open.
+  u32 CreateMenuSurface(arenaId: in string, width: in u32, height: in u32,
+                        appId: in string) raises(ArenaNotFound);
+
+  /// The menu to open, and again every time the user asks for one.
+  ///
+  /// The subscription a **context menu client** holds: right-clicking the
+  /// desktop or a window's non-client area produces a `MenuRequest` here,
+  /// and the client answers with a `MenuReply` naming what was chosen. The
+  /// compositor does the rest — it owns every action on the menu, which is
+  /// why it can be sure the item that was clicked is still a thing that can
+  /// be done.
+  ///
+  /// Bidirectional for the reason the other state streams are, and here the
+  /// reverse half carries real news rather than only flow control: the reply
+  /// *is* the result. See `SubscribePanelArea` for why a `server_stream`
+  /// servant is the wrong shape for anything the compositor's loop pushes.
+  ///
+  /// `surfaceId` is this client's menu surface, from `CreateMenuSurface`.
+  /// Passing an ordinary window is refused: the compositor is about to place
+  /// this surface at the pointer and grab for it, and doing that to somebody's
+  /// text editor is not a request it should honour.
+  ///
+  /// **One subscriber.** A second one is refused rather than fanned out to:
+  /// two processes drawing the desktop's context menu is not a configuration
+  /// with a right answer, and the failure would show up as two menus and one
+  /// grab. The session's own menu client is started like the panel and the
+  /// dock — see `[shell]` in `lava.conf`.
+  ///
+  /// A desktop with nobody subscribed simply has no context menu. The right
+  /// click still clears focus, the way it did before this existed.
+  bidi_stream<MenuReply, MenuRequest> SubscribeMenu(surfaceId: in u32)
+      raises(SurfaceNotFound);
+
+  /// "I have laid out the menu for `serial`; it is `width` × `height`."
+  ///
+  /// The client's half of opening a menu, and the reason the surface is not
+  /// simply shown when the request goes out: only the client can measure the
+  /// list. It has the face, the padding and the shortcut column; the
+  /// compositor has the item strings and no idea what they come to in pixels.
+  ///
+  /// The compositor resizes the surface, places it against the anchor the
+  /// request carried, unconstrains it into the output's work area — flipping
+  /// it above the pointer or left of it rather than letting it run off the
+  /// screen, the same rule `xdg_popup` gets — takes the grab and reveals it.
+  /// The reveal waits for a frame drawn at the new size, like any other
+  /// window's first frame, so a menu never appears at the previous menu's
+  /// dimensions.
+  ///
+  /// Ignored for a `serial` that is not the open request. A client that
+  /// measured a menu the user has already dismissed is not wrong; it is late,
+  /// and the answer to late is nothing at all.
+  void ShowMenu(surfaceId: in u32, serial: in u32, width: in u32,
+                height: in u32) raises(SurfaceNotFound);
+
+  /// A fly-out plate for the menu client. Hidden until `ShowSubmenu`.
+  ///
+  /// The root menu is `CreateMenuSurface`, one per client. A submenu is a
+  /// second surface — its own size, its own place — because a fly-out is a
+  /// rectangle that has to sit beside a row and flip to the left of it when
+  /// the right side would leave the work area, and only the compositor knows
+  /// the work area. Drawing both plates into the root surface would mean
+  /// resizing that surface out from under its anchor every time a branch
+  /// opened.
+  ///
+  /// The same kind of surface as the root menu: above panels, no frame, not
+  /// in the window list, invisible until it is placed. `width` and `height`
+  /// size the arena the client measures in, not the plate on screen.
+
+  u32 CreateSubmenuSurface(arenaId: in string, width: in u32, height: in u32)
+      raises(ArenaNotFound);
+
+  /// "This plate measured `width` × `height`. Hang it off the row."
+  ///
+  /// `rowX`, `rowY`, `rowW`, `rowH` are the row in `parentId`'s own
+  /// coordinates. `parentId` is the root menu, or the submenu the row is
+  /// drawn on — a branch of a branch hangs off the plate it came from, not
+  /// off the root, or the third level would open beside the first.
+  ///
+  /// Placed just to the right of the row, overlapping it by a couple of
+  /// pixels so the pointer can cross from the row into the plate without
+  /// landing on the desktop in between. When that side would leave the work
+  /// area, and the left side has more room, it flips. Vertically it lines up
+  /// with the row and slides up to stay on the work area; a plate taller
+  /// than the work area is shortened to it. The client was told `maxHeight`
+  /// and should already be scrolling, so the shortening is the backstop, not
+  /// the design.
+  ///
+  /// Ignored when `serial` is not the open menu. A client that finished
+  /// measuring a branch the user has already left is late, and the answer
+  /// to late is nothing at all — the same rule as `ShowMenu`.
+  void ShowSubmenu(surfaceId: in u32, parentId: in u32, serial: in u32,
+                   rowX: in i32, rowY: in i32, rowW: in u32, rowH: in u32,
+                   width: in u32, height: in u32)
+      raises(SurfaceNotFound);
+
+  // ─── Menus a client asks for ───────────────────────────────────────────
+  //
+  // The context menu, from the other side. Everything above this pair is the
+  // compositor deciding what is on a menu; these two are a client deciding,
+  // and handing the *showing* of it over anyway.
+  //
+  // A panel cannot show its own menu properly and the reason is not layout.
+  // A menu has to sit above every window, be placed against an anchor without
+  // running off the output, take the pointer, and come down when the user
+  // clicks somewhere else — and "somewhere else" is by definition input that
+  // is never delivered to the panel. The dock drew its own for a while: it
+  // grew its surface upward to make room, and a click anywhere outside that
+  // surface left the menu on screen, because nothing told it. None of that is
+  // fixable on the client's side of the boundary. All of it is already solved
+  // on this side, for the menu the compositor opens itself.
+  //
+  // So the split is the one the rest of this interface uses: the client knows
+  // what its menu says and what its rows mean, the compositor knows where a
+  // menu can go and who is allowed to click. `MenuItem.id` is opaque here —
+  // it is echoed back to the client that sent it and read by nobody else.
+
+  /// "Show this menu for me, anchored here."
+  ///
+  /// Returns the serial the answer will name, or 0 when the desktop has no
+  /// menu client to draw it (`menu = off` in `[shell]`, or it is restarting)
+  /// — the same nothing a right-click on the desktop gets, and not an error.
+  ///
+  /// `x` and `y` are in `surfaceId`'s own coordinates, not the output's. A
+  /// panel does not know where it is on screen and has no way to find out;
+  /// what it knows is which of its icons was clicked, and this is that number.
+  /// The compositor adds the surface's origin and unconstrains from there, so
+  /// a menu anchored to the last icon on a dock at the bottom-right opens
+  /// upward and leftward without the client working out that it had to.
+  ///
+  /// Placed below and right of the anchor where there is room, and flipped
+  /// above or left of it where there is not — the same `xdg_popup` rule a
+  /// right-click menu gets. A panel at the bottom edge therefore gets a menu
+  /// that opens upward without asking for it, by anchoring to the top of
+  /// whatever was clicked.
+  ///
+  /// Supersedes whatever menu was up, exactly as a second right-click does.
+  /// A client whose own menu is replaced still gets a `MenuChoice` for it,
+  /// with `chosen` 0.
+  ///
+  /// `items` is a tree written flat. A row with `parent` 0 is the root menu;
+  /// a row of kind `submenu` names the branch, and the rows under it carry
+  /// that row's `id` as their `parent`. The menu client flies a branch out
+  /// beside its row (`ShowSubmenu`); this call still opens one menu, and a
+  /// second call still supersedes it. A branch is not a second `OpenMenu`.
+  ///
+  /// Subscribe with `SubscribeMenuChoice` **before** calling this. A menu
+  /// opened by a client that is not listening would be a grab the user has to
+  /// click their way out of to reach a result nobody receives, so it is
+  /// refused.
+  u32 OpenMenu(surfaceId: in u32, x: in i32, y: in i32, title: in string,
+               items: in vector<MenuItem>)
+      raises(SurfaceNotFound);
+
+  /// Where the answers to this surface's `OpenMenu` calls arrive.
+  ///
+  /// Per surface, not one-per-desktop like `SubscribeMenu`: every panel may
+  /// have menus of its own, and they are told apart by whose surface asked.
+  /// The stream is the delivery route and the permission at once — see
+  /// `OpenMenu`, which refuses to open a menu for a surface with nobody
+  /// listening.
+  bidi_stream<MenuChoiceAck, MenuChoice> SubscribeMenuChoice(surfaceId: in u32)
+      raises(SurfaceNotFound);
+
+  // ─── Drag and drop ─────────────────────────────────────────────────────
 
   /// The paths from the oldest drop this surface has not collected yet, and
   /// removes it from the queue. Empty if there is none.
@@ -2096,94 +2314,6 @@ interface Compositor {
   /// the client does not hold a capture that nothing will ever end.
   void StartDrag(surfaceId: in u32, paths: in vector<string>,
                  chip: in DragImage) raises(SurfaceNotFound);
-
-  /// A PNG of what this window currently looks like.
-  ///
-  /// `surfaceId` is any id from `SubscribeWindows`, not only the caller's own
-  /// surface. A LavaUI window is read back from its canvas framebuffer. A
-  /// foreign Wayland or X11 window is read from the buffer it last committed
-  /// — shm via a CPU map, GPU clients via `wlr_texture_read_pixels`. That is
-  /// how automation (and anything that needs a file) reads a window. The
-  /// app switcher does **not** use this: it emits `ImageSurface` and the
-  /// compositor imports the dma-buf in place. Pixels already live here.
-  ///
-  /// Also what automation uses. A LavaUI client has no framebuffer of its
-  /// own, so the one agent command that checks what the user would *see* has
-  /// to ask the process that drew it.
-  ///
-  /// Region in framebuffer pixels; `w`/`h` ≤ 0 means the whole surface, and
-  /// `maxSide` > 0 downsamples so the longer encoded edge fits — a full 4K
-  /// window is several megabytes of PNG that no assertion (and no 3D card)
-  /// needed. Region crop is honoured for Lava surfaces; foreign windows
-  /// currently return the whole buffer (then `maxSide`).
-  ///
-  /// Bytes, not base64. The agent's protocol is JSON and wants text, but that
-  /// is the client's protocol, not the renderer's: encoding here would put a
-  /// third more bytes on the wire and a decode at the far end in service of
-  /// something the compositor does not speak.
-  Capture CaptureSurface(surfaceId: in u32, x: in i32, y: in i32,
-                         w: in i32, h: in i32, maxSide: in i32)
-      raises(SurfaceNotFound, CaptureFailed);
-
-  /// The whole screen, written to a file, and the path to it.
-  ///
-  /// A *path* and not the bytes, which is the one design decision in this
-  /// call. A shared-memory reply is capped at 512 KiB — a screenful of PNG is
-  /// past that at 1280x720 and nowhere near it at 4K — and a picture that
-  /// sometimes fits is worse than one that never does. Both processes are on
-  /// the same machine and the same filesystem, so the file *is* the transfer,
-  /// and it costs one write and one read instead of a copy through a ring.
-  ///
-  /// It also makes the ordinary case free: the client hands the path straight
-  /// back to `RegisterImage`, and the pixels never leave the compositor at all.
-  ///
-  /// The file is the caller's from the moment this returns — nothing deletes
-  /// it, and a client that takes twenty screenshots and exits leaves twenty
-  /// files in the temporary directory unless it cleans up after itself.
-  ///
-  /// The output the pointer is on, with every window on it, foreign and Lava
-  /// alike, and the wallpaper behind them. Composited into a buffer of its own
-  /// rather than read back from the front buffer, so it costs one offscreen
-  /// frame and needs nothing to be on screen at the time.
-  ///
-  /// `includeSelf` false leaves the *calling* surface out of the picture,
-  /// which is what a screenshot tool wants and cannot arrange for itself: by
-  /// the time it can ask, its own window is already up. Its shadow and its
-  /// frost plate go with it — a window that is not in the shot must not leave
-  /// a soft rectangle where it was.
-  ///
-  /// The crop is in framebuffer pixels and `w`/`h` <= 0 means the whole
-  /// screen. Cropping here rather than in the client is not an optimisation:
-  /// a Lava client has no codec, so a region of a PNG is not something it can
-  /// take for itself.
-  ///
-  /// `maxSide` > 0 downsamples so the longer encoded edge fits. A screenshot
-  /// wants 0: the point of it is the pixels that were there.
-  string CaptureScreen(surfaceId: in u32, includeSelf: in boolean,
-                       x: in i32, y: in i32, w: in i32, h: in i32,
-                       maxSide: in i32)
-      raises(SurfaceNotFound, CaptureFailed);
-
-  /// Forget the cached poster for a window, so the next `ImageSurface` that
-  /// names it imports the buffer that window is showing *now*.
-  ///
-  /// Posters are cached per `(surface, maxSide)` because a shelf of twenty
-  /// windows must not re-import twenty dma-bufs on every frame. The switcher
-  /// never needs to say this: it is spawned per invocation, and the cache is
-  /// dropped when its overlay opens and again when it closes. A dock is the
-  /// opposite kind of client — it lives for the whole session — so hovering
-  /// an icon a second time would otherwise show the picture taken the first
-  /// time, which is a screenshot of the past presented as a preview.
-  ///
-  /// Cheap: dropping a poster costs one texture, and the next resolve is a
-  /// dma-buf import on the same device, not a readback. Say it once when the
-  /// preview opens rather than per frame — a poster re-imported every frame
-  /// is a capture of the whole shelf at 60 Hz.
-  ///
-  /// An unknown id is a no-op rather than an error: a window that closed
-  /// between the hover and this call has no poster to drop, which is the
-  /// answer the caller wanted.
-  void ForgetWindowPoster(surfaceId: in u32);
 
   // ─── Clipboard ─────────────────────────────────────────────────────────
   //
@@ -2262,19 +2392,228 @@ interface Compositor {
   /// wants to paste a screenshot writes them out and inserts the path.
   vector<u8> GetClipboardPng(surfaceId: in u32) raises(SurfaceNotFound);
 
-  /// Fills the output with this surface, or gives it back its old geometry.
+  // ─── Session ───────────────────────────────────────────────────────────
+  //
+  // Locking, idling and leaving: the lock screen's surface and stream, and
+  // the calls that end or suspend what the user is doing.
+
+  /// The lock screen's surface: above everything, covering the screen the
+  /// pointer is on, and the only surface that hears any input while locked.
   ///
-  /// For a client whose whole purpose is to cover the screen — a screenshot
-  /// tool showing a frozen desktop, a presenter, a lock screen. The
-  /// compositor already does this for foreign windows that ask through
-  /// xdg-shell; this is the same thing said over the control plane, which is
-  /// the only way a Lava client can say anything about its own frame.
+  /// Only while locked, and only for the process the compositor started for
+  /// this lock: `token` is what it found in `LAVA_LOCK_TOKEN`. Anything else
+  /// is refused — a second surface that looked like a lock screen would be a
+  /// password prompt somebody else is reading.
   ///
-  /// The surface is resized to the output and drawn above the panel and the
-  /// dock, with no title bar and no shadow. Turning it off restores what it
-  /// had before, which the compositor remembered rather than the client.
-  void SetFullscreen(surfaceId: in u32, on: in boolean)
+  /// `width` and `height` size the arena; the surface is given the output's
+  /// size and told so by the opening `Resize`, like a panel.
+  u32 CreateLockSurface(arenaId: in string, width: in u32, height: in u32,
+                        token: in string)
+      raises(LockRefused);
+
+  /// Password attempts one way, the lock's state the other.
+  ///
+  /// The state is sent once on subscribing and again after every attempt. An
+  /// attempt sent while one is still being checked is dropped, not queued: a
+  /// lock screen that let somebody type ahead of PAM's delay would turn it
+  /// into a queue rather than a delay.
+  ///
+  /// When the answer is `unlocked` the compositor destroys the surface, and
+  /// with it the lock screen's input stream, which is what ends its process.
+  bidi_stream<LockAttempt, LockState> SubscribeLock(surfaceId: in u32)
       raises(SurfaceNotFound);
+
+  /// Locks the session now, as Mod+L does.
+  ///
+  /// Any client may ask, and that is safe in a way its opposite would not be:
+  /// locking only ever takes the desktop away, and getting it back still
+  /// takes the password the compositor checks. There is no `UnlockSession`.
+  void LockSession();
+
+  /// When the session locks and the screens go off. See `IdleSettings`.
+  IdleSettings GetIdle();
+
+  /// Sets them, immediately and for the next session — the timers re-arm
+  /// from the input already seen, so lowering `lockAfter` below the idle time
+  /// so far locks at once. Applied first, saved second, like every setter
+  /// here.
+  void SetIdle(idle: in IdleSettings) raises(SettingsWriteFailed);
+
+  /// Ends the session. Same as the compositor's own quit binding.
+  ///
+  /// For the panel's Log Out item. A client cannot terminate the display
+  /// itself — it does not own it — and killing its parent would also kill a
+  /// panel that was started from a terminal rather than by the compositor.
+  /// This is the one call that means "I am done with this desktop".
+  ///
+  /// Orderly: the reference is unlinked, the shell is stopped, clients see
+  /// a display that closed. There is no confirm here; the panel asks the
+  /// user first.
+  void EndSession();
+
+  // ─── Settings ──────────────────────────────────────────────────────────
+  //
+  // For the app that exists to change them. Every setter applies to the
+  // running compositor first and then writes `lava.conf`, so what the user
+  // sees and what the file says cannot disagree.
+
+  /// The desktop's look, for a client matching its own surfaces to it.
+  ///
+  /// A call rather than a stream, unlike the focus next door, because of how
+  /// often the answer changes: focus changes whenever the user clicks, and
+  /// this changes when somebody edits a config file and sends SIGHUP. A client
+  /// that read it at startup is right for the rest of the session in every
+  /// case except that one, where it is stale until it restarts — worth saying
+  /// out loud, and worth turning into a stream on the day a setting here can
+  /// change for a better reason than a hand edit.
+  ///
+  /// No surface id: this describes the desktop, and every window on it gets
+  /// the same answer.
+  Appearance GetAppearance();
+
+  /// Sets the desktop's look, now and for the next session.
+  ///
+  /// Live because it can be: the radius and the shadow are numbers the
+  /// renderer reads per frame, so every window on screen takes the new ones
+  /// without being told anything. That is what makes a slider here worth
+  /// having rather than a text field and an Apply button.
+  ///
+  /// Values are clamped to what the compositor will draw, so a client does
+  /// not have to know the limits — call `GetAppearance` afterwards to see
+  /// what was actually taken.
+  void SetAppearance(appearance: in Appearance) raises(SettingsWriteFailed);
+
+  /// The system colour theme, and again whenever Settings changes it.
+  ///
+  /// Bidirectional for the same reason the other state streams are, and it is
+  /// a sharper reason than "the acks are flow control" — see
+  /// `SubscribePanelArea`, where it is written out. Briefly: a `server_stream`
+  /// servant is a generator the stream manager pulls from, and none of these
+  /// streams can produce on demand; they are pushed by the compositor when
+  /// something changes. The bidirectional form is the one that hands the
+  /// servant a writer it can keep.
+  ///
+  /// The first message is the theme at subscription, so a client that
+  /// starts after Settings already picked nebula is nebula on its first
+  /// frame rather than dark-until-someone-clicks.
+  bidi_stream<ThemeAck, SystemTheme> SubscribeSystemTheme();
+
+  /// The system colour theme Lava windows should wear.
+  ///
+  /// A name, not a palette: see `SystemTheme`. The running value, so a
+  /// settings app that just opened is not guessing from the config file.
+  SystemTheme GetSystemTheme();
+
+  /// Sets the system colour theme, now and for the next session.
+  ///
+  /// Every subscribed client is told; a Lava window that uses `Theme.current`
+  /// retints without restarting. Written to `lava.conf` as `[theme] name=…`.
+  void SetSystemTheme(theme: in SystemTheme) raises(SettingsWriteFailed);
+
+  /// What the desktop is painted with now.
+  ///
+  /// Reports what is *up*, which after a failed picture is the background that
+  /// survived rather than the one that was asked for. A settings app that
+  /// re-reads this after a `WallpaperUnreadable` therefore sees the truth on
+  /// screen, and its controls go back to matching the desktop.
+  Wallpaper GetWallpaper();
+
+  /// Sets the desktop background, now and for the next session.
+  ///
+  /// The picture is decoded before anything changes, so the failure case
+  /// leaves the desktop exactly as it was: a mistyped path raises
+  /// `WallpaperUnreadable` and the old background stays up and stays saved.
+  /// This is the one setter here that can refuse, and it is why it can —
+  /// every other setting on this interface is a number or a name that cannot
+  /// be wrong in a way the compositor could detect in advance.
+  ///
+  /// Written to `lava.conf` as a `[background]` block.
+  void SetWallpaper(wallpaper: in Wallpaper)
+      raises(WallpaperUnreadable, SettingsWriteFailed);
+
+  /// The keyboard as it is set up now.
+  KeyboardSettings GetKeyboard();
+
+  /// Changes the keyboard, now and for the next session.
+  ///
+  /// wlroots hands the new keymap to every connected client as a side effect,
+  /// so a layout change reaches applications that are already running — which
+  /// is the difference between this and editing the file, where it only
+  /// reaches them on SIGHUP.
+  void SetKeyboard(settings: in KeyboardSettings) raises(SettingsWriteFailed);
+
+  /// Every layout and variant this machine's xkb knows about.
+  ///
+  /// From the compositor because xkb is the compositor's dependency: a client
+  /// would have to guess where the rules files live, and a client on a
+  /// machine where they live somewhere else would guess wrong and show an
+  /// empty list rather than an error.
+  vector<KeyboardLayout> ListKeyboardLayouts();
+
+  /// Every shortcut the compositor takes for itself.
+  ///
+  /// So a settings app can show them, and so a user can find out that Alt+M
+  /// minimizes without reading `main.cpp`. Compiled in for now, hence no
+  /// setter — see `KeyBinding`.
+  vector<KeyBinding> ListKeyBindings();
+
+  /// The mouse and the touchpad as libinput is set up now, and how a wheel
+  /// scroll settles. See `PointerSettings`.
+
+  PointerSettings GetPointer();
+
+  /// Applies to every pointer plugged in and every one plugged in later,
+  /// then saves to `[mouse]`, `[touchpad]` and `[render] scroll-easing`.
+  void SetPointer(settings: in PointerSettings) raises(SettingsWriteFailed);
+
+  /// Every screen the compositor has, in layout order.
+  vector<OutputInfo> ListOutputs();
+
+  /// Every mode a screen can run at, best first.
+  ///
+  /// Separate from `ListOutputs` because a screen has dozens of modes and a
+  /// settings app needs them only for the one the user is looking at.
+  /// Modes that match in width, height and refresh are collapsed: EDID
+  /// often lists the same size twice with picture-aspect or blanking flags
+  /// this message does not carry, and a client keying a list on that
+  /// triple would otherwise see duplicate ids.
+  vector<OutputMode> ListOutputModes(name: in string) raises(OutputNotFound);
+
+  /// Reconfigures a screen, now and for the next session.
+  ///
+  /// A rejected mode does not cost the session: the compositor falls back to
+  /// the display's preferred mode rather than leaving a screen showing
+  /// nothing, which is the one failure a user cannot recover from without
+  /// another machine. The fallback is visible through `ListOutputs`, so a
+  /// client can tell that what it asked for is not what it got.
+  void SetOutput(request: in OutputRequest)
+      raises(OutputNotFound, SettingsWriteFailed);
+
+  /// Makes this screen the primary, now and for the next session.
+  ///
+  /// The panel moves here immediately. An empty name means no preference
+  /// — the screen at the layout origin, which is where the panel sat
+  /// before this existed. Unplugging the primary does not forget the
+  /// name: another screen stands in until it comes back. `ListOutputs`
+  /// always reports the screen that is actually hosting the panel.
+  void SetPrimaryOutput(name: in string)
+      raises(OutputNotFound, SettingsWriteFailed);
+
+  /// How the screens share the desktop: `"extend"` or `"mirror"`.
+  ///
+  /// Extend gives each screen its own piece of the layout. Mirror puts
+  /// the same picture on every screen, aligned at the origin. The value
+  /// is what is stored, not what two screens happening to sit on top of
+  /// each other would look like.
+  string GetArrangement();
+
+  /// Sets extend or mirror, now and for the next session.
+  ///
+  /// Anything other than `"mirror"` (and the aliases `"clone"` / `"same"`)
+  /// is taken as extend. Switching to extend spreads screens that were
+  /// stacked; switching to mirror does not forget their extend positions,
+  /// so switching back puts them where they were.
+  void SetArrangement(mode: in string) raises(SettingsWriteFailed);
 
   // ─── Diagnostics ───────────────────────────────────────────────────────
 
@@ -2310,332 +2649,6 @@ interface Compositor {
   /// the device. Ask when a human asks, not on a timer.
   vector<string> DumpAtlasImages(directory: in string) raises(AtlasDumpFailed);
 
-  /// Ends the session. Same as the compositor's own quit binding.
-  ///
-  /// For the panel's Log Out item. A client cannot terminate the display
-  /// itself — it does not own it — and killing its parent would also kill a
-  /// panel that was started from a terminal rather than by the compositor.
-  /// This is the one call that means "I am done with this desktop".
-  ///
-  /// Orderly: the reference is unlinked, the shell is stopped, clients see
-  /// a display that closed. There is no confirm here; the panel asks the
-  /// user first.
-  void EndSession();
-
-  // ─── Menus a client asks for ───────────────────────────────────────────
-  //
-  // The context menu, from the other side. Everything above this pair is the
-  // compositor deciding what is on a menu; these two are a client deciding,
-  // and handing the *showing* of it over anyway.
-  //
-  // A panel cannot show its own menu properly and the reason is not layout.
-  // A menu has to sit above every window, be placed against an anchor without
-  // running off the output, take the pointer, and come down when the user
-  // clicks somewhere else — and "somewhere else" is by definition input that
-  // is never delivered to the panel. The dock drew its own for a while: it
-  // grew its surface upward to make room, and a click anywhere outside that
-  // surface left the menu on screen, because nothing told it. None of that is
-  // fixable on the client's side of the boundary. All of it is already solved
-  // on this side, for the menu the compositor opens itself.
-  //
-  // So the split is the one the rest of this interface uses: the client knows
-  // what its menu says and what its rows mean, the compositor knows where a
-  // menu can go and who is allowed to click. `MenuItem.id` is opaque here —
-  // it is echoed back to the client that sent it and read by nobody else.
-
-  /// "Show this menu for me, anchored here."
-  ///
-  /// Returns the serial the answer will name, or 0 when the desktop has no
-  /// menu client to draw it (`menu = off` in `[shell]`, or it is restarting)
-  /// — the same nothing a right-click on the desktop gets, and not an error.
-  ///
-  /// `x` and `y` are in `surfaceId`'s own coordinates, not the output's. A
-  /// panel does not know where it is on screen and has no way to find out;
-  /// what it knows is which of its icons was clicked, and this is that number.
-  /// The compositor adds the surface's origin and unconstrains from there, so
-  /// a menu anchored to the last icon on a dock at the bottom-right opens
-  /// upward and leftward without the client working out that it had to.
-  ///
-  /// Placed below and right of the anchor where there is room, and flipped
-  /// above or left of it where there is not — the same `xdg_popup` rule a
-  /// right-click menu gets. A panel at the bottom edge therefore gets a menu
-  /// that opens upward without asking for it, by anchoring to the top of
-  /// whatever was clicked.
-  ///
-  /// Supersedes whatever menu was up, exactly as a second right-click does.
-  /// A client whose own menu is replaced still gets a `MenuChoice` for it,
-  /// with `chosen` 0.
-  ///
-  /// `items` is a tree written flat. A row with `parent` 0 is the root menu;
-  /// a row of kind `submenu` names the branch, and the rows under it carry
-  /// that row's `id` as their `parent`. The menu client flies a branch out
-  /// beside its row (`ShowSubmenu`); this call still opens one menu, and a
-  /// second call still supersedes it. A branch is not a second `OpenMenu`.
-  ///
-  /// Subscribe with `SubscribeMenuChoice` **before** calling this. A menu
-  /// opened by a client that is not listening would be a grab the user has to
-  /// click their way out of to reach a result nobody receives, so it is
-  /// refused.
-  u32 OpenMenu(surfaceId: in u32, x: in i32, y: in i32, title: in string,
-               items: in vector<MenuItem>)
-      raises(SurfaceNotFound);
-
-  /// Where the answers to this surface's `OpenMenu` calls arrive.
-  ///
-  /// Per surface, not one-per-desktop like `SubscribeMenu`: every panel may
-  /// have menus of its own, and they are told apart by whose surface asked.
-  /// The stream is the delivery route and the permission at once — see
-  /// `OpenMenu`, which refuses to open a menu for a surface with nobody
-  /// listening.
-  bidi_stream<MenuChoiceAck, MenuChoice> SubscribeMenuChoice(surfaceId: in u32)
-      raises(SurfaceNotFound);
-
-  /// `CreateSurface` for a dialog: a window that belongs to another.
-  ///
-  /// A dialog neither takes nor leaves its application's remembered frame —
-  /// a file picker opened at the file manager's size, and resizing it resized
-  /// the file manager next time — and it opens centred over `parentId` rather
-  /// than where the application last was. `parentId` is any surface, another
-  /// client's included: the picker is a process of its own, and the window it
-  /// answers to is the one that asked. 0, or a surface that has gone, is a
-  /// dialog with nothing to centre on.
-  ///
-  /// Added last rather than as a flag on `CreateSurface`, so that a client
-  /// built before it still speaks to a compositor built after it.
-  u32 CreateDialogSurface(arenaId: in string, width: in u32, height: in u32,
-                          title: in string, frame: in WindowFrame,
-                          appId: in string, parentId: in u32)
-      raises(ArenaNotFound);
-
-  /// A borderless popup of `parentId`, hanging off `anchor`.
-  ///
-  /// The sound slider and the About card. A window was the wrong shape for
-  /// both: a title bar, a place in the window list, and a position the
-  /// compositor picks by cascading. What they are is a menu that is not a
-  /// list of rows — the panel draws the contents, and the compositor does
-  /// the three things a client cannot. The anchor is a rectangle in the
-  /// parent's own coordinates (the icon); the popup is placed just below
-  /// it, shifted so it stays on the output, and flipped above the anchor
-  /// when there is no room below. It is not in the window list, it does
-  /// not take focus, and it has no frame.
-  ///
-  /// While it is up, a press that misses it dismisses it and is swallowed.
-  /// "Misses it" is mostly other windows, which the panel cannot hit-test,
-  /// so the grab lives here — the same reason the context menu's does.
-  /// Dismissing destroys the surface; the client's input stream ending is
-  /// how it learns, which is already how a window learns it was closed.
-  ///
-  /// Added last, like `CreateDialogSurface`, so an older client still
-  /// speaks to a compositor that has it.
-  u32 CreatePopupSurface(arenaId: in string, width: in u32, height: in u32,
-                         title: in string, parentId: in u32,
-                         anchorX: in i32, anchorY: in i32,
-                         anchorW: in u32, anchorH: in u32)
-      raises(ArenaNotFound);
-
-  /// A fly-out plate for the menu client. Hidden until `ShowSubmenu`.
-  ///
-  /// The root menu is `CreateMenuSurface`, one per client. A submenu is a
-  /// second surface — its own size, its own place — because a fly-out is a
-  /// rectangle that has to sit beside a row and flip to the left of it when
-  /// the right side would leave the work area, and only the compositor knows
-  /// the work area. Drawing both plates into the root surface would mean
-  /// resizing that surface out from under its anchor every time a branch
-  /// opened.
-  ///
-  /// The same kind of surface as the root menu: above panels, no frame, not
-  /// in the window list, invisible until it is placed. `width` and `height`
-  /// size the arena the client measures in, not the plate on screen.
-  ///
-  /// Added last, like `CreatePopupSurface`, so an older client still speaks
-  /// to a compositor that has it. An older menu client simply never calls
-  /// it, and a submenu row it does not understand stays a row.
-  u32 CreateSubmenuSurface(arenaId: in string, width: in u32, height: in u32)
-      raises(ArenaNotFound);
-
-  /// "This plate measured `width` × `height`. Hang it off the row."
-  ///
-  /// `rowX`, `rowY`, `rowW`, `rowH` are the row in `parentId`'s own
-  /// coordinates. `parentId` is the root menu, or the submenu the row is
-  /// drawn on — a branch of a branch hangs off the plate it came from, not
-  /// off the root, or the third level would open beside the first.
-  ///
-  /// Placed just to the right of the row, overlapping it by a couple of
-  /// pixels so the pointer can cross from the row into the plate without
-  /// landing on the desktop in between. When that side would leave the work
-  /// area, and the left side has more room, it flips. Vertically it lines up
-  /// with the row and slides up to stay on the work area; a plate taller
-  /// than the work area is shortened to it. The client was told `maxHeight`
-  /// and should already be scrolling, so the shortening is the backstop, not
-  /// the design.
-  ///
-  /// Ignored when `serial` is not the open menu. A client that finished
-  /// measuring a branch the user has already left is late, and the answer
-  /// to late is nothing at all — the same rule as `ShowMenu`.
-  void ShowSubmenu(surfaceId: in u32, parentId: in u32, serial: in u32,
-                   rowX: in i32, rowY: in i32, rowW: in u32, rowH: in u32,
-                   width: in u32, height: in u32)
-      raises(SurfaceNotFound);
-
-  /// The lock screen's surface: above everything, covering the screen the
-  /// pointer is on, and the only surface that hears any input while locked.
-  ///
-  /// Only while locked, and only for the process the compositor started for
-  /// this lock: `token` is what it found in `LAVA_LOCK_TOKEN`. Anything else
-  /// is refused — a second surface that looked like a lock screen would be a
-  /// password prompt somebody else is reading.
-  ///
-  /// `width` and `height` size the arena; the surface is given the output's
-  /// size and told so by the opening `Resize`, like a panel.
-  u32 CreateLockSurface(arenaId: in string, width: in u32, height: in u32,
-                        token: in string)
-      raises(LockRefused);
-
-  /// Password attempts one way, the lock's state the other.
-  ///
-  /// The state is sent once on subscribing and again after every attempt. An
-  /// attempt sent while one is still being checked is dropped, not queued: a
-  /// lock screen that let somebody type ahead of PAM's delay would turn it
-  /// into a queue rather than a delay.
-  ///
-  /// When the answer is `unlocked` the compositor destroys the surface, and
-  /// with it the lock screen's input stream, which is what ends its process.
-  bidi_stream<LockAttempt, LockState> SubscribeLock(surfaceId: in u32)
-      raises(SurfaceNotFound);
-
-  /// When the session locks and the screens go off. See `IdleSettings`.
-  IdleSettings GetIdle();
-
-  /// Sets them, immediately and for the next session — the timers re-arm
-  /// from the input already seen, so lowering `lockAfter` below the idle time
-  /// so far locks at once. Applied first, saved second, like every setter
-  /// here.
-  void SetIdle(idle: in IdleSettings) raises(SettingsWriteFailed);
-
-  /// Locks the session now, as Mod+L does.
-  ///
-  /// Any client may ask, and that is safe in a way its opposite would not be:
-  /// locking only ever takes the desktop away, and getting it back still
-  /// takes the password the compositor checks. There is no `UnlockSession`.
-  void LockSession();
-
-  /// The `Images` object: the same two registrations as above, decoded off
-  /// the compositor's event loop. A client asks once and uses it for every
-  /// image from then on; see `Images`.
-  ///
-  /// Handed out here rather than published beside this object's reference,
-  /// because it is this object's to give: one reference to find, and a client
-  /// that reached this compositor has reached its images too. Last in the
-  /// interface, so a client built before it still speaks to a compositor
-  /// built after it — and a client that gets an error back from an older
-  /// compositor falls back to `RegisterImage` here.
-  void GetImages(images: out object);
-
-  // ── The panel's Window menu ──────────────────────────────────────────────
-  //
-  // What a window's title-bar context menu does, for a window with no title
-  // bar: a Lava client that draws its own chrome has no non-client area to
-  // right-click. The panel offers them for whichever window is active, and
-  // any client may ask for any window — the same as `Minimize` — because
-  // each is something the user could already do to it by hand. After
-  // `GetImages`, so the calls before it keep their indices.
-
-  /// Pins a window above the rest of its workspace, or stops. An overlay
-  /// (the launcher, the switcher) is above pinned windows already and is
-  /// left alone.
-  void SetAlwaysOnTop(surfaceId: in u32, on: in boolean) raises(SurfaceNotFound);
-
-  /// Moves a window to the middle of the work area of the output it is on.
-  /// Nothing for a maximized or fullscreen window, which has nowhere to go.
-  void CenterWindow(surfaceId: in u32) raises(SurfaceNotFound);
-
-  /// Asks a window to close: a Wayland or X11 client gets its close request
-  /// and may still ask to save; a Lava client's surface ends, as the title
-  /// bar's close button does.
-  void CloseWindow(surfaceId: in u32) raises(SurfaceNotFound);
-
-  /// The mouse and the touchpad as libinput is set up now, and how a wheel
-  /// scroll settles. See `PointerSettings`.
-  ///
-  /// Last in the interface, because method indices are positional:
-  /// appending is what keeps clients built against older stubs working.
-  PointerSettings GetPointer();
-
-  /// Applies to every pointer plugged in and every one plugged in later,
-  /// then saves to `[mouse]`, `[touchpad]` and `[render] scroll-easing`.
-  void SetPointer(settings: in PointerSettings) raises(SettingsWriteFailed);
-
-  /// Shows workspace `index`, 0-based, as Mod+1…9 does. Out of range, or
-  /// the one already on screen, does nothing. For the panel's Workspaces
-  /// menu; last in the interface, because method indices are
-  /// positional: appending is what keeps clients built against older
-  /// stubs working.
-  void SwitchWorkspace(index: in u32);
-
-  /// Hides every window, or brings them back, as Mod+D does.
-  void ToggleShowDesktop();
-
-  /// Everything about the desktop behind this surface, in one call: every
-  /// plate, and on each everything it does. An empty list is no backdrop.
-  ///
-  /// One call rather than one per part. There used to be six — the blur, a
-  /// region list, a region list with glass, the bend, the grain — and a
-  /// client could only send them one at a time, so a frame could be
-  /// composited with the new bend and the old grain.
-  ///
-  /// The plates are what the desktop under the surface looks like, not
-  /// decoration on it: a whole-surface plate (`w`, `h` 0) for a frosted
-  /// window, a rectangle per popup for a panel whose surface is mostly empty.
-  /// Each is captured and drawn on its own, so two may overlap and a menu and
-  /// its fly-out are two plates with desktop between them.
-  ///
-  /// Last in the interface, because method indices are positional:
-  /// appending is what keeps clients built against older stubs working.
-  void SetBackdrop(surfaceId: in u32, plates: in vector<BackdropPlate>)
-      raises(SurfaceNotFound);
-
-  /// `CreateSurface`, with what kind of window it is decided at the same
-  /// moment — see `WindowTraits`. `parentId` non-zero makes it a dialog of
-  /// that surface, as `CreateDialogSurface` does.
-  ///
-  /// One call rather than a setter per trait, because two of them only mean
-  /// anything at creation: a single-instance check made after the window
-  /// exists has already lost to a second launch, and a window that takes
-  /// its remembered frame and is only then told it is fixed has been placed
-  /// by the user's last session anyway. Dispatched on the loop like every
-  /// call here, so two launches racing each other are answered one after
-  /// the other and exactly one of them gets a window.
-  ///
-  /// Last in the interface, because method indices are positional:
-  /// appending is what keeps clients built against older stubs working.
-  u32 CreateWindow(arenaId: in string, width: in u32, height: in u32,
-                   title: in string, frame: in WindowFrame,
-                   appId: in string, parentId: in u32,
-                   traits: in WindowTraits)
-      raises(ArenaNotFound, AlreadyRunning);
-
-  /// The workspace on screen and every workspace's name — see
-  /// `WorkspaceNames`. Answered on the loop, from the config as it stands
-  /// after the last SIGHUP.
-  ///
-  /// Last in the interface, because method indices are positional:
-  /// appending is what keeps clients built against older stubs working.
-  WorkspaceNames GetWorkspaces();
-
-  /// Names the workspaces, for a settings app: `names[i]` for workspace `i`
-  /// (0-based), every one of them — a missing entry or an empty string is a
-  /// workspace with no name. Applied at once, so the next app to ask
-  /// `GetWorkspaces` sees them, then saved to `[workspaces]`.
-  ///
-  /// The compositor cleans each name before keeping it: spaces round it go,
-  /// and so does anything the config file could not hold — a `#` starts a
-  /// comment there and a line break ends the line. Read the names back with
-  /// `GetWorkspaces` to see what was kept. Applications already running are
-  /// not told; a name decides which profile an app *opens* with.
-  ///
-  /// Last in the interface, because method indices are positional:
-  /// appending is what keeps clients built against older stubs working.
-  void SetWorkspaceNames(names: in vector<string>) raises(SettingsWriteFailed);
 }
 
 /// Image registration that does not stop the desktop.

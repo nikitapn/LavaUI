@@ -952,6 +952,22 @@ public enum LavaClient {
         }
     }
 
+    /// A popup this process opened (`LavaApp.openPopup`) is now
+    /// `width`×`height`. The compositor places it again under the same anchor
+    /// and the window hears the size as a `Resize`. A window that is not a
+    /// popup, or has closed, is ignored.
+    public static func resizePopup(_ window: WindowID, width: Float, height: Float) {
+        let surface = compositorSurface(for: window)
+        guard surface != 0, let compositor = Self.compositor else { return }
+        let w = UInt32(max(1, width.rounded(.up)))
+        let h = UInt32(max(1, height.rounded(.up)))
+        report("ResizePopup") {
+            try blockingCall {
+                try await compositor.resizePopup(surfaceId: surface, width: w, height: h)
+            }
+        }
+    }
+
     /// Shows workspace `index` (0-based), as Mod+1…9 does.
     public static func switchWorkspace(_ index: UInt32) {
         guard let compositor = Self.compositor else { return }

@@ -1,5 +1,6 @@
 import Foundation
 import LavaUI
+import LavaClient
 
 /// The rest of the design's palette, for the popups: neutrals and the second
 /// (sage) accent, which the bar itself never needs. The design's values on
@@ -182,17 +183,25 @@ struct PopupCard<Content: View>: View {
 /// round, so a viewport that reached the card's edge let a row scrolled to
 /// the bottom draw through the curve and over the rim. Inset by the padding,
 /// the rectangle's corners sit inside the curve.
+///
+/// `fits` is the height its rows add up to. A card is opened at that size,
+/// and when the rows change while it is up — the VPNs arrive a moment after
+/// the network card opens — the popup is resized to the new one instead of
+/// scrolling a list there is room to show.
 struct ScrollingCard<Content: View>: View {
     var padding: Float
+    var fits: Float
     var content: Content
 
-    init(padding: Float, @ViewBuilder content: () -> Content) {
+    init(padding: Float, fits: Float, @ViewBuilder content: () -> Content) {
         self.padding = padding
+        self.fits = fits
         self.content = content()
     }
 
     var body: some View {
         let padding = padding
+        PopupFit.follow(LavaApp.currentWindow, height: fits)
         // On a stack around the scroll view, not on the scroll view: padding
         // there lands inside the scroll node, which keeps the node — and its
         // clip — the card's full height.
@@ -207,6 +216,35 @@ struct ScrollingCard<Content: View>: View {
                 .agentId("card.scroll")
             }
             .padding(EdgeInsets(top: padding, leading: 0, bottom: padding, trailing: 0))
+        }
+    }
+}
+
+/// Keeps a popup the height its card asks for.
+enum PopupFit {
+    /// What each popup was last asked to be, so a body that runs every clock
+    /// tick does not ask again for the size it is already becoming.
+    nonisolated(unsafe) private static var asked: [WindowID: Float] = [:]
+
+    static func follow(_ window: WindowID, height: Float) {
+        guard window != .main, let editor = session.editor else { return }
+        let size = editor.framebufferSize(window: window)
+        guard size.w > 0 else { return }
+        let want = height.rounded(.up)
+        if abs(size.h - want) < 1 {
+            asked[window] = nil
+            return
+        }
+        guard asked[window] != want else { return }
+        asked[window] = want
+        // After the frame: `body` is no place to talk to the compositor, and
+        // the window may be closing in this very pass.
+        FrameTasks.after {
+            guard LavaApp.isWindowOpen(window) else {
+                asked[window] = nil
+                return
+            }
+            LavaClient.resizePopup(window, width: size.w, height: want)
         }
     }
 }

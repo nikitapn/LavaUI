@@ -2068,6 +2068,13 @@ class CompositorImpl final : public ICompositor_Servant {
     if (!error.empty()) throw SettingsWriteFailed(host_.configPath(), error);
   }
 
+  void ResizePopup(uint32_t surfaceId, uint32_t width,
+                   uint32_t height) override {
+    // A popup closed while the call was on its way: nothing to resize, and
+    // nothing the client could do about it either.
+    host_.resizePopup(surfaceId, width, height);
+  }
+
   uint32_t CreateWindow(nprpc::flat::Span<char> arenaId, uint32_t width,
                         uint32_t height, nprpc::flat::Span<char> title,
                         WindowFrame frame, nprpc::flat::Span<char> appId,
