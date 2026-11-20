@@ -5,9 +5,10 @@ import LavaMpris
 import LavaNetworkCore
 import LavaUI
 
-/// How the bar sits on its edge: a pill floating clear of it, or a strip
-/// docked flush. `[panel] style` in `lava.conf`; floating unless it says
-/// otherwise.
+/// How the bar sits on its edge: a strip docked flush, or a pill floating
+/// clear of it. `[panel] style` in `lava.conf`; docked unless it says
+/// otherwise — the design's own default, since a maximized window meets a
+/// docked strip edge to edge, where a pill leaves gaps round itself.
 enum PanelStyle: String {
     case floating
     case docked
@@ -19,7 +20,7 @@ enum PanelStyle: String {
            let style = PanelStyle(rawValue: raw.lowercased()) {
             return style
         }
-        return PanelConfig.style() ?? .floating
+        return PanelConfig.style() ?? .docked
     }
 }
 
@@ -41,6 +42,10 @@ struct PanelMetrics {
 
     /// What windows are laid out around.
     var reserved: Float { marginTop + barHeight + marginBottom }
+
+    /// From the bar's bottom edge to a popup's or a menu's top: the
+    /// design's `popTop`.
+    var popupGap: Float { style == .floating ? 10 : 6 }
 
     /// The shadow: how far it falls and how soft, CSS-style.
     var shadowOffset: Float { style == .floating ? 8 : 6 }
@@ -82,6 +87,8 @@ struct PanelPalette {
     /// The glass, where a popup has to read more solidly.
     var glassStrong: Color
     var glassBorder: Color
+    /// A menu title while its menu is open.
+    var menuOpen: Color
     /// A chip on the glass (the tray group, the workspace group).
     var chip: Color
     /// A chip under the pointer, or open.
@@ -121,6 +128,7 @@ struct PanelPalette {
             chip = Color(r: 1, g: 1, b: 1, a: 0.35)
             chipHover = Color(r: 1, g: 1, b: 1, a: 0.55)
             chipOpen = Color(r: 1, g: 1, b: 1, a: 0.65)
+            menuOpen = Color(r: 1, g: 1, b: 1, a: 0.75)
             trayOn = neutral
             divider = text.opacity(0.16)
             dot = text.opacity(0.28)
@@ -145,6 +153,7 @@ struct PanelPalette {
         chip = lift.opacity(light ? 0.35 : 0.07)
         chipHover = lift.opacity(light ? 0.55 : 0.13)
         chipOpen = lift.opacity(light ? 0.65 : 0.16)
+        menuOpen = lift.opacity(light ? 0.75 : 0.2)
         trayOn = light ? theme.inset : theme.hover
         divider = theme.textPrimary.opacity(0.16)
         dot = theme.textPrimary.opacity(0.28)
@@ -531,6 +540,30 @@ struct Equalizer: View {
 }
 
 /// The power button at the end of the bar.
+/// The flame on an accent disc, first on the bar: starts the launcher.
+struct LavaButton: View {
+    var icon: UIImage
+    var metrics: PanelMetrics
+    var palette: PanelPalette
+
+    var body: some View {
+        let size = metrics.control
+        return HStack(width: .pt(size), height: .pt(size), padding: 0, alignment: .center,
+                      spacing: 0, onClick: { launchDesktopProgram("LavaLauncher") }) {
+            Spacer()
+            Image(icon, width: .pt(14), height: .pt(14), tint: palette.onAccent,
+                  contentMode: .fit)
+            Spacer()
+        }
+        .background(palette.accent)
+        .hoverBackground(palette.accentHover)
+        .cornerRadius(size / 2)
+        .cursor(.pointer)
+        .agentId("panel.lava")
+        .tooltip("Applications")
+    }
+}
+
 struct PowerButton: View {
     var metrics: PanelMetrics
     var palette: PanelPalette
@@ -540,11 +573,13 @@ struct PowerButton: View {
         return GlassIconButton(
             icon: [.path(PanelIcons.power)], size: metrics.control,
             color: busy ? palette.textSoft : palette.accentInk,
+            // Lit while its card is up, as the tray's buttons are.
+            fill: session.sessionCard != nil ? palette.accentSoft : .clear,
             hover: busy ? .clear : palette.accentSoft, strokeWidth: 2.75,
             agentId: "applet.power",
             onPointer: { button in
                 guard button == PointerButton.left, !session.powerBusy else { return }
-                session.setDialog(.powerOff)
+                session.toggleSessionCard()
             })
             .tooltip("Power")
     }

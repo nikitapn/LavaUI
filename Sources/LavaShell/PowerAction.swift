@@ -6,12 +6,14 @@ public enum PowerAction: String, Sendable, CaseIterable {
     case sleep = "suspend"
     case hibernate
     case powerOff = "poweroff"
+    case reboot
 
     public var title: String {
         switch self {
         case .sleep: return "Sleep"
         case .hibernate: return "Hibernate"
         case .powerOff: return "Power Off"
+        case .reboot: return "Restart"
         }
     }
 

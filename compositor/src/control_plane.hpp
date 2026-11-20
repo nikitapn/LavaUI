@@ -156,7 +156,7 @@ struct CompositorHost {
     /// A `MenuAction`. Opaque to the client, which only echoes it back.
     uint32_t id = 0;
     std::string title;
-    /// 0 command, 1 checkbox, 2 separator — `MenuItemKind`'s ordinals.
+    /// 0 command, 1 checkbox, 2 separator, 3 submenu, 4 heading — `MenuItemKind`'s ordinals.
     uint32_t kind = 0;
     bool checked = false;
     bool enabled = true;
@@ -164,6 +164,8 @@ struct CompositorHost {
     /// 0 for a root row. Otherwise the submenu row this one sits under.
     /// See `MenuItem.parent` in the IDL.
     uint32_t parent = 0;
+    /// SVG path data for the row's glyph, or empty. See `MenuItem.icon`.
+    std::string icon;
   };
 
   /// Opens the surface a context menu is drawn into. 0 if the arena does not

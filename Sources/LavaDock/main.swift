@@ -1221,7 +1221,7 @@ struct DockView: View {
         func row(_ id: UInt32, _ title: String) -> LavaIDL.MenuItem {
             LavaIDL.MenuItem(
                 id: id, title: title, kind: .command,
-                checked: false, enabled: true, shortcut: "", parent: 0
+                checked: false, enabled: true, shortcut: "", parent: 0, icon: ""
             )
         }
         if !entry.isRunning {
@@ -1237,7 +1237,7 @@ struct DockView: View {
             if !items.isEmpty {
                 items.append(LavaIDL.MenuItem(
                     id: 0, title: "", kind: .separator,
-                    checked: false, enabled: false, shortcut: "", parent: 0
+                    checked: false, enabled: false, shortcut: "", parent: 0, icon: ""
                 ))
             }
             items.append(entry.pinned

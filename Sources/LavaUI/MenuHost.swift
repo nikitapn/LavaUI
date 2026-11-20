@@ -201,6 +201,12 @@ public final class MenuHost {
             switch entry {
             case .separator:
                 editor.appMenuAddSeparator()
+            case .heading(let title):
+                // DBusMenu has no caption row; a disabled item is the
+                // nearest thing every host draws.
+                editor.appMenuAddItem(
+                    id: "heading:\(title)", title: title, enabled: false, checked: -1
+                )
             case .item(let item):
                 let checked: Int32
                 if let c = item.isChecked {

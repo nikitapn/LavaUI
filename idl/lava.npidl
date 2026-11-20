@@ -759,6 +759,9 @@ enum MenuItemKind: u32 {
   /// placed by the compositor (`ShowSubmenu`). `id` is still never 0, because
   /// that is how a child names its parent.
   submenu,
+  /// A small caption over the rows after it — "Switch to" above a list of
+  /// workspaces. Not a choice and never highlighted; `title` is all it reads.
+  heading,
 };
 
 /// One row of a context menu.
@@ -791,6 +794,12 @@ message MenuItem {
   /// exist is a bug in the sender, and promoting the row would put a VPN's
   /// "Disconnect" next to "About".
   parent: u32;
+  /// A glyph beside the title: SVG path data on a 24-unit grid, stroked
+  /// (`M3 5h18v14H3z…`). Empty for none. A path rather than a file or an
+  /// icon name, because the menu client draws strokes in the menu's own
+  /// colour and has no icon theme to look a name up in; one row with an
+  /// icon gives the whole plate an icon column, so the titles stay in line.
+  icon: string;
 }
 
 /// Compositor → menu client: "open this, here."

@@ -339,8 +339,9 @@ one window with nothing in any log.
 bus, and imported top-level titles. The panel and the compositor read the same
 switch.
 
-The panel always puts the application name after the Lava menu, including for
-foreign bars that start with File/Edit. It supplies a name-over-Quit menu from
+The panel always puts the application name first, after the lava button
+(which starts the launcher and is not a menu), including for foreign bars that
+start with File/Edit. It supplies a name-over-Quit menu from
 the focused app's desktop entry when needed. An exported application menu is
 kept with its original actions and short title (for example, Explorer), matched
 by its name or its About/Quit item. Imported command menus stay in their order.

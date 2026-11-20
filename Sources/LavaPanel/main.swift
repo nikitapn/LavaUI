@@ -101,12 +101,8 @@ nonisolated(unsafe) let clock = Clock()
 /// Kept out of the DBus namespace (those are numeric strings) so a click can
 /// never be mistaken for an imported item.
 enum DesktopMenuID {
-    static let root = MenuID("desktop")
     static let about = MenuID("desktop.about")
     static let settings = MenuID("desktop.settings")
-    static let launcher = MenuID("desktop.launcher")
-    static let terminal = MenuID("desktop.terminal")
-    static let session = MenuID("desktop.session")
     static let lock = MenuID("desktop.session.lock")
     static let logout = MenuID("desktop.logout")
     static let sleep = MenuID("desktop.session.sleep")
@@ -140,6 +136,7 @@ enum SystemDialog: Equatable {
     case none
     case logout
     case powerOff
+    case restart
     case powerError
 }
 
@@ -222,6 +219,8 @@ final class MenuSession {
     @ObservationIgnored let calendarModel = CalendarModel()
     /// The player window, if it is up.
     var playerWindow: WindowID?
+    /// The power button's card, while it is up.
+    var sessionCard: WindowID?
     /// The session confirmation or error popup, if it is up.
     @ObservationIgnored var sessionWindow: WindowID?
     var powerBusy = false
@@ -241,9 +240,8 @@ final class MenuSession {
     /// outside it dismisses. Stealing 600pt of desktop for a toast that is
     /// 90pt tall would be a click nobody meant to give up.
 
-    func attach(editor: Editor, brandIcon: UIImage) {
+    func attach(editor: Editor) {
         self.editor = editor
-        self.brandIcon = MenuIcon(size: 14, path: brandIcon.path)
         menus = PanelMenu(editor: editor)
         // Start on the desktop menu: nothing is focused yet.
         model = emptyBar()
@@ -355,12 +353,6 @@ final class MenuSession {
         case DesktopMenuID.settings:
             closeMenu()
             launchDesktopProgram("LavaSettings")
-        case DesktopMenuID.launcher:
-            closeMenu()
-            launchDesktopProgram("LavaLauncher")
-        case DesktopMenuID.terminal:
-            closeMenu()
-            launchDesktopProgram("LavaTerm")
         case DesktopMenuID.lock:
             closeMenu()
             // The compositor's lock, the one Mod+L takes. Nothing to report
@@ -403,7 +395,6 @@ final class MenuSession {
     /// application name follows it, supplying an application menu when the
     /// exported bar has none — its name, over a Quit.
     func refreshModel() {
-        let desktop = Self.desktopMenu(icon: brandIcon)
         if focusedSurface == 0 {
             hasAppMenu = false
             model = emptyBar()
@@ -418,11 +409,9 @@ final class MenuSession {
             )
         }
         imported = imported.adding(applicationMenu: Self.appMenu(name: appName()))
-        var menus = desktop.menus
-        menus.append(
-            contentsOf: imported.adding(shellMenu: Self.windowMenu(onTop: focusedOnTop)).menus
+        model = MenuModel(
+            menus: imported.adding(shellMenu: Self.windowMenu(onTop: focusedOnTop)).menus
         )
-        model = MenuModel(menus: menus)
     }
 
     static func appMenu(name: String) -> MenuNode {
@@ -483,59 +472,6 @@ final class MenuSession {
     /// Whether the focused window exported titles of its own.
     var hasAppMenu = false
 
-    /// macOS-style: the brand mark is the system menu, always present.
-    /// `title` stays "Lava" for anything that cannot draw a picture.
-    static func desktopMenu(icon: MenuIcon?) -> MenuModel {
-        MenuModel(menus: [
-            MenuNode(
-                id: DesktopMenuID.root,
-                title: "Lava",
-                icon: icon ?? MenuIcon(size: 18),
-                items: [
-                    .item(MenuItemModel(
-                        id: DesktopMenuID.about, title: "About Lava"
-                    )),
-                    .item(MenuItemModel(
-                        id: DesktopMenuID.settings, title: "Settings…"
-                    )),
-                    .separator,
-                    .item(MenuItemModel(
-                        id: DesktopMenuID.launcher, title: "Applications"
-                    )),
-                    .item(MenuItemModel(
-                        id: DesktopMenuID.terminal, title: "Terminal"
-                    )),
-                    .separator,
-                    // Session and machine power controls stay together.
-                    .submenu(MenuNode(
-                        id: DesktopMenuID.session,
-                        title: "Session",
-                        items: [
-                            .item(MenuItemModel(
-                                id: DesktopMenuID.lock, title: "Lock Screen"
-                            )),
-                            .item(MenuItemModel(
-                                id: DesktopMenuID.logout, title: "Log Out…"
-                            )),
-                            .separator,
-                            .item(MenuItemModel(
-                                id: DesktopMenuID.sleep, title: "Sleep"
-                            )),
-                            .item(MenuItemModel(
-                                id: DesktopMenuID.hibernate, title: "Hibernate"
-                            )),
-                            .item(MenuItemModel(
-                                id: DesktopMenuID.powerOff, title: "Power Off…"
-                            )),
-                        ]
-                    )),
-                ]
-            ),
-        ])
-    }
-
-    @ObservationIgnored var brandIcon: MenuIcon?
-
     // ─── The bar with nothing focused ────────────────────────────────────
 
     /// Which workspace is on screen and what is on each, for the Workspaces
@@ -549,12 +485,9 @@ final class MenuSession {
     @ObservationIgnored var modKey = "alt"
     @ObservationIgnored var shortcutsWindow: WindowID?
 
-    /// The Lava menu, then the desktop's own.
+    /// The desktop's own menus.
     func emptyBar() -> MenuModel {
-        MenuModel(
-            menus: Self.desktopMenu(icon: brandIcon).menus
-                + DesktopMenus.menus(workspaces: workspaces, modKey: modKey)
-        )
+        MenuModel(menus: DesktopMenus.menus(workspaces: workspaces, modKey: modKey))
     }
 
     func refreshDesktopBar() {
@@ -779,11 +712,14 @@ final class MenuSession {
         return true
     }
 
+    /// Under a menu title: its left edge, the bar's gap below the bar —
+    /// the compositor puts the plate's corner exactly here.
     private func anchor(for sid: String) -> (Float, Float) {
-        if let frame = LavaApp.mainLayoutHost?.agentFrame(sid: sid) {
-            return (frame.x, frame.y + frame.h)
-        }
-        return (0, Self.stripHeight)
+        let host = LavaApp.mainLayoutHost
+        let barBottom = host?.agentFrame(sid: "panel.bar").map { $0.y + $0.h }
+            ?? Self.stripHeight
+        let x = host?.agentFrame(sid: sid)?.x ?? 0
+        return (x, barBottom + panelMetrics.popupGap)
     }
 
     private func openSessionDialog() {
@@ -1209,6 +1145,33 @@ final class MenuSession {
         playerWindow = opened
     }
 
+    /// The power button: the session card under it, or closed if it is up.
+    func toggleSessionCard() {
+        if let id = sessionCard, LavaApp.isWindowOpen(id) {
+            LavaApp.closeWindow(id)
+            return
+        }
+        let anchor = popupAnchor(under: "applet.power", width: SessionCard.width)
+        var opened: WindowID?
+        opened = LavaApp.openPopup(
+            title: "Session",
+            width: SessionCard.width,
+            height: SessionCard.height,
+            anchor: anchor,
+            onClose: {
+                if let id = opened, session.sessionCard == id { session.sessionCard = nil }
+            }
+        ) {
+            SessionCard()
+        }
+        sessionCard = opened
+    }
+
+    func closeSessionCard() {
+        guard let id = sessionCard, LavaApp.isWindowOpen(id) else { return }
+        LavaApp.closeWindow(id)
+    }
+
     func closePlayer() {
         guard let id = playerWindow, LavaApp.isWindowOpen(id) else { return }
         LavaApp.closeWindow(id)
@@ -1415,15 +1378,13 @@ enum PanelChrome {
         style.titleHeight = chip
         style.titlePadding = EdgeInsets(top: 0, leading: 10, bottom: 0, trailing: 10)
         style.titleCornerRadius = chip / 2
-        style.titleHover = palette.chipHover
-        style.titleOpenFill = palette.chipOpen
-        // 14pt flame in a 26pt disc.
-        style.iconPadding = EdgeInsets(top: (chip - 14) / 2, leading: (chip - 14) / 2,
-                                       bottom: (chip - 14) / 2, trailing: (chip - 14) / 2)
-        style.iconFill = palette.accent
-        style.iconTint = palette.onAccent
-        style.iconHoverFill = palette.accentHover
-        style.iconCornerRadius = chip / 2
+        // Brighter than the other chips': the design's menu titles take
+        // white at 65% under the pointer and 75% while open.
+        style.titleHover = palette.chipOpen
+        style.titleOpenFill = palette.menuOpen
+        // The design keeps an open title's text as it was; the white chip
+        // under it is what says it is open.
+        style.titleOpenText = palette.text
         return style
     }
 
@@ -1483,15 +1444,16 @@ struct PanelView: View {
 
     private func bar(metrics: PanelMetrics, palette: PanelPalette) -> some View {
         HStack(height: .pt(metrics.barHeight), padding: 0, alignment: .center, spacing: 6) {
-            // The flame is a top-level menu title, not a separate picture:
-            // click it for Settings, the way a panel logo always is the
-            // system menu. Window titles follow it.
+            // The flame starts the launcher. It used to be the system menu;
+            // what was on it is where the design puts it now — About under
+            // Help, the session under the power button.
+            LavaButton(icon: brandIcon, metrics: metrics, palette: palette)
+
             MenuBarStrip(
                 model: session.model,
                 openMenuID: openBinding,
                 onActivate: { session.activate($0) },
                 style: PanelChrome.barStyle(metrics: metrics, palette: palette),
-                icons: [DesktopMenuID.root: brandIcon],
                 externalMenus: true
             )
             .font(fonts.label)
@@ -1544,6 +1506,13 @@ struct PanelView: View {
                             blur: metrics.shadowBlur,
                             color: palette.shadow.opacity(metrics.shadowAlpha),
                             offsetY: metrics.shadowOffset, hollow: true)
+                // Docked, the strip has no rim of its own; a light line along
+                // its bottom edge is what parts it from a window under it
+                // (the design's `0 1px 0 rgba(255,255,255,.5)`).
+                if metrics.style == .docked {
+                    list.rect(x: frame.x, y: frame.y + frame.h, w: frame.w, h: 1,
+                              color: palette.glassBorder)
+                }
             }
         }
         .onFrame { _ in session.barMoved() }
@@ -1663,16 +1632,19 @@ struct SessionWindow: View {
         let theme = Theme.current
         let isError = session.dialog == .powerError
         let powerOff = session.dialog == .powerOff
+        let restart = session.dialog == .restart
+        let heading = isError ? session.powerErrorTitle
+            : powerOff ? "Power off?" : restart ? "Restart?" : "Log out?"
+        let detail = isError ? session.powerError
+            : powerOff
+                ? "This turns off the computer and closes every window. Save your work before continuing."
+            : restart
+                ? "This restarts the computer and closes every window. Save your work before continuing."
+                : "This ends the session and closes every window."
         VStack(padding: 0, spacing: 12) {
-            Text(isError ? session.powerErrorTitle : (powerOff ? "Power off?" : "Log out?"),
-                 color: theme.textPrimary)
+            Text(heading, color: theme.textPrimary)
             ScrollView {
-                Text(
-                    isError ? session.powerError : (powerOff
-                        ? "This turns off the computer and closes every window. Save your work before continuing."
-                        : "This ends the session and closes every window."),
-                    color: theme.textSecondary
-                )
+                Text(detail, color: theme.textSecondary)
             }
             HStack(padding: 0, spacing: 8) {
                 Spacer()
@@ -1680,7 +1652,7 @@ struct SessionWindow: View {
                     .agentId("dialog.session.cancel")
                 if !isError {
                     Button(
-                        powerOff ? "Power Off" : "Log Out",
+                        powerOff ? "Power Off" : restart ? "Restart" : "Log Out",
                         style: ButtonStyle(
                             background: theme.accent.opacity(0.22),
                             hover: theme.accent.opacity(0.38),
@@ -1690,6 +1662,8 @@ struct SessionWindow: View {
                     ) {
                         if powerOff {
                             session.requestPower(.powerOff)
+                        } else if restart {
+                            session.requestPower(.reboot)
                         } else {
                             session.setDialog(.none)
                             LavaClient.endSession()
@@ -1702,7 +1676,8 @@ struct SessionWindow: View {
         .padding(16)
         .frame(width: .pt(Self.width), height: .pt(Self.height))
         .background(PanelChrome.popupWash)
-        .agentId(powerOff ? "dialog.power-off" : (isError ? "dialog.power-error" : "dialog.logout"))
+        .agentId(powerOff ? "dialog.power-off" : restart ? "dialog.restart"
+                 : isError ? "dialog.power-error" : "dialog.logout")
     }
 }
 
@@ -1799,15 +1774,6 @@ guard let editor = LavaClient.openPanel(
     reserved: panelMetrics.reserved
 ) else { exit(1) }
 
-guard let brandIcon = ImageStore.loadAsset(
-    named: "lavaui-icon.svg", bundle: .module, into: editor
-) else {
-    FileHandle.standardError.write(
-        Data("LavaPanel: could not load lavaui-icon.svg\n".utf8)
-    )
-    exit(1)
-}
-
 guard let brandImage = ImageStore.loadAsset(
     named: "lavaui.png", bundle: .module, into: editor
 ) else {
@@ -1820,7 +1786,7 @@ guard let brandImage = ImageStore.loadAsset(
 // Owns the registrar from here on, so an application starting after this point
 // finds somewhere to export to. Before `run`, because an app that registers
 // while the panel is still coming up should not have to try twice.
-session.attach(editor: editor, brandIcon: brandIcon)
+session.attach(editor: editor)
 mpris.onAbsent = { session.closePlayer() }
 network.onPrompt = { session.openAuth($0) }
 network.onPromptGone = { session.dropAuth($0) }
@@ -1846,7 +1812,7 @@ guard let loadedPopupFonts = PopupFonts.load(into: editor) else {
 }
 popupFonts = loadedPopupFonts
 
-// The system menu's flame, white, for the accent disc it sits on.
+// The flame, white, for the lava button's accent disc.
 guard let flameIcon = ImageStore.loadAsset(named: "flame.svg", bundle: .module, into: editor)
 else {
     FileHandle.standardError.write(Data("LavaPanel: could not load flame.svg\n".utf8))
@@ -1924,7 +1890,7 @@ LavaClient.onMenuChoice { serial, chosen in
 // A test lever: open popups by name once the bar has drawn, for screenshots
 // of cards a headless session has no pointer to open — the agent port drives
 // the bar's window only. `LAVA_PANEL_OPEN=calendar,year`; also `player`,
-// `network`, `volume`, `bluetooth`. Each waits a frame for the one before.
+// `network`, `volume`, `bluetooth`, `power`. Each waits a frame for the one before.
 if let names = ProcessInfo.processInfo.environment["LAVA_PANEL_OPEN"] {
     func openNext(_ rest: ArraySlice<Substring>, delay: Int) {
         guard let name = rest.first else { return }
@@ -1939,6 +1905,7 @@ if let names = ProcessInfo.processInfo.environment["LAVA_PANEL_OPEN"] {
             case "network": session.toggleNetwork()
             case "volume": session.toggleVolume()
             case "bluetooth": session.toggleBluetooth()
+            case "power": session.toggleSessionCard()
             default: FileHandle.standardError.write(Data("LAVA_PANEL_OPEN: no '\(name)'\n".utf8))
             }
             openNext(rest.dropFirst(), delay: 10)

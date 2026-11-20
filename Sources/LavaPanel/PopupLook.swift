@@ -73,7 +73,9 @@ struct PopupPalette {
 /// Every face the popups use. Loaded once, after the editor exists: a face
 /// built in `body` would reopen FreeType on every clock tick.
 struct PopupFonts {
-    /// Caprasimo, for a calendar's month and a track's title.
+    /// Caprasimo, for a calendar's month and a track's title — and at 16,
+    /// the initial on the session card's avatar.
+    let heading16: UIFont
     let heading18: UIFont
     let heading19: UIFont
     let heading22: UIFont
@@ -110,7 +112,8 @@ struct PopupFonts {
             }
             return font
         }
-        guard let heading18 = face("Caprasimo-Regular", 18),
+        guard let heading16 = face("Caprasimo-Regular", 16),
+              let heading18 = face("Caprasimo-Regular", 18),
               let heading19 = face("Caprasimo-Regular", 19),
               let heading22 = face("Caprasimo-Regular", 22),
               let title15 = face("Figtree-Bold", 15),
@@ -128,7 +131,7 @@ struct PopupFonts {
               let tag = face("Figtree-Regular", 11, letterSpacing: 0.02)
         else { return nil }
         return PopupFonts(
-            heading18: heading18, heading19: heading19, heading22: heading22,
+            heading16: heading16, heading18: heading18, heading19: heading19, heading22: heading22,
             title15: title15, body14: body14, body14Semi: body14Semi,
             body14Bold: body14Bold, small13: small13, small13Semi: small13Semi,
             small13SemiTabular: small13SemiTabular,
@@ -147,12 +150,13 @@ nonisolated(unsafe) var popupFonts: PopupFonts!
 /// is cut to the desktop's corner radius, which is half the card's.
 struct PopupCard<Content: View>: View {
     var padding: Float
+    /// The design's 24, or 20 for the session card.
+    var radius: Float
     var content: Content
 
-    static var radius: Float { 24 }
-
-    init(padding: Float = 12, @ViewBuilder content: () -> Content) {
+    init(padding: Float = 12, radius: Float = 24, @ViewBuilder content: () -> Content) {
         self.padding = padding
+        self.radius = radius
         self.content = content()
     }
 
@@ -164,7 +168,7 @@ struct PopupCard<Content: View>: View {
             }
             .background(palette.bar.glassStrong)
             .border(palette.rim)
-            .cornerRadius(Self.radius)
+            .cornerRadius(radius)
             .backdropBlur(radius: 22, adaptation: 0, saturation: 1.7)
         }
     }
@@ -335,7 +339,9 @@ extension MenuSession {
         } else {
             right = (editor?.framebufferSize().w ?? 1280) - panelMetrics.marginSide
         }
+        // The compositor places a popup 6px under its anchor; the anchor's
+        // height makes up the rest of the gap the style asks for.
         return LavaApp.SurfaceAnchor(x: max(0, right - width), y: barBottom - 1, w: 1,
-                                     h: 1 + 4)
+                                     h: 1 + panelMetrics.popupGap - 6)
     }
 }

@@ -51,6 +51,9 @@ public struct MenuBarStyle: Equatable, Sendable {
     /// Radius of the frosted-glass blur behind the dropdown, or `nil` for a plain fill.
     public var dropdownBlur: Float?
 
+    /// A title's text while its menu is open; `nil` is the theme's accent.
+    public var titleOpenText: Color? = nil
+
     /// Fill behind an icon title, always — a logo on a coloured disc rather
     /// than a bare picture. `nil` gives it the same chrome as a text title.
     public var iconFill: Color? = nil
@@ -378,13 +381,13 @@ public struct MenuBarStrip: View {
             } else {
                 Text(
                     menu.title,
-                    color: isOpen ? theme.accent : theme.textPrimary
+                    color: isOpen ? style.titleOpenText ?? theme.accent : theme.textPrimary
                 )
             }
         } else {
             Text(
                 menu.title,
-                color: isOpen ? theme.accent : theme.textPrimary
+                color: isOpen ? style.titleOpenText ?? theme.accent : theme.textPrimary
             )
         }
     }
@@ -437,6 +440,9 @@ public struct MenuDropdownPanel: View {
         case .separator:
             Divider()
                 .padding(EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6))
+        case .heading(let title):
+            Text(title, color: theme.textDim)
+                .padding(style.itemPadding)
         case .item(let item):
             itemRow(item, theme: theme)
         case .submenu(let node):
@@ -571,6 +577,7 @@ public struct MenuDropdownPanel: View {
         enum Kind {
             case item(MenuItemModel)
             case separator
+            case heading(String)
             case submenu(MenuNode)
         }
 
@@ -589,6 +596,9 @@ public struct MenuDropdownPanel: View {
             case .separator:
                 let id = MenuID(path.isEmpty ? "sep-\(i)" : "\(path)/sep-\(i)")
                 out.append(MenuRow(id: id, kind: .separator))
+            case .heading(let title):
+                let id = MenuID(path.isEmpty ? "head-\(i)" : "\(path)/head-\(i)")
+                out.append(MenuRow(id: id, kind: .heading(title)))
             case .item(let item):
                 out.append(MenuRow(id: item.id, kind: .item(item)))
             case .submenu(let node):

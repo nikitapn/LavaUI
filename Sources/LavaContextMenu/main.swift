@@ -48,30 +48,13 @@ enum ContextMenu {
     /// A menu never narrower than this, however short its items: a column of
     /// one-word verbs is unreadable at its natural width, because the eye
     /// reads the shape of a menu before the words. Applied by the plate, so
-    /// the measurement sees it like everything else.
-    static let minWidth: Float = 180
+    /// the measurement sees it like everything else. The design's 260.
+    static let minWidth: Float = 260
 
     /// What the measurement looks for. The plate hugs its rows, so its frame
     /// after a layout pass is exactly the surface the compositor should place.
     static let plateId = "context-menu.plate"
 
-    /// The desktop behind every plate, frosted — the root and each fly-out.
-    ///
-    /// The same radius the panel's own popups ask for, so a menu and the
-    /// volume card are the same glass. Asked once per surface: the plate *is*
-    /// the surface, so the compositor's whole-surface frost is exactly its
-    /// outline, cut to the window corner the plate is drawn with.
-    static let backdropBlur: Float = 12
-    /// How far the rim of that glass bends, in pixels. A menu is a small slab
-    /// and reads as glass with it; a frosted window edge to edge does not,
-    /// which is why the compositor leaves it off unless asked.
-    static let refraction: Float = 28
-    /// The grain of frosted glass on that frost, 0…1 — what makes the plate
-    /// read as an etched pane rather than as a blur.
-    static let frost: Float = 0
-    /// Magnification factor for the menu's glass effect, controlling how much
-    /// the background is scaled when the popup is displayed.
-    static let magnification: Float = 1.35
 }
 
 /// One fly-out this menu has open. `depth` 0 hangs off the root plate.
@@ -355,10 +338,9 @@ nonisolated(unsafe) let model = MenuModel()
 // bits, where the compositor sends a string it has already formatted from
 // bindings this process cannot see.
 //
-// What is shared is `MenuBarStyle.panel()`: the same fills, paddings, corner
-// radius and hover chip. A context menu and an application menu look like the
-// same object because they are drawn from the same numbers, not because they
-// go through the same view.
+// The look is `MenuLook`: the panel's menus, its tray menus and the
+// desktop's right-click menu all come through here, so they are one object
+// because they are one view.
 
 struct ContextMenuView: View {
     var body: some View {
@@ -393,17 +375,10 @@ struct BranchMenuView: View {
     var onItemHover: () -> Void
 
     var body: some View {
-        // The fly-out's plate, as the root menu's is set with `LavaClient`:
-        // the same blur, bend and grain, so the two read as one glass. Rim 0
-        // on the view, because the plate lights its own where it bends.
+        // The plate frosts its own outline, as the root's does.
         MenuPlate(
             title: "", rows: plate.rows, cap: plate.cap,
             onActivate: onActivate, onBranch: onBranch, onItemHover: onItemHover
-        )
-        .backdropBlur(radius: ContextMenu.backdropBlur)
-        .glassEffect(
-            refraction: ContextMenu.refraction, rim: 1, frost: ContextMenu.frost,
-            magnification: ContextMenu.magnification
         )
     }
 }
@@ -413,6 +388,11 @@ struct BranchMenuView: View {
 /// Pinned to the top-left of whatever surface this is, at its natural size,
 /// so `agentFrame` measures the menu and not the window. Once the surface
 /// has been resized to it, the two are the same rectangle.
+///
+/// `Taskbar.dc.html`'s menu: an 18px plate of strong glass with a white rim,
+/// 14px rows with a glyph column, the tick and the shortcut on the right.
+/// The plate frosts its own outline (`backdropBlur` on a view that states a
+/// corner), so the frost takes the plate's corner rather than the window's.
 struct MenuPlate: View {
     var title: String
     var rows: [MenuRow]
@@ -433,21 +413,23 @@ struct MenuPlate: View {
 
     @ViewBuilder
     private var plate: some View {
-        let style = MenuBarStyle.panel()
-        let checks = MenuRow.hasChecks(rows)
-        VStack(padding: style.dropdownPadding, spacing: 0) {
+        let look = MenuLook.current
+        let icons = MenuRow.hasIcons(rows)
+        VStack(padding: MenuLook.platePadding, spacing: 0) {
             if cap > 0 {
                 ScrollView {
-                    column(checks: checks, style: style)
+                    column(icons: icons, look: look)
                 }
-                .frame(height: .pt(scrollHeight(style)))
+                .frame(height: .pt(scrollHeight))
             } else {
-                column(checks: checks, style: style)
+                column(icons: icons, look: look)
             }
         }
         .frame(minWidth: ContextMenu.minWidth)
-        .background(style.dropdownBackground)
-        .cornerRadius(style.dropdownCornerRadius)
+        .background(look.glass)
+        .border(look.rim)
+        .cornerRadius(MenuLook.plateRadius)
+        .backdropBlur(radius: MenuLook.blur, adaptation: 0, saturation: MenuLook.saturation)
         .agentId(ContextMenu.plateId)
     }
 
@@ -455,52 +437,67 @@ struct MenuPlate: View {
     /// The cap is the whole plate — the number the compositor was told — so
     /// the rows scroll inside it rather than the plate growing to the cap
     /// and then adding its padding on the outside.
-    private func scrollHeight(_ style: MenuBarStyle) -> Float {
-        max(1, cap - style.dropdownPadding * 2)
+    private var scrollHeight: Float {
+        max(1, cap - MenuLook.platePadding * 2)
     }
 
     @ViewBuilder
-    private func column(checks: Bool, style: MenuBarStyle) -> some View {
-        VStack(padding: 0, spacing: style.itemSpacing) {
+    private func column(icons: Bool, look: MenuLook) -> some View {
+        VStack(padding: 0, spacing: 0) {
             if !title.isEmpty {
-                heading(style)
-                separator(style)
+                caption(title, look: look, upper: false)
+                separator(look)
             }
             ForEach(Array(rows.enumerated()), id: \.offset) { entry in
-                row(entry.element, checks: checks, style: style)
+                row(entry.element, icons: icons, look: look)
             }
         }
     }
 
-    /// The window the menu is about. Not clickable, and dim: it is a label
-    /// saying what these items will act on, not one of them.
+    /// The window the menu is about, or a caption over a group ("SWITCH
+    /// TO"). Not clickable, and soft: it says what the rows under it are,
+    /// it is not one of them.
     @ViewBuilder
-    private func heading(_ style: MenuBarStyle) -> some View {
-        Text(title, color: Environment.current.theme.textSecondary)
-            .padding(style.itemPadding)
+    private func caption(_ text: String, look: MenuLook, upper: Bool) -> some View {
+        let font = upper ? menuFonts?.kicker : menuFonts?.shortcut
+        Text(upper ? text.uppercased() : text, color: look.soft, font: font, lineLimit: 1)
+            .padding(EdgeInsets(top: 8, leading: 10, bottom: 4, trailing: 10))
     }
 
     @ViewBuilder
-    private func separator(_ style: MenuBarStyle) -> some View {
-        Divider()
-            .padding(EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6))
+    private func separator(_ look: MenuLook) -> some View {
+        Canvas(label: "separator", width: .pct(100), height: .pt(11)) { list, frame in
+            list.rect(x: frame.x + 10, y: frame.y + 5, w: max(0, frame.w - 20), h: 1,
+                      color: look.divider)
+        }
     }
 
     @ViewBuilder
-    private func row(
-        _ row: MenuRow, checks: Bool, style: MenuBarStyle
-    ) -> some View {
-        let theme = Environment.current.theme
+    private func row(_ row: MenuRow, icons: Bool, look: MenuLook) -> some View {
         switch row {
         case .separator:
-            separator(style)
+            separator(look)
+        case let .heading(text):
+            caption(text, look: look, upper: true)
         case let .item(item):
-            itemRow(item, checks: checks, style: style, theme: theme)
-        case let .submenu(id, title, enabled, _):
-            branchRow(
-                id: id, title: title, enabled: enabled,
-                checks: checks, style: style, theme: theme
-            )
+            itemRow(item, icons: icons, look: look)
+        case let .submenu(id, title, enabled, icon, _):
+            branchRow(id: id, title: title, enabled: enabled, icon: icon,
+                      icons: icons, look: look)
+        }
+    }
+
+    /// The glyph column: the row's own, or the empty column every row gets
+    /// once one row on the plate has a glyph.
+    @ViewBuilder
+    private func glyph(_ d: String, colour: Color) -> some View {
+        HStack(width: .pt(MenuLook.iconColumn), height: .pt(MenuLook.iconSize),
+               padding: 0, alignment: .center, spacing: 0) {
+            if !d.isEmpty {
+                Spacer()
+                Icon(d, size: MenuLook.iconSize, color: colour, strokeWidth: MenuLook.iconStroke)
+                Spacer()
+            }
         }
     }
 
@@ -508,77 +505,69 @@ struct MenuPlate: View {
     /// pointer was in: a fly-out that stayed open beside a row the pointer
     /// has walked past is a menu for a choice the user is no longer making.
     @ViewBuilder
-    private func itemRow(
-        _ item: MenuRow.Row, checks: Bool, style: MenuBarStyle, theme: Theme
-    ) -> some View {
-        let colour = item.enabled ? theme.textPrimary : theme.textDim
+    private func itemRow(_ item: MenuRow.Row, icons: Bool, look: MenuLook) -> some View {
+        // The design dims a disabled row as a whole, to 45%.
+        let fade: Float = item.enabled ? 1 : 0.45
         let activate = onActivate
         let leave = onItemHover
-        // The tick column is a fixed width for every row of a menu that
-        // has one, so ticking a box moves nothing: the alternative is a
-        // prefix string, which changes width with the glyph and shuffles
-        // every title sideways as the state changes.
         let content = HStack(
-            padding: 0, alignment: .center, spacing: 0,
+            padding: 0, alignment: .center, spacing: MenuLook.rowGap,
             onClick: item.enabled ? { activate(item.id) } : nil,
             onHover: { inside in if inside { leave() } }
         ) {
-            if checks {
-                // Wider than the glyph, so the tick does not touch the
-                // first letter of the title it belongs to.
-                Text(item.checked ? "✓" : " ", color: colour)
-                    .frame(width: .pt(22))
+            if icons { glyph(item.icon, colour: look.soft.opacity(fade)) }
+            Text(item.title, color: look.text.opacity(fade), font: menuFonts?.row, lineLimit: 1)
+                .flexGrow(1)
+            // On the right, before the shortcut, and only when ticked: a
+            // tick column on the left moved every title in the menu for the
+            // sake of one row.
+            if item.checked {
+                Icon(MenuLook.checkGlyph, size: 14, color: look.check.opacity(fade),
+                     strokeWidth: 3)
             }
-            Text(item.title, color: colour)
             if !item.shortcut.isEmpty {
-                Spacer()
-                Text(item.shortcut, color: theme.textDim)
-                    .padding(EdgeInsets(
-                        top: 0, leading: 32, bottom: 0, trailing: 0
-                    ))
+                Text(item.shortcut, color: look.soft.opacity(fade), font: menuFonts?.shortcut,
+                     lineLimit: 1)
+                    .padding(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 0))
             }
         }
-        .padding(style.itemPadding)
-        .cornerRadius(style.itemCornerRadius)
+        .padding(MenuLook.rowPadding)
+        .cornerRadius(MenuLook.rowRadius)
         .agentId("menu.item.\(item.id)")
 
         if item.enabled {
-            content.hoverBackground(style.itemHover).hoverSnap()
+            content.hoverBackground(look.hover).hoverSnap()
         } else {
             content
         }
     }
 
-    /// A row that opens a plate of its own beside this one. The arrow is
-    /// the only thing that says so — the title is the branch's name, not
-    /// the name with a chevron glued on, which is what a flat protocol
-    /// used to have to do.
+    /// A row that opens a plate of its own beside this one. The chevron is
+    /// the only thing that says so — the title is the branch's name, not the
+    /// name with an arrow glued on.
     @ViewBuilder
     private func branchRow(
-        id: UInt32, title: String, enabled: Bool,
-        checks: Bool, style: MenuBarStyle, theme: Theme
+        id: UInt32, title: String, enabled: Bool, icon: String, icons: Bool, look: MenuLook
     ) -> some View {
-        let colour = enabled ? theme.textPrimary : theme.textDim
+        let fade: Float = enabled ? 1 : 0.45
         let open = onBranch
         let content = HStack(
-            padding: 0, alignment: .center, spacing: 0,
+            padding: 0, alignment: .center, spacing: MenuLook.rowGap,
             onClick: enabled ? { open(id) } : nil,
             onHover: { inside in if inside, enabled { open(id) } }
         ) {
-            if checks {
-                Text(" ", color: colour).frame(width: .pt(22))
-            }
-            Text(title, color: colour)
-            Spacer()
-            Text("›", color: theme.textDim)
-                .padding(EdgeInsets(top: 0, leading: 32, bottom: 0, trailing: 0))
+            if icons { glyph(icon, colour: look.soft.opacity(fade)) }
+            Text(title, color: look.text.opacity(fade), font: menuFonts?.row, lineLimit: 1)
+                .flexGrow(1)
+            Icon(MenuLook.chevronGlyph, size: 13, color: look.chevron.opacity(fade),
+                 strokeWidth: 2.75)
         }
-        .padding(style.itemPadding)
-        .cornerRadius(style.itemCornerRadius)
+        .padding(MenuLook.rowPadding)
+        .cornerRadius(MenuLook.rowRadius)
         .agentId("menu.item.\(id)")
 
         if enabled {
-            content.hoverBackground(style.itemHover).hoverSnap()
+            content.hoverBackground(look.hover).hoverSnap()
         } else {
             content
         }
@@ -612,12 +601,10 @@ model.editor = editor
 // every plate — a fly-out included — is a window of this process.
 WindowBackdrop.current = .none
 
-// Remembered until `run` has a surface. Set once: the root surface lives for
-// the whole session and is only hidden between menus, and the compositor
-// keeps the radius with it.
-LavaClient.setBackdropRefraction(px: ContextMenu.refraction)
-LavaClient.setBackdropFrost(ContextMenu.frost)
-LavaClient.setBackdropBlur(radius: ContextMenu.backdropBlur)
+// No frost for the window as a whole: the plate asks for its own, cut to its
+// own 18px corner (`MenuPlate`). A whole-surface plate is cut to the
+// window's corner instead, and showed in the gap between the two curves.
+menuFonts = MenuLook.Fonts.load(into: editor)
 
 // Before `run`, which is where the surface is created: the subscription is
 // held until there is an id to make it with, the same way a panel's

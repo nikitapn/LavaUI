@@ -149,11 +149,12 @@ lock = LavaLock
 
 [panel]
 
-# How the top bar sits: `floating`, a glass pill held a few pixels off the top
-# and sides of the screen, or `docked`, a strip flush with the edge. Read by the
-# panel when it starts, so a change takes a panel restart (`pkill LavaPanel`;
-# the compositor starts it again). `LAVA_PANEL_STYLE` overrides it for one run.
-# style = floating
+# How the top bar sits: `docked`, a strip flush with the edge that a maximized
+# window meets with no gap (the default), or `floating`, a glass pill held a few
+# pixels off the top and sides of the screen. Read by the panel when it starts,
+# so a change takes a panel restart (`pkill LavaPanel`; the compositor starts it
+# again). `LAVA_PANEL_STYLE` overrides it for one run.
+# style = docked
 
 
 [mouse]

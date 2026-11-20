@@ -258,7 +258,7 @@ public struct MenuNode: Equatable, Sendable, Identifiable {
         items.flatMap { entry -> [MenuItemModel] in
             switch entry {
             case .item(let model): return [model]
-            case .separator: return []
+            case .separator, .heading: return []
             case .submenu(let node): return node.allItems
             }
         }
@@ -287,6 +287,9 @@ public enum MenuEntry: Equatable, Sendable {
     case item(MenuItemModel)
     /// A separator line.
     case separator
+    /// A small caption over the rows after it ("Switch to"). Not a choice.
+    /// A host with no way to draw one shows it as a greyed row.
+    case heading(String)
     /// A submenu, opening from this row.
     case submenu(MenuNode)
 }
@@ -303,6 +306,9 @@ public struct MenuItemModel: Equatable, Sendable, Identifiable {
     public var isChecked: Bool?
     /// The item's keyboard shortcut, shown beside it and matched against key events.
     public var shortcut: KeyShortcut?
+    /// A glyph beside the title: SVG path data on a 24-unit grid, stroked
+    /// in the row's colour. Hosts that cannot draw one ignore it.
+    public var icon: String?
 
     /// Creates an item model.
     public init(
@@ -310,13 +316,15 @@ public struct MenuItemModel: Equatable, Sendable, Identifiable {
         title: String,
         isEnabled: Bool = true,
         isChecked: Bool? = nil,
-        shortcut: KeyShortcut? = nil
+        shortcut: KeyShortcut? = nil,
+        icon: String? = nil
     ) {
         self.id = id
         self.title = title
         self.isEnabled = isEnabled
         self.isChecked = isChecked
         self.shortcut = shortcut
+        self.icon = icon
     }
 }
 

@@ -1237,6 +1237,7 @@ class CompositorImpl final : public ICompositor_Servant {
       entry.enabled = item.enabled();
       entry.shortcut = std::string{item.shortcut()};
       entry.parent = item.parent();
+      entry.icon = std::string{item.icon()};
       entries.push_back(std::move(entry));
     }
     return host_.openClientMenu(surfaceId, x, y, std::string{title}, entries);
@@ -2764,6 +2765,7 @@ class ControlPlaneImpl final : public ControlPlane {
       item.enabled = entry.enabled;
       item.shortcut = entry.shortcut;
       item.parent = entry.parent;
+      item.icon = entry.icon;
       request.items.push_back(std::move(item));
     }
     return menu_.send(request);

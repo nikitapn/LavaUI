@@ -9,11 +9,13 @@ import LavaIDL
 /// is a test nobody writes.
 enum MenuRow: Equatable {
     case separator
+    /// A caption over the rows after it. Not a choice.
+    case heading(String)
     case item(Row)
     /// `rows` are this branch, not spilled into the parent. One level per
     /// plate: the fly-out beside this row is another menu, not more lines
     /// in this one.
-    case submenu(id: UInt32, title: String, enabled: Bool, rows: [MenuRow])
+    case submenu(id: UInt32, title: String, enabled: Bool, icon: String, rows: [MenuRow])
 
     struct Row: Equatable {
         var id: UInt32
@@ -25,6 +27,8 @@ enum MenuRow: Equatable {
         var checkable: Bool
         var checked: Bool
         var shortcut: String
+        /// SVG path data for the glyph beside the title, or empty.
+        var icon: String = ""
     }
 
     /// The compositor's flat list, as a tree.
@@ -45,21 +49,24 @@ enum MenuRow: Equatable {
                 switch item.kind {
                 case .separator:
                     return .separator
+                case .heading:
+                    return .heading(item.title)
                 case .submenu:
                     return .submenu(
                         id: item.id, title: item.title, enabled: item.enabled,
-                        rows: build(item.id, depth: depth + 1)
+                        icon: item.icon, rows: build(item.id, depth: depth + 1)
                     )
                 case .checkbox:
                     return .item(Row(
                         id: item.id, title: item.title, enabled: item.enabled,
                         checkable: true, checked: item.checked,
-                        shortcut: item.shortcut
+                        shortcut: item.shortcut, icon: item.icon
                     ))
                 case .command:
                     return .item(Row(
                         id: item.id, title: item.title, enabled: item.enabled,
-                        checkable: false, checked: false, shortcut: item.shortcut
+                        checkable: false, checked: false, shortcut: item.shortcut,
+                        icon: item.icon
                     ))
                 }
             }
@@ -70,7 +77,7 @@ enum MenuRow: Equatable {
     /// The rows under `id`, searched from this plate downward.
     static func children(of id: UInt32, in rows: [MenuRow]) -> [MenuRow]? {
         for row in rows {
-            guard case .submenu(let sid, _, _, let nested) = row else { continue }
+            guard case .submenu(let sid, _, _, _, let nested) = row else { continue }
             if sid == id { return nested }
             if let found = children(of: id, in: nested) { return found }
         }
@@ -82,6 +89,18 @@ enum MenuRow: Equatable {
         rows.contains { row in
             if case let .item(item) = row { return item.checkable }
             return false
+        }
+    }
+
+    /// Whether any row on this plate has a glyph, which gives every row the
+    /// glyph column so the titles stay in line.
+    static func hasIcons(_ rows: [MenuRow]) -> Bool {
+        rows.contains { row in
+            switch row {
+            case let .item(item): return !item.icon.isEmpty
+            case let .submenu(_, _, _, icon, _): return !icon.isEmpty
+            default: return false
+            }
         }
     }
 }

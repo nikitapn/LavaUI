@@ -56,6 +56,12 @@ enum MenuWire {
                     row.kind = .separator
                     row.parent = parent
                     items.append(row)
+                case .heading(let title):
+                    var row = LavaIDL.MenuItem()
+                    row.kind = .heading
+                    row.title = title
+                    row.parent = parent
+                    items.append(row)
                 case .item(let item):
                     let id = next
                     next += 1
@@ -68,6 +74,7 @@ enum MenuWire {
                     row.enabled = item.isEnabled
                     row.shortcut = item.shortcut.map(MenuShortcutLabel.format) ?? ""
                     row.parent = parent
+                    row.icon = item.icon ?? ""
                     items.append(row)
                     actions[id] = tray ? .trayItem(item.id) : .barItem(item.id)
                 case .submenu(let node):
