@@ -27,6 +27,52 @@ struct PromptDialog: View {
             || session.passwordRequest != nil
     }
 
+    /// Escape: the shown dialog's Cancel.
+    static func cancel(_ session: ExplorerSession) {
+        if session.pendingCopy != nil {
+            session.resolveCopy(nil)
+        } else if session.pendingTransfer != nil {
+            session.resolveTransfer(nil)
+        } else if session.remoteLogin != nil {
+            session.cancelLogin()
+        } else if session.profileDraft != nil {
+            session.profileDraft = nil
+        } else if session.connectDraft != nil {
+            session.cancelConnect()
+        } else if session.pendingErase != nil {
+            session.resolveErase(false)
+        } else if session.pendingOverwrite != nil {
+            session.resolveOverwrite(false)
+        } else if session.compressDraft != nil {
+            session.cancelCompress()
+        } else if session.passwordRequest != nil {
+            session.cancelPassword()
+        }
+    }
+
+    /// Enter with no field to submit: the shown dialog's solid button.
+    static func confirm(_ session: ExplorerSession) {
+        if session.pendingCopy != nil {
+            session.resolveCopy(.keepBoth)
+        } else if session.pendingTransfer != nil {
+            session.resolveTransfer(.keepBoth)
+        } else if session.remoteLogin != nil {
+            session.submitLogin()
+        } else if session.profileDraft != nil {
+            session.createProfile()
+        } else if session.connectDraft != nil {
+            session.submitConnect()
+        } else if session.pendingErase != nil {
+            session.resolveErase(true)
+        } else if session.pendingOverwrite != nil {
+            session.resolveOverwrite(true)
+        } else if session.compressDraft != nil {
+            session.confirmCompress()
+        } else if session.passwordRequest != nil {
+            session.submitPassword()
+        }
+    }
+
     var body: some View {
         VStack(padding: 0, spacing: 0) {
             content
@@ -169,7 +215,7 @@ struct PromptDialog: View {
     private func erase(_ pending: ExplorerSession.PendingErase) -> some View {
         VStack(padding: 0, spacing: 0) {
             DialogHeader(glyph: DialogGlyphs.delete, title: "Delete for good?",
-                         detail: pending.message + " This cannot be undone.")
+                         detail: pending.message)
                 .agentId("erase-message")
             DialogButtons {
                 DialogButton("Cancel", id: "erase-cancel") { session.resolveErase(false) }

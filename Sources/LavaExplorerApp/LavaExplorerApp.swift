@@ -222,6 +222,23 @@ struct LavaExplorerApp {
         // is focusable too, and these keys are its.
         let typing = FocusManager.isEditingText
 
+        // A dialog is up, and it has the keyboard: nothing reaches the list
+        // behind it, as no pointer does (`OverlayStyle.modal`). Escape is its
+        // Cancel; Enter, with no field to submit it, its solid answer — a
+        // field's own Enter submits through the field. Keys for a field are
+        // the field's; everything else is swallowed.
+        if PromptDialog.isWaiting(session) {
+            if event.button == KeyCode.escape {
+                PromptDialog.cancel(session)
+                return true
+            }
+            if event.button == KeyCode.enter, !typing {
+                PromptDialog.confirm(session)
+                return true
+            }
+            return !typing
+        }
+
         // Before the field gets it: Escape in the new folder's name is
         // "never mind", not "stop typing".
         if event.button == KeyCode.escape, session.profileDraft != nil {

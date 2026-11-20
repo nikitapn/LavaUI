@@ -102,6 +102,9 @@ final class OverlayAttachment {
     var border: Color?
     var scrim: Color?
     var cornerRadius: Float = 0
+    /// Nothing outside the panel takes input while it is up. See
+    /// `OverlayStyle.modal`.
+    var modal = false
 
     /// Resolved during emit, in the same space as the anchor.
     var origin: (x: Float, y: Float) = (0, 0)
@@ -302,6 +305,7 @@ public struct OverlayView<Content: View, OverlayContent: View>: PrimitiveView {
         }
 
         att.scrim = style.scrim
+        att.modal = style.modal
         att.border = style.plateBorder
         att.cornerRadius = style.cornerRadius
         root.fillColor = style.background
@@ -424,6 +428,14 @@ public struct OverlayStyle {
     public var minWidth: Float
     /// Blur applied to everything behind the complete resolved popup frame.
     public var backdropBlurRadius: Float?
+    /// A dialog rather than a menu: while it is up nothing outside it takes
+    /// the pointer — no click, hover, wheel, drag or drop reaches the window
+    /// behind, and a click there neither dismisses it nor does anything else.
+    /// A menu wants the opposite (a click outside closes it and may land on a
+    /// menu title), which is why this is a choice and not the scrim's
+    /// side-effect. Keys are the app's: its handler decides what a dialog
+    /// lets through.
+    public var modal: Bool
 
     /// Creates a style. Colours and radius left `nil` come from the current theme.
     public init(
@@ -433,9 +445,11 @@ public struct OverlayStyle {
         padding: Float = 4,
         minWidth: Float = 0,
         backdropBlurRadius: Float? = nil,
-        scrim: Color? = nil
+        scrim: Color? = nil,
+        modal: Bool = false
     ) {
         self.scrim = scrim
+        self.modal = modal
         let theme = Environment.current.theme
         self.background = background ?? theme.panel
         self.border = border ?? theme.border

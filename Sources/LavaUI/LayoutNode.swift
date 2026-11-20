@@ -2361,6 +2361,8 @@ public final class LayoutHost {
                 // neither dismisses nor reaches the content below.
                 if att.contains(x - originX, y - originY) { return {} }
             }
+            // A modal overlay owns the pointer: outside it, nothing happens.
+            if overlays.contains(where: \.modal) { return {} }
             // Outside the popup but still on this window: prefer a real target
             // in the main tree (menu bar titles especially) over a blind
             // dismiss. A native menubar switches on the same click that leaves
@@ -2397,6 +2399,7 @@ public final class LayoutHost {
             }
             // Hovering the panel must not highlight what is underneath it.
             if att.contains(x - originX, y - originY) { return nil }
+            if att.modal { return nil }
         }
 
         return hoverWalk(root, x: x, y: y, ox: originX, oy: originY)
@@ -2432,6 +2435,7 @@ public final class LayoutHost {
                 return id
             }
             if att.contains(x - originX, y - originY) { return nil }
+            if att.modal { return nil }
         }
 
         return sceneHoverWalk(root, x: x, y: y, ox: originX, oy: originY)
@@ -2499,8 +2503,10 @@ public final class LayoutHost {
                 return chain
             }
             // A wheel over the panel must not scroll what is underneath it,
-            // same rule hover follows.
+            // same rule hover follows. Nor, under a modal one, anywhere else:
+            // this chain is also how drops, drags and presses find a target.
             if att.contains(x - originX, y - originY) { return [] }
+            if att.modal { return [] }
         }
 
         _ = scrollChainWalk(root, x: x, y: y, ox: originX, oy: originY, into: &chain)

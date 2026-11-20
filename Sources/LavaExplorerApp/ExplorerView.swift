@@ -18,7 +18,7 @@ enum PaneChrome {
     static var dialogStyle: OverlayStyle {
         let look = ExplorerLook.current
         return OverlayStyle(background: look.card, border: look.divider, cornerRadius: 24,
-                            padding: 22, scrim: look.text.opacity(0.18))
+                            padding: 22, scrim: look.text.opacity(0.18), modal: true)
     }
 
     /// The menus in the window — a file's, a drop's — as the desktop's menus

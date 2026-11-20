@@ -262,6 +262,10 @@ public final class DrawList {
     private var retainedShift: (x: Float, y: Float) = (0, 0)
     /// The tooltip anchor's rect, if this frame's walk passed it. See
     /// `Tooltips`.
+    /// Set while the main tree is emitted under a modal overlay. See
+    /// `emitTree`.
+    private var hoverBlocked = false
+
     private var pendingTooltip: (
         text: String, placement: TooltipPlacement, x: Float, y: Float, w: Float, h: Float
     )?
@@ -949,7 +953,7 @@ public final class DrawList {
         // sweeps across. The press tint stays, so whatever the drag started
         // on still reads as held. Both sources repaint when they begin and
         // end, which is what puts the tints back.
-        let suspended = DragGestureRouter.isActive || ScrollbarDrag.isActive
+        let suspended = DragGestureRouter.isActive || ScrollbarDrag.isActive || hoverBlocked
         cmd.color = suspended ? 0 : (hoverTint.map(fadedColor) ?? 0)
         cmd.param = pressTint.map(fadedColor) ?? 0
         // Renderer hover/press tints honour this so a rounded row does
@@ -1365,7 +1369,12 @@ public final class DrawList {
         // place that knows a wake turned into drawing, and scene ids age on
         // passes that draw. See `SceneNodeIdentity`.
         SceneNodeIdentity.noteEmitPass()
+        // Under a modal overlay the window behind takes no pointer, so none
+        // of it may light up under one either: the renderer resolves hover
+        // tints by itself, and would.
+        hoverBlocked = OverlayScan.presented(in: root).contains(where: \.modal)
         emitNode(root, ox: originX, oy: originY)
+        hoverBlocked = false
 
         // After the main walk, so overlays paint above everything and — because
         // the clip stack is balanced by now — are not scissored by whatever
