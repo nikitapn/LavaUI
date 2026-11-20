@@ -12,6 +12,7 @@ enum PaneChrome {
     /// Shorter than the strip: the gap above is what makes the active tab
     /// read as a tab rather than a stripe.
     static let tabHeight: Float = 30
+    static let outlineWidth: Float = 2
 
     /// A dialog's card: the panes' colour, the design's 24pt corner, and
     /// the window dimmed behind it.
@@ -180,19 +181,26 @@ private struct PaneView: View {
         let active = session.layout.activePaneID == paneID
         // The outline that says which pane the keys go to — only when there
         // is more than one to choose between.
-        let ringed = active && session.layout.panes.count > 1
+        let split = session.layout.panes.count > 1
+        let ringed = active && split
+        let outlineInset = split ? PaneChrome.outlineWidth : 0
         return VStack(flexGrow: 1, padding: 0, spacing: 0) {
             if let pane {
-                ExplorerTabs(session: session, pane: pane, active: active, ringed: ringed)
-                PaneCard(session: session, pane: pane, ringed: ringed) {
-                    Toolbar(session: session, paneID: paneID, tab: pane.tabs.current)
-                    if let draft = session.bulkRenameDraft, draft.tabID == pane.tabs.current.id {
-                        BulkRenamePane(session: session, draft: draft)
-                    } else {
-                        FilePane(session: session, paneID: paneID, tab: pane.tabs.current)
+                ExplorerTabs(session: session, pane: pane, ringed: ringed, outlineInset: outlineInset)
+                VStack(flexGrow: 1, padding: 0, spacing: 0) {
+                    PaneCard(session: session, pane: pane, ringed: ringed) {
+                        Toolbar(session: session, paneID: paneID, tab: pane.tabs.current)
+                        if let draft = session.bulkRenameDraft, draft.tabID == pane.tabs.current.id {
+                            BulkRenamePane(session: session, draft: draft)
+                        } else {
+                            FilePane(session: session, paneID: paneID, tab: pane.tabs.current)
+                        }
+                        PaneFooter(session: session, tab: pane.tabs.current, active: active)
                     }
-                    PaneFooter(session: session, tab: pane.tabs.current, active: active)
                 }
+                // SplitView clips to the pane. Reserve space for the card's
+                // outer stroke on both panes so switching focus keeps them still.
+                .padding([.leading, .trailing, .bottom], outlineInset)
             }
         }
         .padding(EdgeInsets(top: 4, leading: 0, bottom: 0, trailing: 0))
@@ -447,8 +455,8 @@ private struct ChooserBar: View {
 private struct ExplorerTabs: View {
     @Bindable var session: ExplorerSession
     let pane: ExplorerPane
-    let active: Bool
     let ringed: Bool
+    let outlineInset: Float
 
     static let height: Float = 40
     static let radius: Float = 16
@@ -462,6 +470,8 @@ private struct ExplorerTabs: View {
                         item(tab, look: look)
                     }
                 }
+                // The scroll viewport clips the first and last tab's outline.
+                .padding(.horizontal, outlineInset)
             }
             .flexGrow(0)
             .flexShrink(1)
@@ -527,8 +537,12 @@ private struct ExplorerTabs: View {
             Canvas(label: "tab-join", width: .pct(100), height: .pct(100)) { list, frame in
                 guard on else { return }
                 if ringed {
-                    list.roundedRect(x: frame.x - 2, y: frame.y - 2, w: frame.w + 4,
-                                     h: frame.h + 2, color: ring, radius: Self.radius + 2)
+                    let edge = PaneChrome.outlineWidth
+                    // The viewport ends at the card. Put the lower corners
+                    // beyond it so the tab's sides stay straight at the join.
+                    list.roundedRect(x: frame.x - edge, y: frame.y - edge, w: frame.w + 2 * edge,
+                                     h: frame.h + Self.radius + 2 * edge,
+                                     color: ring, radius: Self.radius + edge)
                 }
                 list.rect(x: frame.x, y: frame.y + Self.radius, w: frame.w,
                           h: frame.h - Self.radius, color: card)
@@ -568,8 +582,7 @@ private struct PaneCard<Content: View>: View {
         let look = ExplorerLook.current
         let card = look.card, ring = look.accent300
         let firstIsCurrent = pane.tabs.tabs.first?.id == pane.tabs.currentID
-        let ringed = ringed
-        let session = session
+        let edge = PaneChrome.outlineWidth
         let currentTab = pane.tabs.currentID
         return VStack(flexGrow: 1, padding: 0, spacing: 0) {
             content
@@ -581,10 +594,10 @@ private struct PaneCard<Content: View>: View {
             Canvas(label: "pane-card", width: .pct(100), height: .pct(100)) { list, frame in
                 let r = Self.radius
                 if ringed {
-                    list.roundedRect(x: frame.x - 2, y: frame.y - 2, w: frame.w + 4,
-                                     h: frame.h + 4, color: ring, radius: r + 2)
+                    list.roundedRect(x: frame.x - edge, y: frame.y - edge, w: frame.w + 2 * edge,
+                                     h: frame.h + 2 * edge, color: ring, radius: r + edge)
                     if firstIsCurrent {
-                        list.rect(x: frame.x - 2, y: frame.y - 2, w: r + 2, h: r + 2,
+                        list.rect(x: frame.x - edge, y: frame.y - edge, w: r + edge, h: r + edge,
                                   color: ring)
                     }
                 }
@@ -598,7 +611,9 @@ private struct PaneCard<Content: View>: View {
             // the two are one shape.
             Canvas(label: "pane-join", width: .pct(100), height: .pct(100)) { list, frame in
                 guard ringed, let tab = session.tabFrames[currentTab] else { return }
-                list.rect(x: tab.x, y: frame.y - 2, w: tab.w, h: 2, color: card)
+                // The rounded fill antialiases one pixel past the top edge.
+                let joinHeight = edge + 1
+                list.rect(x: tab.x, y: frame.y - joinHeight, w: tab.w, h: joinHeight, color: card)
             }
         }
     }
