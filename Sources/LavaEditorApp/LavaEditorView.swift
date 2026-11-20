@@ -11,7 +11,11 @@ struct LavaEditorView: View {
 
     var body: some View {
         VStack(flexGrow: 1, spacing: 0) {
-            EditorTabs(session: session, appearance: appearance)
+            // With a project open the sidebar runs the full height of the
+            // window and carries its buttons, and the tabs belong to the
+            // document column beside it — as in VS Code. Tabs across the top
+            // of both would put the tree under a strip of files it does not
+            // own.
             if let project = session.project, session.showsSidebar {
                 HSplitView(
                     fraction: $session.sidebarFraction,
@@ -21,9 +25,13 @@ struct LavaEditorView: View {
                     ProjectSidebar(session: session, project: project, appearance: appearance)
                         .agentId("project")
                 } trailing: {
-                    documentColumn
+                    VStack(flexGrow: 1, spacing: 0) {
+                        EditorTabs(session: session, appearance: appearance, showsWindowControls: false)
+                        documentColumn
+                    }
                 }
             } else {
+                EditorTabs(session: session, appearance: appearance)
                 documentColumn
             }
             statusBar(appearance)

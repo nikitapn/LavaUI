@@ -3,17 +3,24 @@ import LavaUI
 struct EditorTabs: View {
     @Bindable var session: EditorSession
     let appearance: EditorAppearance
+    /// False when something to the left — the project sidebar — carries the
+    /// window's buttons, as it does when it runs the full height of the window.
+    var showsWindowControls = true
 
-    private static let stripHeight: Float = 54
+    static let stripHeight: Float = 54
     private static let tabHeight: Float = 42
 
     var body: some View {
         let theme = appearance.theme
         return HStack(height: .pt(Self.stripHeight), padding: 0, alignment: .end, spacing: 4) {
-            if WindowBridge.drawsOwnChrome {
+            if showsWindowControls, WindowBridge.drawsOwnChrome {
                 WindowControls(style: appearance.windowControls)
                     .padding(EdgeInsets(top: 0, leading: 20, bottom: 15, trailing: 14))
                     .flexShrink(0)
+            } else {
+                // Clear of the split's grab strip, so the first tab is not
+                // flush against the sidebar's edge.
+                Spacer().frame(width: .pt(6), height: .pt(Self.stripHeight)).flexGrow(0)
             }
 
             ScrollView(.horizontal, showsIndicator: false, position: session.tabScroll) {

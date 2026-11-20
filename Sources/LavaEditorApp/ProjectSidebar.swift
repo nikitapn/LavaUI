@@ -47,6 +47,7 @@ struct ProjectSidebar: View {
         let rowH = ((font?.lineHeight ?? 18) + 8).rounded()
         let colors = GitMarkColors(appearance)
         return VStack(flexGrow: 1, spacing: 0) {
+            titleStrip
             header(theme: theme)
             ScrollView(.vertical, position: project.scroll) {
                 LazyVStack(project.rows.indices, rowHeight: rowH) { index in
@@ -57,6 +58,21 @@ struct ProjectSidebar: View {
             .agentId("project-rows")
         }
         .background(theme.panel)
+    }
+
+    /// The window's buttons and somewhere to drag it by, at the height of
+    /// the tab strip beside it so the two read as one bar.
+    private var titleStrip: some View {
+        HStack(height: .pt(EditorTabs.stripHeight), padding: 0, alignment: .end, spacing: 0) {
+            if WindowBridge.drawsOwnChrome {
+                WindowControls(style: appearance.windowControls)
+                    .padding(EdgeInsets(top: 0, leading: 20, bottom: 15, trailing: 14))
+                    .flexShrink(0)
+            }
+            Spacer()
+                .frame(height: .pt(EditorTabs.stripHeight), minWidth: 16)
+                .windowDrag()
+        }
     }
 
     private func header(theme: Theme) -> some View {
