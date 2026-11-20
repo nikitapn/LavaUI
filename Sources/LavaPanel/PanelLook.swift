@@ -365,6 +365,21 @@ struct TrayCluster: View {
                     if pulse.muted && step > 0 { pulse.setMuted(false) }
                 })
                 .tooltip("Sound")
+            // Last, and only on a machine with a battery.
+            if let status = battery.status {
+                let open = session.batteryWindow != nil
+                GlassIconButton(
+                    icon: BatteryMonitor.glyph(status), size: size, glyph: 16,
+                    color: open ? palette.accentInk
+                        : battery.isLow ? palette.accentInk : palette.icon,
+                    fill: open ? palette.trayOn : .clear, hover: palette.chipOpen,
+                    strokeWidth: 2,
+                    agentId: "applet.battery",
+                    onPointer: { button in
+                        if button == PointerButton.left { session.toggleBattery() }
+                    })
+                    .tooltip("\(status.percent)% · \(battery.summary)")
+            }
         }
         .padding(2)
         .background(palette.chip)

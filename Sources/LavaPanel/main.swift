@@ -221,6 +221,8 @@ final class MenuSession {
     var playerWindow: WindowID?
     /// The power button's card, while it is up.
     var sessionCard: WindowID?
+    /// The battery card, while it is up.
+    var batteryWindow: WindowID?
     /// The session confirmation or error popup, if it is up.
     @ObservationIgnored var sessionWindow: WindowID?
     var powerBusy = false
@@ -1145,6 +1147,31 @@ final class MenuSession {
         playerWindow = opened
     }
 
+    /// The battery glyph: its card under the tray, or closed if it is up.
+    func toggleBattery() {
+        if let id = batteryWindow, LavaApp.isWindowOpen(id) {
+            LavaApp.closeWindow(id)
+            return
+        }
+        let anchor = popupAnchor(under: "tray", width: BatteryWindow.width)
+        var opened: WindowID?
+        opened = LavaApp.openPopup(
+            title: "Battery",
+            width: BatteryWindow.width,
+            height: BatteryWindow.height(details: BatteryWindow.details(battery).count),
+            anchor: anchor,
+            onClose: {
+                if let id = opened, session.batteryWindow == id { session.batteryWindow = nil }
+            }
+        ) {
+            BatteryWindow()
+        }
+        batteryWindow = opened
+        // Read now rather than at the next slow tick: the card should open on
+        // the current numbers.
+        DispatchQueue.global().async { battery.poll() }
+    }
+
     /// The power button: the session card under it, or closed if it is up.
     func toggleSessionCard() {
         if let id = sessionCard, LavaApp.isWindowOpen(id) {
@@ -1877,9 +1904,18 @@ LavaClient.onActiveWindow { window in
 }
 
 Thread.detachNewThread {
+    battery.poll()
+    var second = 0
     while true {
         MainQueue.async { clock.tick() }
         Thread.sleep(forTimeInterval: 1.0)
+        // The battery on the same thread: a few small file reads, and the
+        // interval is read here so an open card speeds it up at once.
+        second += 1
+        if second >= battery.interval {
+            second = 0
+            battery.poll()
+        }
     }
 }
 
@@ -1910,7 +1946,7 @@ LavaClient.onMenuChoice { serial, chosen in
 // A test lever: open popups by name once the bar has drawn, for screenshots
 // of cards a headless session has no pointer to open — the agent port drives
 // the bar's window only. `LAVA_PANEL_OPEN=calendar,year`; also `player`,
-// `network`, `volume`, `bluetooth`, `power`. Each waits a frame for the one before.
+// `network`, `volume`, `bluetooth`, `power`, `battery`. Each waits a frame for the one before.
 if let names = ProcessInfo.processInfo.environment["LAVA_PANEL_OPEN"] {
     func openNext(_ rest: ArraySlice<Substring>, delay: Int) {
         guard let name = rest.first else { return }
@@ -1926,6 +1962,7 @@ if let names = ProcessInfo.processInfo.environment["LAVA_PANEL_OPEN"] {
             case "volume": session.toggleVolume()
             case "bluetooth": session.toggleBluetooth()
             case "power": session.toggleSessionCard()
+            case "battery": session.toggleBattery()
             default: FileHandle.standardError.write(Data("LAVA_PANEL_OPEN: no '\(name)'\n".utf8))
             }
             openNext(rest.dropFirst(), delay: 10)
