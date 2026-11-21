@@ -124,7 +124,9 @@ extension EditorSession {
             notice = "Cannot open \(location.uri)"
             return
         }
-        open([url.standardizedFileURL])
+        // A definition is somewhere to look, not something to keep: following
+        // three of them should not leave three tabs.
+        open([url.standardizedFileURL], mode: .preview)
         guard active.isLoaded, active.url?.standardizedFileURL == url.standardizedFileURL else { return }
         let positions = languageServers.positions(for: active.id, text: active.text, encoding: encoding)
         guard let range = positions.characterRange(for: location.range) else { return }

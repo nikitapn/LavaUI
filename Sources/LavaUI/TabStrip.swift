@@ -102,12 +102,14 @@ public struct TabStripItem: View {
     private let onSelect: () -> Void
     private let onClose: () -> Void
     private let leading: ((DrawList, CanvasFrame) -> Void)?
+    private let onUnpin: (() -> Void)?
 
     public init(
         _ title: String, selected: Bool, emphasized: Bool = true,
         modified: Bool = false, outlined: Bool = true, fill: Color? = nil,
         style: Style? = nil, closeID: String = "close-tab",
         leading: ((DrawList, CanvasFrame) -> Void)? = nil,
+        onUnpin: (() -> Void)? = nil,
         onSelect: @escaping () -> Void, onClose: @escaping () -> Void
     ) {
         self.leading = leading
@@ -119,12 +121,14 @@ public struct TabStripItem: View {
         self.fill = fill
         self.style = style
         self.closeID = closeID
+        self.onUnpin = onUnpin
         self.onSelect = onSelect
         self.onClose = onClose
     }
 
     public var body: some View {
         let theme = Theme.current
+        let pinned = onUnpin != nil
         let font = style?.font ?? Environment.current.font ?? FontStore.default
         let text = style?.text ?? (selected && emphasized ? theme.textPrimary : theme.textSecondary)
         let insets = style == nil
@@ -151,11 +155,12 @@ public struct TabStripItem: View {
             Text(title, color: text, font: font, lineLimit: 1)
                 .frame(width: .pt(min(200, max(style == nil ? 60 : 0, font?.measure(title).width ?? 120))))
                 .clipped()
-            TabCloseButton(color: style?.text ?? theme.textDim, size: style == nil ? 8 : 9, action: onClose)
+            TabCloseButton(color: style?.text ?? theme.textDim, size: style == nil ? 8 : 9,
+                           isPinned: pinned, action: onUnpin ?? onClose, onMiddleClick: onClose)
             .hoverBackground(style?.closeHover ?? theme.hover)
             .cornerRadius(style == nil ? 4 : 11)
             .cursor(.pointer)
-            .tooltip("Close Tab")
+            .tooltip(pinned ? "Unpin" : "Close Tab")
             .agentId(closeID)
         }
         .padding(insets)
@@ -221,11 +226,28 @@ private enum TabOutline {
 private struct TabCloseButton: PrimitiveView {
     let color: Color
     let size: Float
+    let isPinned: Bool
     let action: () -> Void
-    var dumpDetail: String { "Close Tab" }
+    let onMiddleClick: () -> Void
+    var dumpDetail: String { isPinned ? "Unpin" : "Close Tab" }
     private var content: some PrimitiveView {
         HStack(padding: 6, alignment: .center) {
-            Mark(.cross, size: size, color: color)
+            if isPinned {
+                Canvas(label: "Pin", width: .pt(size), height: .pt(size)) { list, frame in
+                    let x = frame.x + frame.w / 2
+                    let y = frame.y
+                    let h = frame.h
+                    list.polyline([
+                        (x - 2.5, y + 1), (x + 2.5, y + 1),
+                        (x + 2, y + h * 0.48), (x + 3.5, y + h * 0.62),
+                        (x - 3.5, y + h * 0.62), (x - 2, y + h * 0.48), (x - 2.5, y + 1)
+                    ], color: color)
+                    list.line(x1: x, y1: y + h * 0.62, x2: x, y2: y + h - 0.5,
+                              color: color, width: 1.2)
+                }
+            } else {
+                Mark(.cross, size: size, color: color)
+            }
         }
     }
     func mountPrimitive() -> any AnyViewNode {
@@ -244,7 +266,8 @@ private struct TabCloseButton: PrimitiveView {
             guard let stack, button == PointerButton.left || button == PointerButton.middle else { return }
             PointerCapture.capture(stack.id, onMove: { _, _ in }, onUp: { [weak stack] in
                 guard let stack, HoverState.isHovered(stack.id) else { return }
-                action()
+                if button == PointerButton.middle { onMiddleClick() }
+                else { action() }
             })
         }
     }

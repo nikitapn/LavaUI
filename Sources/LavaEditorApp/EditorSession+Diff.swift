@@ -143,7 +143,7 @@ extension EditorSession {
         // so Done lands in the file; a deleted one has no tab to open.
         var documentID: Int?
         if item.change != .deleted, FileManager.default.fileExists(atPath: url.path) {
-            open([url])
+            open([url], mode: .preview)
             documentID = active.id
         }
         show(DiffModel(

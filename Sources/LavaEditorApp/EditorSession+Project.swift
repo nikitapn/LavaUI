@@ -51,10 +51,24 @@ extension EditorSession {
     }
 
     /// Opens a file from the tree in a tab, or brings its tab forward.
-    func openFromTree(_ path: String) {
+    func openFromTree(_ path: String, clicks: Int) {
         guard let project else { return }
+        let doubleClick = clicks > 1 && project.selected == path
         project.selected = path
-        open([project.tree.url(of: path)])
+        open([project.tree.url(of: path)], mode: doubleClick ? .treeDoubleClick : .treeClick)
+    }
+
+    func revealInExplorer(_ url: URL) {
+        guard let project, let path = project.tree.path(of: url), !path.isEmpty else { return }
+        showSidebar(.explorer)
+        project.reveal(url)
+        if let row = project.rows.firstIndex(where: { $0.node.path == path }) {
+            project.scroll.scroll(to: Float(row) * projectRowHeight)
+        }
+    }
+
+    var projectRowHeight: Float {
+        (((fonts.tab ?? FontStore.default)?.lineHeight ?? 18) + 8).rounded()
     }
 
     /// Shows `view` in the sidebar, asking for a folder first if none is

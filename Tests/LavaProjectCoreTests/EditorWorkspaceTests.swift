@@ -10,8 +10,8 @@ final class EditorWorkspaceTests: XCTestCase {
             scrollX: 5, scrollY: 18.5, anchor: 42, focus: 46, topOffset: 25, topFraction: 0.5
         )
         let snapshot = EditorSessionSnapshot(
-            files: [.init(path: "/old/repo/src/main#.swift", position: position),
-                    .init(path: "/old/repo/.editor/notes %25.txt"),
+            files: [.init(path: "/old/repo/src/main#.swift", position: position, tabState: .pinned),
+                    .init(path: "/old/repo/.editor/notes %25.txt", tabState: .preview),
                     .init(path: "/old/repo-other/notes.txt")],
             activePath: "/old/repo/src/main#.swift", fontSize: 14, projectRoot: "/old/repo",
             expandedFolders: ["src", "src/tests"], showsSidebar: false, sidebarFraction: 0.3
@@ -20,6 +20,7 @@ final class EditorWorkspaceTests: XCTestCase {
         let data = try EditorWorkspace.encode(snapshot, at: source)
         let stored = try JSONDecoder().decode(EditorSessionSnapshot.self, from: data)
         XCTAssertEqual(stored.projectRoot, "..")
+        XCTAssertEqual(stored.files.map(\.tabState), [.pinned, .preview, nil])
         XCTAssertEqual(stored.activePath, "../src/main#.swift")
         XCTAssertEqual(stored.files.map(\.path),
                        ["../src/main#.swift", "notes %25.txt", "/old/repo-other/notes.txt"])
@@ -59,7 +60,18 @@ final class EditorWorkspaceTests: XCTestCase {
         let data = Data(#"{"files":[{"path":"/repo/a.swift","position":{"scrollX":0,"scrollY":4.5,"anchor":2,"focus":3}}],"activePath":"/repo/a.swift"}"#.utf8)
         let snapshot = try JSONDecoder().decode(EditorSessionSnapshot.self, from: data)
         XCTAssertEqual(snapshot.activePath, "/repo/a.swift")
+        XCTAssertEqual(snapshot.files.first?.tabState ?? .open, .open)
         XCTAssertEqual(snapshot.files.first?.position, .init(scrollY: 4.5, anchor: 2, focus: 3))
+    }
+
+    func testImplicitSessionRoundTripsTabStates() throws {
+        let snapshot = EditorSessionSnapshot(files: [
+            .init(path: "/repo/pinned.swift", tabState: .pinned),
+            .init(path: "/repo/preview.swift", tabState: .preview),
+            .init(path: "/repo/open.swift", tabState: .open),
+        ])
+        let data = try JSONEncoder().encode(snapshot)
+        XCTAssertEqual(try JSONDecoder().decode(EditorSessionSnapshot.self, from: data), snapshot)
     }
 
     func testRecentPathsAreStandardizedDeduplicatedAndCapped() {

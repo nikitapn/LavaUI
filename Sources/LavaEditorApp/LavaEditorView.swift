@@ -51,7 +51,7 @@ struct LavaEditorView: View {
     /// The bars that come and go over the document, and the document.
     private var documentColumn: some View {
         VStack(flexGrow: 1, spacing: 0) {
-            if session.pendingClose != nil { unsavedBar }
+            if let document = session.closingDocument { unsavedBar(document) }
             if session.gotoOpen { gotoBar }
             if session.find.isOpen { findBar }
             if let notice = session.notice { noticeBar(notice) }
@@ -210,15 +210,15 @@ struct LavaEditorView: View {
     /// The unsaved-changes question, in the window rather than in a dialog.
     /// A modal in another window would work, but this keeps the file it is asking about
     /// visible behind it — which is the information the answer depends on.
-    private var unsavedBar: some View {
+    private func unsavedBar(_ document: EditorDocument) -> some View {
         HStack(padding: 8, alignment: .center, spacing: 8) {
-            Text("\(session.active.name) has unsaved changes.", color: .primary)
+            Text("\(document.name) has unsaved changes.", color: .primary)
             Spacer()
             Button("Save and Close") { session.resolvePendingClose(save: true) }
                 .agentId("unsaved-save")
             Button("Discard") { session.resolvePendingClose(save: false) }
                 .agentId("unsaved-discard")
-            Button("Cancel") { session.pendingClose = nil }.agentId("unsaved-cancel")
+            Button("Cancel") { session.cancelPendingClose() }.agentId("unsaved-cancel")
         }
         .background(Environment.current.theme.selectionFill)
     }

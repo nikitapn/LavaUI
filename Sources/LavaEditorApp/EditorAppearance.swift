@@ -51,12 +51,26 @@ struct EditorFonts {
     private(set) var documentBold: UIFont?
     let tab: UIFont?
     let tabSelected: UIFont?
+    let tabPreview: UIFont?
     let status: UIFont?
     let statusEmphasis: UIFont?
 
     init(editor: Editor?) {
         tab = Self.load(BundledFont.path("Figtree-Regular"), size: 14, editor: editor)
         tabSelected = Self.load(BundledFont.path("Figtree-SemiBold"), size: 14, editor: editor)
+        let catalog = FontCatalog.installed
+        let preferred = ["Figtree", "Adwaita Sans", "Inter", "Liberation Sans"].compactMap {
+            catalog.family(named: $0)
+        }
+        let (sans, other) = (
+            catalog.families.filter { $0.category == .sans },
+            catalog.families.filter { $0.category != .sans }
+        )
+        tabPreview = (preferred + sans + other).lazy
+            .filter { $0.availableStyles.contains(.italic) }
+            .compactMap { $0.face(for: .italic) }
+            .compactMap { Self.load($0.path, size: 14, faceIndex: $0.index, editor: editor) }
+            .first
         status = Self.load(BundledFont.path("Figtree-Regular"), size: 13, editor: editor)
         statusEmphasis = Self.load(BundledFont.path("Figtree-SemiBold"), size: 13, editor: editor)
     }

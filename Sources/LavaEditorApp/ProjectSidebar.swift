@@ -99,7 +99,7 @@ struct ProjectExplorer: View {
     var body: some View {
         let theme = appearance.theme
         let font = session.fonts.tab ?? FontStore.default
-        let rowH = ((font?.lineHeight ?? 18) + 8).rounded()
+        let rowH = session.projectRowHeight
         let colors = GitMarkColors(appearance)
         return VStack(flexGrow: 1, spacing: 0) {
             header(theme: theme)
@@ -145,12 +145,13 @@ struct ProjectExplorer: View {
         return Canvas(
             label: "project-row",
             width: .pct(100), height: .pt(rowH),
-            onTap: {
+            onGesture: { gesture in
+                guard gesture.phase == .began, gesture.button == PointerButton.left else { return }
                 if row.node.isDirectory {
                     project.selected = row.node.path
                     project.toggle(row.node.path)
                 } else {
-                    session.openFromTree(row.node.path)
+                    session.openFromTree(row.node.path, clicks: gesture.clickCount)
                 }
             }
         ) { list, frame in

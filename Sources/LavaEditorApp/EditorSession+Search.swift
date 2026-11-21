@@ -42,8 +42,8 @@ extension EditorSession {
     }
 
     func openProjectMatch(_ url: URL, line: ProjectSearchLine, match: Int) {
-        open([url])
-        guard active.isLoaded else { return }
+        open([url], mode: .preview)
+        guard active.isLoaded, active.url?.standardizedFileURL == url.standardizedFileURL else { return }
         guard let range = line.selection(in: active.text, match: match) else {
             notice = "This line has changed. Run the search again to refresh the results."
             return
