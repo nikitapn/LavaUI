@@ -173,9 +173,9 @@ public final class LavaWindow {
                     model: menuHost.model,
                     onActivate: { _ in },
                     content: makeRoot()
-                ).structureLines()
+                ).rootStructureLines()
             }
-            return makeRoot().structureLines()
+            return makeRoot().rootStructureLines()
         }
     }
 

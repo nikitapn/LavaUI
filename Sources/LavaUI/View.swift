@@ -56,6 +56,19 @@ extension View {
         defaultStructureLines(indent: indent)
     }
 
+    /// The whole structure dump of a root view, through the protocol
+    /// requirement — so a view's own `structureLines(indent:)` is used.
+    ///
+    /// The point of this being a function: the requirement has no default
+    /// argument, so a bare `structureLines()` on a generic `V: View` cannot
+    /// bind to it, and binds statically to the default below instead — the
+    /// composite one, which walks `body`. On a primitive root (any app wrapped
+    /// in `.theme(...)`) that trapped in the primitive's `body`, and
+    /// `LAVAUI_DEBUG=1` crashed every such app at startup.
+    func rootStructureLines() -> [String] {
+        structureLines(indent: 0)
+    }
+
     /// The structure dump every composite view gets: its own type name, then its
     /// `body` one level deeper. Call it from a custom `structureLines(indent:)`
     /// that wants to add to the default rather than replace it.
