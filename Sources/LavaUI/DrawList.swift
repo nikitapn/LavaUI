@@ -4,85 +4,10 @@ import Foundation
 
 // Phase 3 — immediate draw list. C++ owns `canvas::DrawCommand` layout.
 
-/// What one draw command draws. Mirrors `canvas::DrawCommandKind` in
-/// `draw_command.hpp`, which documents how each kind uses the command's fields.
-public enum DrawKind: UInt32 {
-    /// Filled rectangle.
-    case rect = 0
-    /// Filled rectangle with rounded corners; `aux` is the corner radius.
-    case roundedRect = 1
-    /// A run of shaped glyphs. `param` is the first glyph and `w` the glyph count.
-    case text = 2
-    /// Filled circle centred on `x,y`; `aux` is the radius.
-    case circle = 3
-    /// Line from `x,y` to `w,h`.
-    case line = 4
-    /// Starts clipping to `x,y,w,h`, intersected with any clip already in force.
-    case pushClip = 5
-    /// Ends the innermost clip.
-    case popClip = 6
-    /// Textured quad. `param` is the texture id and `color` a tint.
-    case image = 7
-    /// Flush UI so far, blur the resolve under x,y,w,h (`aux` = radius px).
-    case beginBackdropBlur = 8
-    /// Closes a blur scope (bookkeeping; engine no-ops today).
-    case endBackdropBlur = 9
-    /// Draw everything up to the matching End into an offscreen target instead
-    /// of the frame, blur it, and composite it back over x,y,w,h with its own
-    /// alpha (`aux` = radius px).
-    case beginContentBlur = 10
-    /// Closes the scope a `beginContentBlur` opened.
-    case endContentBlur = 11
-    /// Filled arbitrary polygon. `param`/`w` index into `meshVertices`
-    /// (first index, count); `aux` 0 fans around vertex 0, 1 triangulates
-    /// alternating inner/outer pairs as a ring strip.
-    case mesh = 12
-    /// Connected 1px line strip. `param`/`w` index into `meshVertices`.
-    case polyline = 13
-    /// Depth-tested 3D triangles from a `Scene3D`, indexing the frame's spatial vertices.
-    case spatialTriangles = 14
-    /// Rounded rect filled with a two-stop linear ramp. `aux` = radius,
-    /// `param` = index into the frame's gradients, `color` = the start colour
-    /// so a consumer that ignores gradients still paints something sane.
-    case linearGradientRect = 21
-    /// Opens a scene node: `param` = id, x/y = local offset, w/h = viewport,
-    /// `color` = `SceneNodeFlags`. See `draw_command.hpp` — the renderer owns
-    /// state against the id, which is what a node has and a command does not.
-    case beginNode = 16
-    /// Closes the innermost node; x/y carry the content extent.
-    case endNode = 17
-    /// Declares what the enclosing node should animate toward. See
-    /// `NodeAnimate` in `draw_command.hpp`.
-    case nodeAnimate = 18
-    /// Retargets the enclosing scroll node once per request serial.
-    case nodeScrollTo = 20
-    /// Clears depth inside one `Scene3D` viewport before its triangles.
-    case spatialBegin = 15
-    /// Declares `x,y,w,h` of this frame fully opaque. Draws nothing; lets a
-    /// compositor stop blending the surface and skip what is behind it.
-    /// See `OpaqueBounds` in `draw_command.hpp`.
-    case opaqueBounds = 22
-    /// Textured quad sourced from another compositor surface. `param` is
-    /// the surface id; `aux` is the longest dest edge (0 = native).
-    case imageSurface = 23
-    /// Rounded rect drawn as an outline lying inside `x,y,w,h`. `aux` = the
-    /// outer corner radius, `param` = stroke width in 24.8 fixed point.
-    /// See `StrokedRect` in `draw_command.hpp`.
-    case strokedRect = 24
-    /// Glass on the next fill, image or backdrop: `aux` = refraction in px,
-    /// `param` = rim strength in 1/255ths, `w` = an image's corner radius,
-    /// `h` = frost, 0…1, `x` = magnification (0 or 1: none).
-    /// See `Glass` in `draw_command.hpp`.
-    case glass = 25
-    /// Rounded corners for the next image: `x,y,w,h` = the box it is cut
-    /// to, centred on the picture; `aux` = corner radius. See `ImageClip` in
-    /// `draw_command.hpp`.
-    case imageClip = 26
-    /// A soft shadow cast by a rounded rect: `aux` = corner radius, `param` =
-    /// blur in pixels, with `DrawList.shadowHollowBit` set when nothing is to
-    /// be drawn inside the rect. See `Shadow` in `draw_command.hpp`.
-    case shadow = 19
+/// What one draw command draws.
+public typealias DrawKind = DrawCommandKind
 
+extension DrawKind {
     /// Whether a `glass` prefix in front of this kind is consumed by it. The
     /// renderer's list, in `render_window.cpp`; anything else would leave the
     /// prefix for a later command.
@@ -97,8 +22,7 @@ public enum DrawKind: UInt32 {
     }
 }
 
-/// Bits in a `beginNode` command's `color` field. Mirrors
-/// `canvas::SceneNodeFlags`.
+/// Bits in a `beginNode` command's `color` field.
 public struct SceneNodeFlags: OptionSet, Sendable {
     /// The flag bits.
     public let rawValue: UInt32
@@ -106,25 +30,25 @@ public struct SceneNodeFlags: OptionSet, Sendable {
     public init(rawValue: UInt32) { self.rawValue = rawValue }
 
     /// Clip children to the node's viewport, moving with the node.
-    public static let clip = SceneNodeFlags(rawValue: 1 << 0)
+    public static let clip = SceneNodeFlags(rawValue: SceneNodeFlag.clip.rawValue)
     /// The renderer owns a vertical scroll offset for this node — wheel
     /// events inside it move the subtree without the producer hearing about
     /// it, or being woken to redraw.
-    public static let scrollY = SceneNodeFlags(rawValue: 1 << 1)
+    public static let scrollY = SceneNodeFlags(rawValue: SceneNodeFlag.scrollY.rawValue)
     /// The renderer owns a horizontal scroll offset for this node. See `scrollY`.
-    public static let scrollX = SceneNodeFlags(rawValue: 1 << 2)
+    public static let scrollX = SceneNodeFlags(rawValue: SceneNodeFlag.scrollX.rawValue)
     /// Report hover for this node even when it declares no hover tint, so a
     /// hover callback can hear about it.
-    public static let hitTest = SceneNodeFlags(rawValue: 1 << 3)
+    public static let hitTest = SceneNodeFlags(rawValue: SceneNodeFlag.hitTest.rawValue)
     /// Commands inside the node use LavaUI's window-space coordinates. The
     /// renderer applies only retained transforms, not the node origin again.
-    public static let absoluteCoordinates = SceneNodeFlags(rawValue: 1 << 4)
+    public static let absoluteCoordinates = SceneNodeFlags(rawValue: SceneNodeFlag.absoluteCoordinates.rawValue)
     /// This node handles the wheel itself, so the renderer must not scroll an
     /// enclosing container on its behalf. See `ScrollRouter`.
-    public static let wheel = SceneNodeFlags(rawValue: 1 << 5)
+    public static let wheel = SceneNodeFlags(rawValue: SceneNodeFlag.wheel.rawValue)
     /// Snap the hover tint off instead of easing it. Dense full-width rows
-    /// need this; a button does not. See `kSceneNodeHoverSnap`.
-    public static let hoverSnap = SceneNodeFlags(rawValue: 1 << 6)
+    /// need this; a button does not. See `SceneNodeFlag.hoverSnap`.
+    public static let hoverSnap = SceneNodeFlags(rawValue: SceneNodeFlag.hoverSnap.rawValue)
 }
 
 /// Bits in a `scrollNode` command's `color` field. Mirrors
@@ -234,7 +158,7 @@ public final class DrawList {
     /// decides to draw nothing (a zero size, an image not loaded yet) would
     /// land on some unrelated view further down the list. `append` writes it
     /// only immediately before a command that consumes it, and `withGlass`
-    /// drops it whatever happened. See `Glass` in `draw_command.hpp`.
+    /// drops it whatever happened. See `glass` in `idl/drawlist.npidl`.
     private var heldGlass: (
         refraction: Float, rim: Float, corner: Float, frost: Float,
         magnification: Float
@@ -720,7 +644,7 @@ public final class DrawList {
             inst.y = penY + g.y
             appendGlyph(inst)
         }
-        // `w` carries the glyph count for Text (see draw_command.hpp).
+        // `w` carries the glyph count for `text` (see idl/drawlist.npidl).
         append(
             kind: .text, x: x, y: y, w: Float(run.count), h: h,
             color: color, param: first
@@ -863,8 +787,8 @@ public final class DrawList {
     }
 
     /// `sharedEnds`: the shape's two closing edges (a wedge's straight sides)
-    /// meet a neighbour, so the renderer leaves them unfaded — see `Mesh` in
-    /// draw_command.hpp.
+    /// meet a neighbour, so the renderer leaves them unfaded — see `mesh` in
+    /// `idl/drawlist.npidl`.
     private func emitMesh(
         _ points: [(x: Float, y: Float)], color: Color, isRing: Bool, sharedEnds: Bool = false
     ) {

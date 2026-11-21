@@ -530,7 +530,7 @@ bool CanvasSurface::frostWithTexture(int id, float radius, float cornerRadius,
   if (id <= 0) return false;
 
   canvas::DrawCommand begin{};
-  begin.kind = static_cast<uint32_t>(canvas::DrawCommandKind::BeginContentBlur);
+  begin.kind = static_cast<uint32_t>(canvas::DrawCommandKind::beginContentBlur);
   // The plate's own rect, inside a canvas that holds a margin round it.
   if (frostRect_.w > 0 && frostRect_.h > 0) {
     begin.x = static_cast<float>(frostRect_.x);
@@ -547,14 +547,14 @@ bool CanvasSurface::frostWithTexture(int id, float radius, float cornerRadius,
   begin.param = static_cast<uint32_t>(std::max(0.f, cornerRadius) + 0.5f);
 
   canvas::DrawCommand image{};
-  image.kind = static_cast<uint32_t>(canvas::DrawCommandKind::Image);
+  image.kind = static_cast<uint32_t>(canvas::DrawCommandKind::image);
   image.w = static_cast<float>(width_);
   image.h = static_cast<float>(height_);
   image.param = static_cast<uint32_t>(id);
   image.color = 0xffffffffu;
 
   canvas::DrawCommand end{};
-  end.kind = static_cast<uint32_t>(canvas::DrawCommandKind::EndContentBlur);
+  end.kind = static_cast<uint32_t>(canvas::DrawCommandKind::endContentBlur);
   end.aux = std::max(0.f, refractPx);
   end.w = std::clamp(frost, 0.f, 1.f);
   // The rest of the plate's glass, in fields an End has no other use for.
@@ -737,19 +737,19 @@ void CanvasSurface::keyEvent(int key, int action, int mods) {
 
 void CanvasSurface::fileDrop(float x, float y, int button) {
   renderer_.engine().postInputEvent(
-      static_cast<uint32_t>(canvas::InputEventKind::FileDrop), x, y, button, 0,
+      static_cast<uint32_t>(canvas::InputEventKind::fileDrop), x, y, button, 0,
       windowId_);
 }
 
 void CanvasSurface::dragOver(float x, float y) {
   renderer_.engine().postInputEvent(
-      static_cast<uint32_t>(canvas::InputEventKind::DragOver), x, y, 0, 0,
+      static_cast<uint32_t>(canvas::InputEventKind::dragOver), x, y, 0, 0,
       windowId_);
 }
 
 void CanvasSurface::dragLeave() {
   renderer_.engine().postInputEvent(
-      static_cast<uint32_t>(canvas::InputEventKind::DragLeave), 0.f, 0.f, 0, 0,
+      static_cast<uint32_t>(canvas::InputEventKind::dragLeave), 0.f, 0.f, 0, 0,
       windowId_);
 }
 

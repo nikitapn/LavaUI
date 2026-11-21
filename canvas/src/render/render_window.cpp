@@ -1602,9 +1602,9 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
   for (size_t i = 0; i < list.commandCount; ++i) {
     const auto &command = list.commands[i];
     const auto kind = static_cast<canvas::DrawCommandKind>(command.kind);
-    if (kind == canvas::DrawCommandKind::Image && command.param != 0)
+    if (kind == canvas::DrawCommandKind::image && command.param != 0)
       textureIds.insert(command.param);
-    else if (kind == canvas::DrawCommandKind::ImageSurface && command.param != 0) {
+    else if (kind == canvas::DrawCommandKind::imageSurface && command.param != 0) {
       sampledLiveSurface_ = true;
       const uint32_t maxSide =
         command.aux > 0.f ? static_cast<uint32_t>(command.aux) : 0u;
@@ -1613,7 +1613,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
           id > 0) {
         textureIds.insert(static_cast<uint32_t>(id));
       }
-    } else if (kind == canvas::DrawCommandKind::SpatialTriangles) {
+    } else if (kind == canvas::DrawCommandKind::spatialTriangles) {
       if (command.y == 1.f) {
         sampledLiveSurface_ = true;
         const uint32_t surfaceId = textureIdFromFloat(command.x);
@@ -1674,7 +1674,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
 
   // A `Glass` prefix waiting for the command it belongs to. Taken by the next
   // fill, image or backdrop and cleared there, so it can never leak onto a
-  // later quad — see `DrawCommandKind::Glass`.
+  // later quad — see `DrawCommandKind::glass`.
   QuadRenderer::Glass pendingGlass;
   // An `ImageClip` waiting for its image: the rounded box's half size and
   // radius, or a zero half size for none. Taken by the next image.
@@ -1698,7 +1698,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
   for (size_t cmdIndex = 0; cmdIndex < list.commandCount; ++cmdIndex) {
     const auto &cmd = list.commands[cmdIndex];
     switch (static_cast<canvas::DrawCommandKind>(cmd.kind)) {
-    case canvas::DrawCommandKind::BeginNode: {
+    case canvas::DrawCommandKind::beginNode: {
       OpenNode node;
       node.id       = cmd.param;
       node.flags    = cmd.color;
@@ -1813,7 +1813,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       openNodes.push_back(node);
       break;
     }
-    case canvas::DrawCommandKind::NodeAnimate: {
+    case canvas::DrawCommandKind::nodeAnimate: {
       if (openNodes.empty()) break;  // outside any node; nothing to animate
       auto      &anim  = sceneState_[openNodes.back().id];
       const bool first = !anim.animationSeen;
@@ -1861,7 +1861,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       }
       break;
     }
-    case canvas::DrawCommandKind::NodeScrollTo: {
+    case canvas::DrawCommandKind::nodeScrollTo: {
       if (openNodes.empty() || cmd.param == 0) break;
       auto &state = sceneState_[openNodes.back().id];
       if (state.scrollRequestSerial == cmd.param) break;
@@ -1884,7 +1884,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       sceneResume_ = true;
       break;
     }
-    case canvas::DrawCommandKind::EndNode: {
+    case canvas::DrawCommandKind::endNode: {
       if (openNodes.empty()) break;  // unbalanced; ignore rather than corrupt
       const OpenNode node = openNodes.back();
       openNodes.pop_back();
@@ -1930,7 +1930,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
 
       if (node.clipped) quads_.popScissor();
       // Content extent arrives here because this is where the producer knows
-      // it — see `EndNode` in draw_command.hpp. Recorded against the node's
+      // it — see `endNode` in idl/drawlist.npidl. Recorded against the node's
       // identity, not just this frame, so the next frame can be short
       // without the scroll snapping back.
       auto &record    = sceneNodes_[node.recordIndex];
@@ -1997,11 +1997,11 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       opacity           = node.parentOpacity;
       break;
     }
-    case canvas::DrawCommandKind::ImageClip:
+    case canvas::DrawCommandKind::imageClip:
       pendingClipHalf = {std::max(0.f, cmd.w) * 0.5f, std::max(0.f, cmd.h) * 0.5f};
       pendingClipRadius = std::max(0.f, cmd.aux);
       break;
-    case canvas::DrawCommandKind::Glass:
+    case canvas::DrawCommandKind::glass:
       pendingGlass = {
         .refractPx = std::max(0.f, cmd.aux),
         .rim = static_cast<float>(std::min(cmd.param, 255u)) / 255.f,
@@ -2009,25 +2009,25 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
         .frost = std::clamp(cmd.h, 0.f, 1.f),
         .magnify = std::clamp(cmd.x, 1.f, 4.f)};
       break;
-    case canvas::DrawCommandKind::Rect:
+    case canvas::DrawCommandKind::rect:
       withGlass([&] {
         quads_.pushBox({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h},
                        faded(cmd.color), 0.f);
       });
       break;
-    case canvas::DrawCommandKind::RoundedRect:
+    case canvas::DrawCommandKind::roundedRect:
       withGlass([&] {
         quads_.pushBox({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h},
                        faded(cmd.color), cmd.aux);
       });
       break;
-    case canvas::DrawCommandKind::StrokedRect:
-      // `param` is 24.8 fixed point — see `StrokedRect` in draw_command.hpp.
+    case canvas::DrawCommandKind::strokedRect:
+      // `param` is 24.8 fixed point — see `strokedRect` in idl/drawlist.npidl.
       quads_.pushBoxStroke({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h},
                            faded(cmd.color), cmd.aux,
                            static_cast<float>(cmd.param) / 256.f);
       break;
-    case canvas::DrawCommandKind::LinearGradientRect: {
+    case canvas::DrawCommandKind::linearGradientRect: {
       // `param` indexes the frame's gradient array. Out of range means a
       // producer and this renderer disagree about the frame, so fall back to
       // the flat colour rather than reading past the array — the command
@@ -2047,10 +2047,10 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       }
       break;
     }
-    case canvas::DrawCommandKind::Circle:
+    case canvas::DrawCommandKind::circle:
       quads_.pushCircle({cmd.x + ox, cmd.y + oy}, cmd.aux, faded(cmd.color));
       break;
-    case canvas::DrawCommandKind::Shadow: {
+    case canvas::DrawCommandKind::shadow: {
       // `param` is the blur distance, the hollow bit and where the caster
       // is; `aux` the corner radius it has to match.
       float holeX = 0.f, holeY = 0.f;
@@ -2062,13 +2062,13 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
                         {holeX, holeY});
       break;
     }
-    case canvas::DrawCommandKind::Line:
-      // x,y = p0 and w,h = p1 (see draw_command.hpp). aux carries stroke
+    case canvas::DrawCommandKind::line:
+      // x,y = p0 and w,h = p1 (see idl/drawlist.npidl). aux carries stroke
       // width when the emitter sets it; 1.5px is the wire default.
       quads_.pushLine({cmd.x + ox, cmd.y + oy}, {cmd.w + ox, cmd.h + oy},
                       cmd.aux > 0.f ? cmd.aux : 1.5f, faded(cmd.color));
       break;
-    case canvas::DrawCommandKind::OpaqueBounds:
+    case canvas::DrawCommandKind::opaqueBounds:
       // Draws nothing; records a promise. Taken only at full opacity and
       // outside every scissor and node offset — a claim made inside a faded
       // or clipped subtree is about pixels the frame may not actually own,
@@ -2080,13 +2080,13 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
         opaqueH_ = cmd.h;
       }
       break;
-    case canvas::DrawCommandKind::PushClip:
+    case canvas::DrawCommandKind::pushClip:
       quads_.pushScissor({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h});
       break;
-    case canvas::DrawCommandKind::PopClip:
+    case canvas::DrawCommandKind::popClip:
       quads_.popScissor();
       break;
-    case canvas::DrawCommandKind::Text: {
+    case canvas::DrawCommandKind::text: {
       // The producer shaped this run and positioned every glyph; all the
       // renderer does is resolve glyph ids to atlas rects. No shaping here
       // means a drawn run cannot drift from the run measured for layout.
@@ -2156,7 +2156,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       }
       break;
     }
-    case canvas::DrawCommandKind::Mesh: {
+    case canvas::DrawCommandKind::mesh: {
       // The producer laid out every vertex (fan pivot, or inner/outer ring
       // pairs); the renderer only converts and triangulates.
       uint32_t first = 0, count = 0;
@@ -2172,7 +2172,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
                       (meshFlags & 1u) != 0, (meshFlags & 2u) != 0);
       break;
     }
-    case canvas::DrawCommandKind::Polyline: {
+    case canvas::DrawCommandKind::polyline: {
       uint32_t first = 0, count = 0;
       if (!sideBufferRange(cmd, list.meshVertexCount, 2, first, count)) break;
       meshPointScratch_.clear();
@@ -2184,7 +2184,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       quads_.pushPolyline(meshPointScratch_.data(), count, faded(cmd.color));
       break;
     }
-    case canvas::DrawCommandKind::SpatialTriangles: {
+    case canvas::DrawCommandKind::spatialTriangles: {
       uint32_t first = 0, count = 0;
       if (!sideBufferRange(cmd, list.spatialVertexCount, 3, first, count)) break;
       VkImageView texture = VK_NULL_HANDLE;
@@ -2208,7 +2208,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
                                   uv0, uv1, {ox, oy}, opacity);
       break;
     }
-    case canvas::DrawCommandKind::SpatialBegin:
+    case canvas::DrawCommandKind::spatialBegin:
       // The rect this clears depth over moves with the node, and so do the
       // triangles drawn into it — a `SpatialVertex` carries window pixels,
       // the producer having already projected them, so the node's transform
@@ -2216,8 +2216,8 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       // either: the triangles take the scissor an enclosing node pushed.
       quads_.pushSpatialBegin({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h});
       break;
-    case canvas::DrawCommandKind::Image:
-    case canvas::DrawCommandKind::ImageSurface: {
+    case canvas::DrawCommandKind::image:
+    case canvas::DrawCommandKind::imageSurface: {
       // Taken up front: an image that turns out not to be drawable still
       // consumed its prefix, or the glass would land on whatever came next.
       const QuadRenderer::Glass glass = takeGlass();
@@ -2227,7 +2227,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       pendingClipRadius = 0.f;
       uint32_t texId = cmd.param;
       if (static_cast<canvas::DrawCommandKind>(cmd.kind) ==
-          canvas::DrawCommandKind::ImageSurface) {
+          canvas::DrawCommandKind::imageSurface) {
         const uint32_t maxSide =
           cmd.aux > 0.f ? static_cast<uint32_t>(cmd.aux) : 0u;
         const int resolved =
@@ -2248,7 +2248,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       quads_.setGlass({});
       break;
     }
-    case canvas::DrawCommandKind::BeginBackdropBlur: {
+    case canvas::DrawCommandKind::beginBackdropBlur: {
       // Split so the GPU can end pass → blur → continue. The next segment
       // opens with a full-frame-UV composite of the glass rect.
       quads_.closeSegment();
@@ -2269,11 +2269,11 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
                           static_cast<uint8_t>(cmd.color & 0xffu)));
       break;
     }
-    case canvas::DrawCommandKind::EndBackdropBlur:
+    case canvas::DrawCommandKind::endBackdropBlur:
       // Bookkeeping / future nesting — no GPU work.
       break;
 
-    case canvas::DrawCommandKind::BeginContentBlur: {
+    case canvas::DrawCommandKind::beginContentBlur: {
       // The subtree lands in its own segment, drawn into the offscreen target
       // rather than the frame, so nothing is composited here.
       quads_.closeSegment();
@@ -2287,7 +2287,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       contentScopes.push_back(scope);
       break;
     }
-    case canvas::DrawCommandKind::EndContentBlur: {
+    case canvas::DrawCommandKind::endContentBlur: {
       if (contentScopes.empty()) break;
       const canvas::DrawCommand open = contentScopes.back();
       contentScopes.pop_back();
@@ -2795,14 +2795,14 @@ void RenderWindow::render(const canvas::DrawList &list)
   for (size_t cmdIndex = 0; cmdIndex < list.commandCount; ++cmdIndex) {
     const auto kind =
       static_cast<canvas::DrawCommandKind>(list.commands[cmdIndex].kind);
-    if (kind != canvas::DrawCommandKind::BeginBackdropBlur &&
-        kind != canvas::DrawCommandKind::BeginContentBlur) {
+    if (kind != canvas::DrawCommandKind::beginBackdropBlur &&
+        kind != canvas::DrawCommandKind::beginContentBlur) {
       continue;
     }
-    if (kind == canvas::DrawCommandKind::BeginBackdropBlur && cmdIndex > 0 &&
+    if (kind == canvas::DrawCommandKind::beginBackdropBlur && cmdIndex > 0 &&
         list.commands[cmdIndex].aux <= 0.f &&
         static_cast<canvas::DrawCommandKind>(list.commands[cmdIndex - 1].kind) ==
-          canvas::DrawCommandKind::Glass) {
+          canvas::DrawCommandKind::glass) {
       anySharp = true;
     }
     anyBlur = true;

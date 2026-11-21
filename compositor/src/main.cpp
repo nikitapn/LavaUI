@@ -4297,7 +4297,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     // verb, and nothing here has asked for one yet.
     control_->postInput(
         surface.id,
-        static_cast<uint32_t>(canvas::InputEventKind::WindowState), 0.f, 0.f,
+        static_cast<uint32_t>(canvas::InputEventKind::windowState), 0.f, 0.f,
         (surface.maximized || surface.fullscreen) ? 1 : 0, 0);
   }
 
@@ -4662,7 +4662,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     // The rectangle casting it: two corner radii plus the band, so every
     // corner is whole and the straight runs between them are the band.
     canvas::DrawCommand command{};
-    command.kind = static_cast<uint32_t>(canvas::DrawCommandKind::Shadow);
+    command.kind = static_cast<uint32_t>(canvas::DrawCommandKind::shadow);
     command.x = static_cast<float>(tile.pad);
     command.y = static_cast<float>(tile.pad);
     command.w = static_cast<float>(r * 2 + tile.band);
@@ -7343,7 +7343,7 @@ class SurfaceRegistry : public lava::CompositorHost {
           control_->postInput(surface.id, event.kind, event.x, event.y,
                               event.button, event.mods);
       if (serial != 0 &&
-          event.kind == static_cast<uint32_t>(canvas::InputEventKind::Resize)) {
+          event.kind == static_cast<uint32_t>(canvas::InputEventKind::resize)) {
         surface.resizeSerial = serial;
       }
       lava::FrameProbe::input(surface.id);
@@ -12934,7 +12934,7 @@ void Server::update_pointer_focus(uint32_t time_msec) {
 
   // Client surfaces next: they sit above the Wayland windows in the scene and
   // are not `wlr_surface`s, so `surface_at` cannot see them at all.
-  if (route_pointer(static_cast<uint32_t>(canvas::InputEventKind::MouseMove), 0,
+  if (route_pointer(static_cast<uint32_t>(canvas::InputEventKind::mouseMove), 0,
                     0)) {
     // Whatever that surface last asked for, which is "default" until a client
     // says otherwise. `route_pointer` has just set `pointerOver` to it.
@@ -14131,7 +14131,7 @@ void Server::leaveClientSurface(uint32_t nowOver) {
       }
       control->postInput(
           pointerOver,
-          static_cast<uint32_t>(canvas::InputEventKind::PointerLeave), 0.f, 0.f,
+          static_cast<uint32_t>(canvas::InputEventKind::pointerLeave), 0.f, 0.f,
           0, 0);
     }
   }
@@ -14161,7 +14161,7 @@ bool Server::route_pointer(uint32_t kind, int32_t button, int32_t mods) {
   if (surface == nullptr) return false;
   // Through the renderer, not around it — the hover under this pointer is its
   // to answer. See the input section of `CanvasSurface`.
-  if (kind == static_cast<uint32_t>(canvas::InputEventKind::MouseMove)) {
+  if (kind == static_cast<uint32_t>(canvas::InputEventKind::mouseMove)) {
     surface->canvas->pointerMove(static_cast<float>(sx),
                                  static_cast<float>(sy));
     // And where the drag is, when one is over it. Only for a drag that

@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "gen/drawlist.hpp"
+
 namespace canvas {
 
 /// Whether `CANVAS_TRACE_FRAMES` is set: log what a frame contained and what
@@ -21,290 +23,7 @@ namespace canvas {
 /// diagnose across a process boundary.
 bool traceFrames();
 
-enum class DrawCommandKind : uint32_t {
-  Rect = 0,
-  RoundedRect = 1,
-  Text = 2,       // param = first glyph index, w = glyph count
-  Circle = 3,     // aux = radius; x,y = center
-  Line = 4,       // x,y = p0; w,h = p1
-  PushClip = 5,   // x,y,w,h = scissor rect
-  PopClip = 6,
-  /// Textured quad. param = TextureManager id; x,y,w,h = dest rect; color = tint.
-  Image = 7,
-  /// Backdrop blur barrier. Flushes UI drawn so far, captures the main target
-  /// in x,y,w,h, blurs it, and composites the result. Children/chrome after
-  /// this draw sharp on top. `aux` = blur radius in pixels (clamped in engine).
-  ///
-  /// `param` = corner radius of the surface the frost sits under, in whole
-  /// pixels; 0 is square. The composite has to be told, because it is drawn
-  /// *under* the panel's own fill and so is the one part of a rounded glass
-  /// panel that the fill cannot cover — square corners on it show as bright
-  /// tabs poking out from behind the shape.
-  ///
-  /// `color`'s alpha byte = adaptive strength, 0…255: how far a bright
-  /// backdrop is compressed toward light grey so the glass still reads over a
-  /// white page. A producer that predates this sends white, which is full
-  /// strength — the intended default. The red byte is the saturation the
-  /// frost takes after the blur, `encodeSaturation`; white is unchanged. G and
-  /// B are ignored.
-  BeginBackdropBlur = 8,
-  /// Closes a blur scope (bookkeeping / future nesting). No GPU work yet.
-  EndBackdropBlur = 9,
-  /// Content blur. Everything between Begin and End is drawn into an offscreen
-  /// target instead of the frame, blurred, and composited back over the rect in
-  /// x,y,w,h with its own alpha. `aux` = radius in pixels. Where backdrop blur
-  /// frosts what is *behind* a view, this softens the view itself.
-  BeginContentBlur = 10,
-  /// `aux` = glass refraction at the composite's rim, in pixels; 0 is flat.
-  /// `param` = adaptive strength, 0…255, as on `BeginBackdropBlur`.
-  /// `w` = frost, 0…1: the grain of frosted glass on the composite.
-  /// Only the compositor's frost plates set either — LavaUI always sends 0,
-  /// so a `.blur()` never bends and is never greyed.
-  EndContentBlur = 11,
-  /// Filled arbitrary polygon (custom region — pie/donut wedges, etc.).
-  /// param = first vertex index, w = vertex count, into the mesh-vertex side
-  /// buffer (same pattern as Text/GlyphInstance). aux = 0 fans the vertices
-  /// around vertex 0 (a solid wedge/star-convex shape); aux = 1 treats them
-  /// as alternating inner/outer pairs and triangulates a ring strip between
-  /// them (an annulus sector — the shape a donut chart needs, since a hole
-  /// in the middle means there is no single point the whole boundary fans
-  /// from). aux is a bit set: 1 is that ring layout, 2 says the two edges
-  /// that end the shape — a wedge's straight sides — are shared with a
-  /// neighbour, so the renderer must not fade them (`pushMesh`).
-  Mesh = 12,
-  /// Connected 1px line strip. param = first vertex index, w = vertex count,
-  /// into the same MeshVertex side buffer used by Mesh.
-  Polyline = 13,
-  /// Depth-tested triangles emitted by a LavaUI Scene3D. param = first
-  /// SpatialVertex and w = vertex count (a multiple of three).
-  ///
-  /// `x` is the texture: a TextureManager id when `y == 0`, or a compositor
-  /// surface id when `y == 1` (then `aux` is the longest dest edge, same
-  /// contract as `ImageSurface`). The second form is how a client with no
-  /// GPU puts a live window on a card — the compositor resolves the id.
-  SpatialTriangles = 14,
-  /// Clears depth inside one Scene3D viewport before its triangles.
-  SpatialBegin = 15,
-  /// Opens a **scene node**: a named subtree the renderer can move without
-  /// the producer's help.
-  ///
-  ///   param = node id, assigned by the producer and stable across frames
-  ///   x, y  = local offset from the enclosing node
-  ///   w, h  = viewport: the node's hit rect, and what it clips to when
-  ///           `SceneNodeFlags::Clip` is set
-  ///   color = `SceneNodeFlags` bitfield
-  ///   aux   = hover inset: how far inside `w`×`h` the hover and press tints
-  ///           of the matching `EndNode` are drawn. Two integers in quarter
-  ///           pixels carried as one integer-valued float — horizontal in
-  ///           bits 0–9, vertical above — so it stays exact below 2^24. 0 is
-  ///           the whole rect, which is what a producer that predates it sends.
-  ///
-  /// Bracketing rather than a separate node array, because the command list
-  /// already works this way — `PushClip`/`PopClip` and the blur scopes are
-  /// the same idea, and a node is those plus an identity. A renderer that
-  /// ignored both kinds would draw exactly what it draws today, since a node
-  /// with no offset is transparent.
-  ///
-  /// What the identity buys is state the *renderer* owns across frames:
-  /// a scroll offset keyed by node id survives the producer republishing the
-  /// list, which is what lets a window scroll while the app that drew it is
-  /// stopped.
-  BeginNode = 16,
-  /// Closes the innermost open node.
-  ///
-  ///   x, y  = content extent
-  ///   w, h  = the vertical span of content actually emitted, in content
-  ///           space. Both zero means "all of it".
-  ///   color = tint drawn over the node while the pointer is inside it
-  ///   param = tint drawn over it while it is also being pressed
-  ///   aux   = corner radius of those tints, so a `.hoverBackground()` on a
-  ///           rounded row draws a rounded chip rather than a hard box. 0
-  ///           is a rectangle, matching the previous default.
-  ///
-  /// Both tints are RGBA8 and zero means none, so a node that says nothing
-  /// behaves exactly as before. They live on `EndNode` rather than
-  /// `BeginNode` because this is where they are *drawn*: an overlay has to go
-  /// on top of the subtree, and the subtree ends here.
-  ///
-  /// Declaring the appearance once and letting the renderer apply it is the
-  /// point. Hover is the most frequent state change in any interface and is
-  /// pure geometry the renderer already has — recomputing it in the producer
-  /// costs a round trip and a whole re-emit per mouse move, to arrive at an
-  /// answer the renderer could have had for free.
-  ///
-  /// The extent lives here and not on `BeginNode` because it is not known
-  /// there: how big a node's content turns out to be is a *result* of
-  /// emitting its children, not an input to it. The renderer needs it to
-  /// clamp scrolling — content minus viewport is exactly how far a node can
-  /// travel.
-  ///
-  /// The emitted span is what makes a *virtualized* node work. A producer
-  /// that declares five thousand rows and draws the twelve on screen has told
-  /// the renderer two different things: how far this node can eventually
-  /// scroll, and how far it can scroll *right now* with what is in the
-  /// arena. Without the second the renderer scrolls into memory nobody
-  /// filled, which is a blank panel — and a producer that is slow, or
-  /// stopped, is exactly when it happens.
-  EndNode = 17,
-  /// Declares what the enclosing node should be animating *toward*. Ignored
-  /// outside a `BeginNode`/`EndNode` pair.
-  ///
-  ///   color = `SceneAnimationFlags`: which properties this states
-  ///   x, y  = target translation, added to the node's local offset
-  ///   w     = target opacity, 0…1, multiplied through the subtree
-  ///   aux   = time constant in seconds, or a duration if
-  ///           `kSceneAnimDuration` is set; 0 uses the renderer's default
-  ///
-  /// A *target*, not a value, and that is the whole difference. The producer
-  /// says where the node should end up and stops thinking about it; the
-  /// renderer carries it there at the display rate. A producer that animated
-  /// by republishing a new value every frame would have to be scheduled every
-  /// frame to do it, which is the thing this exists to avoid — and it would
-  /// stop dead the moment that process got busy.
-  ///
-  /// A property is animated only while it is being declared. Retained like
-  /// everything else about a node, so a frame that ran out of arena before
-  /// reaching this command leaves the target alone rather than snapping it
-  /// back — but a producer that *stops* declaring a property keeps its last
-  /// target rather than reverting to a default.
-  ///
-  /// The first frame a node declares one, the property snaps to the target
-  /// instead of animating to it: a node that has only just appeared has no
-  /// previous value to have moved from, and fading every new node in from
-  /// nothing is not a default anyone asked for. To animate an entrance,
-  /// declare the start on one frame and the end on the next.
-  NodeAnimate = 18,
-  /// Asks the enclosing scroll node to reveal a producer-selected target.
-  ///
-  ///   x, y  = requested scroll target
-  ///   param = request serial; a repeated serial is ignored
-  ///   color = `SceneScrollFlags`
-  ///
-  /// The serial matters because draw lists are republished: without it every
-  /// frame would pull a node back to the selection after the user wheeled it.
-  NodeScrollTo = 20,
-  /// A drop shadow: a rounded rectangle whose edge fades outwards.
-  ///
-  ///   x, y, w, h = the rect casting it, in this surface's own coordinates
-  ///   aux        = corner radius, which must match the window's or the
-  ///                shadow will not sit under it
-  ///   param      = blur in pixels: how far the fade reaches past the rect,
-  ///                with `kShadowHollow` set to leave the caster's inside
-  ///                undrawn (a shadow under a translucent plate, CSS-style).
-  ///                The caster is the rect moved back by the offset packed
-  ///                in the middle bits (`shadowHoleOffset`), so a shadow
-  ///                dropped below its plate is still cut at the plate
-  ///   color      = the shadow's colour and its opacity at full strength
-  ///
-  /// A shape rather than a post-process, because that is what it is: a
-  /// compositor knows the rectangle a window occupies and needs no picture of
-  /// the window to draw what falls outside it. Blurring an actual image of the
-  /// window would cost a pass over the whole thing every frame to produce
-  /// something the SDF already describes exactly.
-  Shadow = 19,
-  /// Rounded rect filled with a two-stop linear ramp. `aux` = corner radius,
-  /// `param` = index into the frame's `GradientDesc` array, `color` = the
-  /// start colour (also what a reader that ignores gradients should paint).
-  ///
-  /// The parameters do not fit here — a second colour and an angle are twelve
-  /// bytes and this struct is full — so they go in a side array indexed by
-  /// `param`, which is how `Text`, `Mesh` and `SpatialTriangles` already carry
-  /// what will not fit. The alternative, widening `DrawCommand`, would charge
-  /// every rect in every frame for something a handful of them use.
-  LinearGradientRect = 21,
-  /// Declares the part of this frame that is fully opaque: `x,y,w,h` in
-  /// viewport pixels. `w` or `h` of 0 — and a frame that never sends one —
-  /// means "assume nothing", which is always safe.
-  ///
-  /// Draws nothing. It exists because opacity is the one thing about a frame
-  /// that only its producer knows and its *consumer* needs: a compositor
-  /// showing this surface has to blend every pixel of it unless something
-  /// tells it which ones cannot possibly let light through. Saying so lets
-  /// the scene skip both the blend and everything underneath.
-  ///
-  /// Per frame rather than per surface because that is the only form that
-  /// cannot go stale — a window that dims its own background is opaque on one
-  /// frame and not the next, and a producer that has to remember to retract a
-  /// standing claim eventually forgets.
-  ///
-  /// A conservative claim is fine and an optimistic one is a bug: the pixels
-  /// under a region declared opaque are not drawn at all, so a window that
-  /// oversells itself gets holes onto whatever the scene skipped.
-  OpaqueBounds = 22,
-  /// Textured quad whose source is another compositor surface's last frame,
-  /// not a TextureManager id.
-  ///
-  ///   param = surface id from `SubscribeWindows`
-  ///   aux   = longest dest edge in pixels (0 = native)
-  ///   x,y,w,h = dest rect, same as `Image`
-  ///
-  /// The producer is a GPU-less client: it cannot import a dma-buf and it
-  /// must not be sent one. It names the surface; the compositor that already
-  /// holds the buffer resolves it to a sampled texture (see
-  /// `TextureManager::setSurfaceResolver`). Without a resolver the command
-  /// draws nothing.
-  ImageSurface = 23,
-  /// A rounded rectangle drawn as an outline instead of a fill.
-  ///
-  ///   x, y, w, h = the *outer* edge of the border, not its centreline
-  ///   aux        = corner radius of that outer edge
-  ///   param      = stroke width, 24.8 fixed point (pixels * 256)
-  ///   color      = the stroke's colour
-  ///
-  /// The band lies wholly inside `x,y,w,h`, the way CSS `border` and
-  /// SwiftUI's `.border` do, so a bordered view occupies exactly the rect it
-  /// was laid out in and a caller can hand over the same rect it filled.
-  ///
-  /// `param` carries the width because `aux` is spoken for and this struct is
-  /// full. Fixed point rather than a whole-pixel integer: a hairline on a
-  /// fractional-scale output is 1.25 or 1.5 physical pixels, and rounding
-  /// that is the difference between a border and no border. 1/256 px is far
-  /// below anything a display can show.
-  ///
-  /// Its own kind rather than a `RoundedRect` with a width, so that a reader
-  /// which does not know about it draws *nothing* — the safe failure. Under a
-  /// shared kind the same command would fall through to the fill path and
-  /// paint a solid slab over the content the border was meant to frame.
-  StrokedRect = 24,
-  /// Glass on the *next* fill, image or backdrop — a prefix, not a scope.
-  ///
-  ///   aux   = refraction at the rim, in pixels (0: the rim does not bend)
-  ///   param = strength of the specular rim, in 1/255ths (0: no rim)
-  ///   w     = corner radius of the glass, read only by an `Image`, which
-  ///           carries none of its own
-  ///   h     = frost, 0…1: the grain of frosted glass, read by a backdrop
-  ///   x     = magnification about the glass's centre, read by a backdrop
-  ///           and an image (0 or 1: none — and 0 is what a writer that
-  ///           predates it leaves there)
-  ///
-  /// Consumed by the first `Rect`, `RoundedRect`, `LinearGradientRect`,
-  /// `Image`, `ImageSurface` or `BeginBackdropBlur` after it, whichever that
-  /// is, and by nothing else. Each does what it can with it: a backdrop bends
-  /// and disperses what it captured, an image bends its own pixels, and a
-  /// fill — which has nothing under it to bend — draws the rim alone. A fill
-  /// is drawn *over* the backdrop, so a glass view puts its rim there and
-  /// the tint does not bury it.
-  ///
-  /// A prefix rather than a field because this struct is full, and rather
-  /// than a scope because glass belongs to one view's own paint: a scope
-  /// would put a rim on every button inside the panel. A `BeginBackdropBlur`
-  /// that consumes one may carry `aux = 0`, which then means capture without
-  /// blurring — glass over a sharp backdrop.
-  ///
-  /// A reader that predates it skips it, and the view draws without glass.
-  Glass = 25,
-  /// Rounded corners for the *next* `Image` or `ImageSurface` — a prefix,
-  /// like `Glass`, because an image's own command has no field left.
-  ///
-  ///   x, y, w, h = the rounded box the picture is cut to
-  ///   aux        = its corner radius
-  ///
-  /// The box is centred on the image's own rect: the picture itself for
-  /// `.fit` and `.stretch`, and the layout box for `.fill`, whose picture
-  /// overshoots it on one axis and is cut back to it — which is why the box
-  /// is stated rather than taken from the image's rect.
-  ImageClip = 26,
-};
+using DrawCommandKind = ::lava::draw::DrawCommandKind;
 
 /// In a `Shadow` command's `param`: the bit that makes it hollow. The blur
 /// is the low 13 bits; nobody blurs by more than 8191 pixels.
@@ -394,37 +113,22 @@ enum SceneScrollFlags : uint32_t {
   kSceneScrollImmediate = 1u << 0,
 };
 
-/// Bits in `BeginNode.color`.
-enum SceneNodeFlags : uint32_t {
-  /// Clip children to the node's viewport. Equivalent to bracketing the
-  /// subtree in `PushClip`/`PopClip`, but it moves with the node.
-  kSceneNodeClip = 1u << 0,
-  /// The renderer owns a vertical scroll offset for this node: wheel events
-  /// inside its viewport move it, and the producer is not told and does not
-  /// need to be.
-  kSceneNodeScrollY = 1u << 1,
-  kSceneNodeScrollX = 1u << 2,
-  /// Report hover for semantic callbacks even when the node declares no tint.
-  kSceneNodeHitTest = 1u << 3,
-  /// Descendant commands are already in window coordinates. Apply retained
-  /// transforms, but do not add this node's origin to them a second time.
-  kSceneNodeAbsoluteCoordinates = 1u << 4,
-  /// The producer has its own use for the wheel here — a camera to zoom, a
-  /// document to page — so the renderer must not scroll a container on its
-  /// behalf just because one happens to enclose this node.
-  ///
-  /// Without it every wheel-handling widget inside a retained scroll view is
-  /// unreachable: the enclosing container is under the pointer too, and it is
-  /// the one that scrolls. Declaring the claim is the only way the renderer
-  /// can know the difference between "nothing here wants the wheel" and
-  /// "something here wants it and this process cannot see what".
-  kSceneNodeWheel = 1u << 5,
-  /// Do not ease the hover tint off. A full-width row that fades out over
-  /// a third of a second leaves a trail when the pointer sweeps a list;
-  /// a button that snaps off is the same chip, just not stacked twenty
-  /// deep. Default (flag clear) still eases both ways.
-  kSceneNodeHoverSnap = 1u << 6,
-};
+using SceneNodeFlags = ::lava::draw::SceneNodeFlag;
+
+inline constexpr uint32_t kSceneNodeClip =
+    static_cast<uint32_t>(SceneNodeFlags::clip);
+inline constexpr uint32_t kSceneNodeScrollY =
+    static_cast<uint32_t>(SceneNodeFlags::scrollY);
+inline constexpr uint32_t kSceneNodeScrollX =
+    static_cast<uint32_t>(SceneNodeFlags::scrollX);
+inline constexpr uint32_t kSceneNodeHitTest =
+    static_cast<uint32_t>(SceneNodeFlags::hitTest);
+inline constexpr uint32_t kSceneNodeAbsoluteCoordinates =
+    static_cast<uint32_t>(SceneNodeFlags::absoluteCoordinates);
+inline constexpr uint32_t kSceneNodeWheel =
+    static_cast<uint32_t>(SceneNodeFlags::wheel);
+inline constexpr uint32_t kSceneNodeHoverSnap =
+    static_cast<uint32_t>(SceneNodeFlags::hoverSnap);
 
 /// One node's scroll offset, on its way back to the producer.
 struct SceneNodeOffset {
@@ -530,7 +234,7 @@ struct GradientDesc {
 static_assert(sizeof(GradientDesc) == 16, "GradientDesc must stay packed");
 
 struct DrawCommand {
-  uint32_t kind = 0;
+  uint32_t kind = static_cast<uint32_t>(DrawCommandKind::rect);
   float x = 0.f;
   float y = 0.f;
   float w = 0.f;
@@ -542,122 +246,10 @@ struct DrawCommand {
 
 static_assert(sizeof(DrawCommand) == 32, "DrawCommand must stay 32 bytes");
 
-/// Raw pointer input for Swift hit-testing (Phase 6 full routing later).
-enum class InputEventKind : uint32_t {
-  None = 0,
-  MouseDown = 1,
-  MouseUp = 2,
-  MouseMove = 3,
-  /// Framebuffer / swapchain size changed. `x`/`y` hold new width/height.
-  Resize = 4,
-  /// Keyboard. `button` = key (GLFW), `x` = action (1 press/repeat, 0 release),
-  /// `y` = mods bitfield (GLFW: shift=1, control=2, alt=4, super=8).
-  Key = 5,
-  /// A committed character. `button` holds the Unicode scalar. Distinct from
-  /// Key because key codes are physical: they say nothing about layout, dead
-  /// keys or shift state, so only the char callback knows what was typed.
-  Text = 6,
-  /// Wheel / trackpad. `x`/`y` are scroll deltas in notches; `button` holds
-  /// the modifier bitfield so Ctrl+wheel can mean zoom.
-  Scroll = 7,
-  /// Window content needs a redraw (expose / un-minimize / compositor damage).
-  /// No payload in x/y/button.
-  Refresh = 8,
-  /// Files dropped on the window. `x`/`y` = cursor position, `button` =
-  /// path count. The paths themselves don't fit a fixed-size struct — pull
-  /// them via `Engine::pendingDroppedFiles()` while handling this event;
-  /// the next drop overwrites them.
-  FileDrop = 9,
-  /// A scene node moved. `button` = node id, `x`/`y` = its scroll offset.
-  ///
-  /// The read path for state the renderer owns. Scrolling a node deliberately
-  /// does not reach the producer — that is what makes it work while the
-  /// producer is stopped — but a producer that never learns where its node
-  /// ended up cannot virtualize a list, because it has no idea which rows are
-  /// on screen. So the *decision* stays here and the *result* goes back.
-  ///
-  /// Coalesced per node in the queue: only the latest position carries any
-  /// information, and an animating scroll produces one of these per frame.
-  /// A producer that does not care can ignore the kind entirely; nothing
-  /// here obliges it to redraw.
-  NodeScroll = 10,
-  /// A node finished the animation its producer declared. `button` = node id.
-  ///
-  /// The other half of declaring a target. A producer that says "move there"
-  /// and stops thinking about it has, by construction, no idea when it
-  /// arrived — and sequencing one transition after another is the ordinary
-  /// reason to care. Guessing with a timer would mean duplicating the
-  /// renderer's clock in a process that may not be scheduled when it matters.
-  ///
-  /// One per transition, on the frame it lands. Not sent for the snap a node
-  /// makes the first time it declares an animation, because nothing moved,
-  /// and not sent when a producer restates a target it had already reached.
-  NodeAnimationDone = 11,
-  /// The node under the pointer changed. `button` = node id, 0 for none.
-  ///
-  /// The renderer hit-tests to draw the tints, so it already knows; without
-  /// this the producer hit-tests the same geometry a second time, from
-  /// coordinates, to reach the same answer. Worse than redundant once nodes
-  /// move: a node the renderer has scrolled or animated is no longer where
-  /// the producer declared it, so the producer's own test is wrong exactly
-  /// when it matters.
-  ///
-  /// A press needs no event of its own. The renderer presses whatever is
-  /// hovered, and this is queued before the `MouseDown` that follows it, so
-  /// "the node this click is for" is the last one reported.
-  ///
-  /// Coalesced only against the back of the queue — a run of hover changes
-  /// collapses, but one separated by a `MouseDown` does not, because that is
-  /// the pairing the ordering above depends on.
-  NodeHover = 12,
-  /// The pointer left this surface. No payload.
-  ///
-  /// A surface hears about the pointer only while it is over it, so without
-  /// this the last `MouseMove` it received is where the pointer appears to
-  /// still be: a hover stays lit after the cursor has gone somewhere else
-  /// entirely, and a panel that reveals itself on approach never learns it
-  /// should hide again.
-  ///
-  /// Sent by whoever owns the pointer — a compositor — when the surface it was
-  /// over stops being the surface it is over. A windowed app gets it from
-  /// GLFW's cursor-leave, which answers the same question for the same reason.
-  PointerLeave = 13,
-  /// The window was maximized or restored. `button` = 1 maximized, 0 restored.
-  ///
-  /// A client that draws its own chrome has to hide that strip when the
-  /// compositor would have dropped a title bar — including when maximize
-  /// came from a keybinding the client never saw. Resize already says the
-  /// new size; this says *why*, so a toolbar can vanish without guessing
-  /// from the framebuffer dimensions.
-  WindowState = 14,
-  /// A drag offering files is over this surface. `x`/`y` = where.
-  ///
-  /// Not a `MouseMove`: nothing is pressed from this surface's side of a drag
-  /// — the drag's source owns the button — and a move is taken for hover.
-  /// This is the question a drop target gets to answer before the drop: a
-  /// folder lights up under it, a tab opens after the drag has rested on it.
-  /// Sent by whoever owns the pointer; a windowed app has no source for it.
-  DragOver = 15,
-  /// The drag left this surface, or ended anywhere. No payload.
-  DragLeave = 16,
-  /// The output scale this surface is drawn at changed. `x` = the scale
-  /// (1, 1.25, 1.5, 2…).
-  ///
-  /// Framebuffer pixels per layout pixel. A producer keeps laying out in
-  /// layout pixels — `Resize` still says the window's size in those — and
-  /// the renderer draws the list onto that many more pixels. What a producer
-  /// can do with this is everything the renderer cannot do for it: rasterise
-  /// text and decode images at the size they will actually cover. One that
-  /// ignores it still draws in the right place, with text resampled.
-  ///
-  /// Sent before the `Resize` that accompanies it, and only on a change, so
-  /// a producer at scale 1 never sees one. Sent by a compositor; a windowed
-  /// app has no source for it yet.
-  Scale = 17,
-};
+using InputEventKind = ::lava::draw::InputEventKind;
 
 struct InputEvent {
-  uint32_t kind = 0;
+  uint32_t kind = static_cast<uint32_t>(InputEventKind::none);
   float x = 0.f;
   float y = 0.f;
   int32_t button = 0;

@@ -111,7 +111,7 @@ void AppWindow::prepare()
     // Tell the producer so it re-lays-out and resubmits. Without this the
     // old fixed-size command list is presented into the new framebuffer.
     canvas::InputEvent ev;
-    ev.kind = static_cast<uint32_t>(canvas::InputEventKind::Resize);
+    ev.kind = static_cast<uint32_t>(canvas::InputEventKind::resize);
     ev.x = static_cast<float>(render_->getExtent().width);
     ev.y = static_cast<float>(render_->getExtent().height);
     ev.button = 0;
@@ -171,7 +171,7 @@ void AppWindow::noteSceneHover(float x, float y)
   internalRepaint_ = true;
 
   canvas::InputEvent ev;
-  ev.kind   = static_cast<uint32_t>(canvas::InputEventKind::NodeHover);
+  ev.kind   = static_cast<uint32_t>(canvas::InputEventKind::nodeHover);
   ev.button = static_cast<int32_t>(render_->hoveredSceneNode());
   std::lock_guard lock(inputMu_);
   // Against the back only. A run of hover changes as the pointer crosses a
@@ -246,7 +246,7 @@ void AppWindow::stepSceneAnimations()
     std::lock_guard lock(inputMu_);
     for (const auto &moved : sceneMovedScratch_) {
       canvas::InputEvent ev;
-      ev.kind   = static_cast<uint32_t>(canvas::InputEventKind::NodeScroll);
+      ev.kind   = static_cast<uint32_t>(canvas::InputEventKind::nodeScroll);
       ev.button = static_cast<int32_t>(moved.id);
       ev.x      = moved.x;
       ev.y      = moved.y;
@@ -273,7 +273,7 @@ void AppWindow::stepSceneAnimations()
     for (const uint32_t id : sceneFinishedScratch_) {
       canvas::InputEvent ev;
       ev.kind   = static_cast<uint32_t>(
-        canvas::InputEventKind::NodeAnimationDone);
+        canvas::InputEventKind::nodeAnimationDone);
       ev.button = static_cast<int32_t>(id);
       // Not coalesced, unlike `NodeScroll`. A position is a state and only
       // the newest one matters; an arrival is an event, and dropping it
@@ -294,7 +294,7 @@ void AppWindow::stepSceneAnimations()
 void AppWindow::queueResize(float width, float height)
 {
   canvas::InputEvent ev;
-  ev.kind = static_cast<uint32_t>(canvas::InputEventKind::Resize);
+  ev.kind = static_cast<uint32_t>(canvas::InputEventKind::resize);
   ev.x    = width;
   ev.y    = height;
   std::lock_guard lock(inputMu_);
@@ -312,7 +312,7 @@ void AppWindow::queueResize(float width, float height)
 void AppWindow::queueScale(float scale)
 {
   canvas::InputEvent ev;
-  ev.kind = static_cast<uint32_t>(canvas::InputEventKind::Scale);
+  ev.kind = static_cast<uint32_t>(canvas::InputEventKind::scale);
   ev.x    = scale;
   std::lock_guard lock(inputMu_);
   for (auto &queued : inputEvents_) {
@@ -381,7 +381,7 @@ void AppWindow::setClientSize(float width, float height)
   clientH_ = h;
 
   canvas::InputEvent ev;
-  ev.kind   = static_cast<uint32_t>(canvas::InputEventKind::Resize);
+  ev.kind   = static_cast<uint32_t>(canvas::InputEventKind::resize);
   ev.x      = w;
   ev.y      = h;
   ev.button = 0;
@@ -571,7 +571,7 @@ void AppWindow::installGlfwCallbacks()
       auto *self = static_cast<AppWindow *>(glfwGetWindowUserPointer(w));
       if (!self || width < 1 || height < 1) return;
       canvas::InputEvent ev;
-      ev.kind = static_cast<uint32_t>(canvas::InputEventKind::Resize);
+      ev.kind = static_cast<uint32_t>(canvas::InputEventKind::resize);
       ev.x = static_cast<float>(width);
       ev.y = static_cast<float>(height);
       ev.button = 0;
@@ -580,7 +580,7 @@ void AppWindow::installGlfwCallbacks()
         // Coalesce: keep only the latest size if several arrive before poll.
         if (!self->inputEvents_.empty() &&
             self->inputEvents_.back().kind ==
-              static_cast<uint32_t>(canvas::InputEventKind::Resize)) {
+              static_cast<uint32_t>(canvas::InputEventKind::resize)) {
           self->inputEvents_.back() = ev;
         } else {
           self->inputEvents_.push_back(ev);
@@ -610,7 +610,7 @@ void AppWindow::installGlfwCallbacks()
       double x = 0, y = 0;
       glfwGetCursorPos(w, &x, &y);
       canvas::InputEvent ev;
-      ev.kind = static_cast<uint32_t>(canvas::InputEventKind::FileDrop);
+      ev.kind = static_cast<uint32_t>(canvas::InputEventKind::fileDrop);
       ev.x = static_cast<float>(x);
       ev.y = static_cast<float>(y);
       // The button that carried the drag, as the compositor reports it for a
@@ -631,7 +631,7 @@ void AppWindow::installGlfwCallbacks()
 void AppWindow::queueRefreshEvent()
   {
     canvas::InputEvent ev;
-    ev.kind = static_cast<uint32_t>(canvas::InputEventKind::Refresh);
+    ev.kind = static_cast<uint32_t>(canvas::InputEventKind::refresh);
     ev.x = 0.f;
     ev.y = 0.f;
     ev.button = 0;
@@ -639,7 +639,7 @@ void AppWindow::queueRefreshEvent()
     // One is enough until the app paints again.
     if (!inputEvents_.empty() &&
         inputEvents_.back().kind ==
-          static_cast<uint32_t>(canvas::InputEventKind::Refresh)) {
+          static_cast<uint32_t>(canvas::InputEventKind::refresh)) {
       return;
     }
     inputEvents_.push_back(ev);
@@ -654,14 +654,14 @@ void AppWindow::postInputEvent(uint32_t kind, float x, float y, int32_t button,
   // A resize is state, not only an event: the size it carries is the answer
   // to `framebufferSize` from here on, and a client has no other source for
   // it. `setClientSize` queues the event itself.
-  if (k == InputEventKind::Resize) {
+  if (k == InputEventKind::resize) {
     setClientSize(x, y);
     return;
   }
 
   // Keep the pointer position current, for the same reason the local path
   // does: a wheel event carries no position of its own.
-  if (k == InputEventKind::MouseMove) {
+  if (k == InputEventKind::mouseMove) {
     pointerX_ = x;
     pointerY_ = y;
   }
@@ -678,12 +678,12 @@ void AppWindow::postInputEvent(uint32_t kind, float x, float y, int32_t button,
   // against its own node anywhere in it, because two nodes can be animating
   // at once and would otherwise take turns failing to coalesce. Both mirror
   // what the local paths already do.
-  if (k == InputEventKind::MouseMove) {
+  if (k == InputEventKind::mouseMove) {
     if (!inputEvents_.empty() && inputEvents_.back().kind == kind) {
       inputEvents_.back() = ev;
       return;
     }
-  } else if (k == InputEventKind::NodeScroll) {
+  } else if (k == InputEventKind::nodeScroll) {
     auto existing = std::find_if(
       inputEvents_.begin(), inputEvents_.end(),
       [&](const canvas::InputEvent &queued) {
@@ -715,7 +715,7 @@ void AppWindow::pointerMove(float x, float y)
     noteSceneHover(x, y);
 
     canvas::InputEvent ev;
-    ev.kind = static_cast<uint32_t>(canvas::InputEventKind::MouseMove);
+    ev.kind = static_cast<uint32_t>(canvas::InputEventKind::mouseMove);
     ev.x = x;
     ev.y = y;
     ev.button = pointerDown_ ? 1 : 0;  // so Swift can tell drag from hover
@@ -723,7 +723,7 @@ void AppWindow::pointerMove(float x, float y)
       std::lock_guard lock(inputMu_);
       if (!inputEvents_.empty() &&
           inputEvents_.back().kind ==
-            static_cast<uint32_t>(canvas::InputEventKind::MouseMove)) {
+            static_cast<uint32_t>(canvas::InputEventKind::mouseMove)) {
         inputEvents_.back() = ev;
       } else {
         inputEvents_.push_back(ev);
@@ -758,8 +758,8 @@ void AppWindow::pointerButton(int button, bool pressed, float x, float y, int mo
     // menu impossible to write against this path: the compositor forwards
     // every button to a client, and a windowed app saw none of them.
     canvas::InputEvent ev;
-    ev.kind = static_cast<uint32_t>(pressed ? canvas::InputEventKind::MouseDown
-                                            : canvas::InputEventKind::MouseUp);
+    ev.kind = static_cast<uint32_t>(pressed ? canvas::InputEventKind::mouseDown
+                                            : canvas::InputEventKind::mouseUp);
     ev.x = x;
     ev.y = y;
     ev.button = button;
@@ -788,7 +788,7 @@ void AppWindow::keyEvent(int key, int action, int mods)
     // Forward to Swift (zoom, shortcuts). Use full GLFW key range.
     if (action == ACTION_PRESS || action == ACTION_REPEAT || action == ACTION_RELEASE) {
       canvas::InputEvent ev;
-      ev.kind = static_cast<uint32_t>(canvas::InputEventKind::Key);
+      ev.kind = static_cast<uint32_t>(canvas::InputEventKind::key);
       ev.button = key;
       ev.x = static_cast<float>(action);
       ev.y = static_cast<float>(mods);
@@ -856,7 +856,7 @@ void AppWindow::scroll(float dx, float dy, int knownMods)
     }
 
     canvas::InputEvent ev;
-    ev.kind = static_cast<uint32_t>(canvas::InputEventKind::Scroll);
+    ev.kind = static_cast<uint32_t>(canvas::InputEventKind::scroll);
     ev.x = dx;
     ev.y = dy;
     // Modifiers travel with the event so Ctrl+wheel can be distinguished
@@ -880,7 +880,7 @@ void AppWindow::scroll(float dx, float dy, int knownMods)
       // or a plain notch folds into a queued Ctrl one and zooms.
       if (!inputEvents_.empty() &&
           inputEvents_.back().kind ==
-            static_cast<uint32_t>(canvas::InputEventKind::Scroll) &&
+            static_cast<uint32_t>(canvas::InputEventKind::scroll) &&
           inputEvents_.back().button == ev.button) {
         inputEvents_.back().x += ev.x;
         inputEvents_.back().y += ev.y;
@@ -896,7 +896,7 @@ void AppWindow::scroll(float dx, float dy, int knownMods)
 void AppWindow::charInput(unsigned int codepoint)
   {
     canvas::InputEvent ev;
-    ev.kind = static_cast<uint32_t>(canvas::InputEventKind::Text);
+    ev.kind = static_cast<uint32_t>(canvas::InputEventKind::text);
     ev.button = static_cast<int32_t>(codepoint);
     {
       std::lock_guard lock(inputMu_);

@@ -1848,7 +1848,7 @@ class CompositorImpl final : public ICompositor_Servant {
     // without knowing the scale rasterises it for the wrong screen.
     if (const float scale = host_.surfaceScale(surfaceId); scale != 1.f) {
       InputEvent scaleEvent = make_event(
-          static_cast<uint32_t>(canvas::InputEventKind::Scale), scale, 0.f, 0,
+          static_cast<uint32_t>(canvas::InputEventKind::scale), scale, 0.f, 0,
           0);
       scaleEvent.serial = broker_.nextSerial();
       sub->send(scaleEvent);
@@ -1856,7 +1856,7 @@ class CompositorImpl final : public ICompositor_Servant {
     float width = 0.f, height = 0.f;
     host_.surfaceSize(surfaceId, width, height);
     InputEvent opening =
-        make_event(static_cast<uint32_t>(canvas::InputEventKind::Resize), width,
+        make_event(static_cast<uint32_t>(canvas::InputEventKind::resize), width,
                    height, 0, 0);
     const uint32_t openingSerial = broker_.nextSerial();
     opening.serial = openingSerial;

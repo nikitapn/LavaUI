@@ -448,7 +448,7 @@ class CanvasSurface {
   ///
   /// The client says so per frame and the renderer narrows it for this
   /// surface's rounding; all that is left here is handing it to the scene.
-  /// See `DrawCommandKind::OpaqueBounds`.
+  /// See `DrawCommandKind::opaqueBounds`.
   bool opaqueBounds(float &x, float &y, float &w, float &h) const;
 
   /// What changed in this surface's buffer since the last call, in *buffer*
