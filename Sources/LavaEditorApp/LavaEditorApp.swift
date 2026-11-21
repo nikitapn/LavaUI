@@ -37,6 +37,12 @@ struct LavaEditorApp {
                             )
                         }
                         MenuSeparator()
+                        MenuItem("Open User Settings", id: "app.user-settings") { session.openUserSettings() }
+                        MenuItem("Open Folder Settings", id: "app.folder-settings",
+                                 isEnabled: session.project != nil || session.workspaceURL != nil) {
+                            session.openFolderSettings()
+                        }
+                        MenuSeparator()
                         MenuItem(
                             "Quit", id: "app.quit",
                             shortcut: KeyShortcut(KeyCode.q, .primary)
@@ -174,13 +180,14 @@ struct LavaEditorApp {
                         ) { session.showSidebar(.sourceControl) }
                         MenuItem("Refresh Folder", id: "view.refresh-folder",
                                  isEnabled: session.project != nil) { session.project?.refresh() }
-                        MenuItem("Toggle Soft Wrap", id: "view.wrap") {
+                        MenuItem("Toggle Soft Wrap", id: "view.wrap", isChecked: session.wraps) {
                             session.wraps.toggle()
                         }
-                        MenuItem("Toggle Line Numbers", id: "view.line-numbers") {
+                        MenuItem("Toggle Line Numbers", id: "view.line-numbers", isChecked: session.showLineNumbers) {
                             session.showLineNumbers.toggle()
                         }
-                        MenuItem("Toggle Changed-Line Highlight", id: "view.change-fills") {
+                        MenuItem("Toggle Changed-Line Highlight", id: "view.change-fills",
+                                 isChecked: session.highlightsChangedLines) {
                             session.highlightsChangedLines.toggle()
                         }
                     }

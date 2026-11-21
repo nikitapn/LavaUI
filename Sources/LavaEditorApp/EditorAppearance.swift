@@ -1,4 +1,5 @@
 import Foundation
+import LavaEditorSettings
 import LavaUI
 
 struct EditorAppearance {
@@ -45,35 +46,79 @@ struct EditorAppearance {
     }
 }
 
-/// Figtree's faces are bundled with LavaUI so this window uses the same type in both hosts.
 struct EditorFonts {
-    static let documentSize: Float = 17
-
-    let document: UIFont?
-    let documentBold: UIFont?
+    private(set) var document: UIFont?
+    private(set) var documentBold: UIFont?
     let tab: UIFont?
     let tabSelected: UIFont?
     let status: UIFont?
     let statusEmphasis: UIFont?
 
     init(editor: Editor?) {
-        document = Self.load("Regular", size: Self.documentSize, document: true, editor: editor)
-        documentBold = Self.load("Bold", size: Self.documentSize, document: true, editor: editor)
-        tab = Self.load("Regular", size: 14, editor: editor)
-        tabSelected = Self.load("SemiBold", size: 14, editor: editor)
-        status = Self.load("Regular", size: 13, editor: editor)
-        statusEmphasis = Self.load("SemiBold", size: 13, editor: editor)
+        tab = Self.load(BundledFont.path("Figtree-Regular"), size: 14, editor: editor)
+        tabSelected = Self.load(BundledFont.path("Figtree-SemiBold"), size: 14, editor: editor)
+        status = Self.load(BundledFont.path("Figtree-Regular"), size: 13, editor: editor)
+        statusEmphasis = Self.load(BundledFont.path("Figtree-SemiBold"), size: 13, editor: editor)
     }
 
-    static func load(
-        _ weight: String, size: Float, document: Bool = false, editor: Editor?
+    mutating func updateDocument(_ settings: EditorPreferences, editor: Editor?) -> String? {
+        guard let editor else { return nil }
+        func load(_ path: String?) -> UIFont? {
+            Self.load(path, size: settings.fontSize, lineHeight: settings.lineHeight, editor: editor)
+        }
+        func faces(_ family: String) -> (UIFont, UIFont)? {
+            guard let regular = load(Self.match(family, style: "Regular")),
+                  let bold = load(Self.match(family, style: "Bold")) else { return nil }
+            return (regular, bold)
+        }
+
+        let requested = settings.fontFamily
+        if let (regular, bold) = faces(requested) {
+            document = regular
+            documentBold = bold
+            return nil
+        }
+
+        let fallback = EditorPreferences.defaults.fontFamily
+        if requested.caseInsensitiveCompare(fallback) != .orderedSame,
+           let (regular, bold) = faces(fallback) {
+            document = regular
+            documentBold = bold
+            return "Could not load font family '\(requested)'. Using '\(fallback)'."
+        }
+        document = load(BundledFont.path("Figtree-Regular"))
+        documentBold = load(BundledFont.path("Figtree-Bold"))
+        return "Could not load font family '\(requested)'. Using bundled Figtree."
+    }
+
+    private static func match(_ family: String, style: String) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/fc-match")
+        let escaped = family.reduce(into: "") { pattern, character in
+            if "\\-,:=".contains(character) { pattern.append("\\") }
+            pattern.append(character)
+        }
+        process.arguments = ["-f", "%{file}\n%{family}", "--", "\(escaped):style=\(style)"]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return nil }
+            return FontMatch.path(in: String(decoding: data, as: UTF8.self), requestedFamily: family)
+        } catch {
+            return nil
+        }
+    }
+
+    private static func load(
+        _ path: String?, size: Float, lineHeight: Float? = nil, editor: Editor?
     ) -> UIFont? {
-        guard let editor,
-              let path = BundledFont.path("Figtree-\(weight)"),
-              let font = UIFont(path: path, pixelSize: size,
-                                lineHeightMultiple: document ? 1.75 : nil),
-              font.registerWithEngine(editor)
-        else { return nil }
+        guard let editor, let path,
+              let font = UIFont(path: path, pixelSize: size, lineHeightMultiple: lineHeight),
+              font.registerWithEngine(editor) else { return nil }
 
         if let base = FontStore.default {
             let paths = [base.path] + base.fallbacks.map(\.path)

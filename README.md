@@ -70,7 +70,7 @@ Every one of these is a LavaUI app and runs with `swift run <name>`:
 |---|---|
 | `HelloWorld` | Demo of the framework's views |
 | `LavaTerm` | Terminal emulator |
-| `LavaEditor` | Text editor |
+| `LavaEditor` | Text editor ([settings](docs/lavaeditor-settings.md)) |
 | `LavaExplorer` | File manager — tabs, split panes, Trash |
 | `LavaPass` | KeePass-compatible password vaults — [guide](docs/lavapass.md) |
 | `LavaView` | Image viewer |
