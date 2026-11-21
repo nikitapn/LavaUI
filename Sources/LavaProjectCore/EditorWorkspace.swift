@@ -35,10 +35,12 @@ public struct EditorSessionSnapshot: Codable, Equatable, Sendable {
     public struct File: Codable, Equatable, Sendable {
         public var path: String
         public var position: Position?
+        public var tabState: EditorTabState?
 
-        public init(path: String, position: Position? = nil) {
+        public init(path: String, position: Position? = nil, tabState: EditorTabState? = nil) {
             self.path = path
             self.position = position
+            self.tabState = tabState
         }
     }
 
@@ -77,7 +79,11 @@ public struct EditorSessionSnapshot: Codable, Equatable, Sendable {
         var result = self
         result.projectRoot = projectRoot.map(transform)
         result.activePath = activePath.map(transform)
-        result.files = files.map { File(path: transform($0.path), position: $0.position) }
+        result.files = files.map { file in
+            var file = file
+            file.path = transform(file.path)
+            return file
+        }
         return result
     }
 }
