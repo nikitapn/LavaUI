@@ -45,7 +45,12 @@ final class EditorSession {
     }
     var activeIndex = 0 {
         // The tab in front is the one whose highlighting a server is asked for.
-        didSet { if activeIndex != oldValue { scheduleLanguageSync() } }
+        didSet {
+            guard activeIndex != oldValue else { return }
+            hoverCard = nil
+            completion = nil
+            scheduleLanguageSync()
+        }
     }
 
     private(set) var recentFiles: [String] = Array(
@@ -98,6 +103,15 @@ final class EditorSession {
     @ObservationIgnored let settingsFiles = EditorSettingsFiles()
     let languageServers = LanguageServers()
     @ObservationIgnored var languageSyncScheduled = false
+    /// The hover card on screen, and the character the pointer rests on.
+    var hoverCard: EditorHoverCard?
+    @ObservationIgnored var hoverTarget: Int?
+    /// The completion list, and a counter that retires stale requests.
+    var completion: CompletionSession?
+    @ObservationIgnored var completionGeneration = 0
+    /// Set while a completion is being inserted, so the edit it makes is not
+    /// taken for typing.
+    @ObservationIgnored var insertingCompletion = false
 
     /// Local document zoom; the tab strip and toolbars keep their UI font.
     private(set) var fonts: EditorFonts
@@ -335,6 +349,9 @@ final class EditorSession {
                 guard let self, self.documents.indices.contains(self.activeIndex) else { return }
                 guard self.documents[self.activeIndex].saveUnavailable == nil else { return }
                 guard self.documents[self.activeIndex].text != newValue else { return }
+                // Bytes, not characters: `utf8.count` is stored, a character
+                // count walks the buffer. One typed character is one to four.
+                let grew = newValue.utf8.count - self.documents[self.activeIndex].text.utf8.count
                 self.documents[self.activeIndex].text = newValue
                 self.documents[self.activeIndex].isModified = true
                 self.revision &+= 1
@@ -342,6 +359,7 @@ final class EditorSession {
                 // that have moved. Re-run rather than clear, so the bar keeps
                 // working while the user types into the document.
                 if self.find.isOpen, !self.find.query.isEmpty { self.runSearch() }
+                if !self.insertingCompletion { self.textEdited(typedOne: (1...4).contains(grew)) }
             }
         )
     }

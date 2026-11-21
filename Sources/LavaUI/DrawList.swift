@@ -2816,6 +2816,9 @@ extension DrawList {
             leaf.textIndex(atOffset: rows[firstRow].lowerBound)
         }
         var cursorOffset = rows[firstRow].lowerBound
+        var popupAnchors = EditorPopupAnchors(
+            hover: leaf.hoverCard?.anchor.lowerBound, completion: leaf.completion?.anchor
+        )
 
         for row in firstRow...lastRow {
             let range = rows[row]
@@ -2933,6 +2936,12 @@ extension DrawList {
                 )
             }
 
+            if popupAnchors.hoverOffset != nil || popupAnchors.completionOffset != nil {
+                popupAnchors.note(row: range, top: rowTop, bottom: rowTop + lineH) {
+                    textX + columnX($0)
+                }
+            }
+
             // The Ctrl+hover link, under the text like a decoration.
             if let link = leaf.linkRange, link.overlaps(range) {
                 let from = max(link.lowerBound, range.lowerBound)
@@ -2956,6 +2965,9 @@ extension DrawList {
         // they describe the content, so being scrolled or painted over by it
         // would be a contradiction.
         emitEditorScrollbars(leaf, font: font, style: style, x: x, y: y, w: w, h: h)
+
+        // Pass 4 — the hover card or the completion list, over everything.
+        emitEditorPopups(leaf, anchors: popupAnchors, font: font, style: style, x: x, y: y, w: w, h: h)
     }
 
     /// The editor's own bars.

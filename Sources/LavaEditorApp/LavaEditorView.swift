@@ -90,6 +90,11 @@ struct LavaEditorView: View {
                     controller: session.controller,
                     onZoom: { session.zoom(by: $0) },
                     semanticHighlights: session.languageHighlights(),
+                    hoverCard: session.hoverCard,
+                    completion: session.completionList(),
+                    onCompletionPick: { session.completionPicked($0) },
+                    onPointerOffset: { session.pointerMoved(to: $0) },
+                    onKey: { session.editorKey($0) },
                     onFollow: { session.follow(at: $0) }
                 )
                 .flexGrow(1)

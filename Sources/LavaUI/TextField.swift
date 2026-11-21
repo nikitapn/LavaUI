@@ -1083,6 +1083,7 @@ extension LeafNode {
             id,
             onKey: { [weak self] event in
                 guard let self else { return false }
+                if let intercept = self.keyInterceptor, intercept(event) { return true }
                 return self.handleKey(event, binding: binding, onSubmit: onSubmit)
             },
             onChar: { [weak self] character in

@@ -206,6 +206,9 @@ public final class EditorController {
     private var replaceAction: (([Range<Int>], String) -> Int)?
     private var metricsAction: ((String?) -> (bytes: Int, lines: Int)?)?
     private var caretLineAction: (() -> Int?)?
+    private var caretOffsetAction: (() -> Int?)?
+    private var insertAction: ((String, Range<Int>, Int?) -> Bool)?
+    private var linePrefixAction: ((Int) -> String?)?
     private var focusAction: (() -> Void)?
     private var pendingLine: Int?
     private var pendingPosition: EditorPosition?
@@ -251,6 +254,24 @@ public final class EditorController {
 
     /// Returns keyboard focus to the editor without moving the caret.
     public func focus() { focusAction?() }
+
+    /// Character offset of the caret — the active end of the selection.
+    public func caretOffset() -> Int? { caretOffsetAction?() }
+
+    /// Replaces `range` with `text` as one undoable edit: accepting a
+    /// completion. The caret goes `caretAt` characters into the inserted text,
+    /// or after it. False when not mounted or read-only.
+    @discardableResult
+    public func insert(_ text: String, replacing range: Range<Int>, caretAt: Int? = nil) -> Bool {
+        insertAction?(text, range, caretAt) ?? false
+    }
+
+    /// Up to `maxCharacters` before the caret, stopping at the start of its
+    /// line: the word being typed, without walking a large buffer from its
+    /// start on every keystroke.
+    public func linePrefix(maxCharacters: Int = 80) -> String? {
+        linePrefixAction?(maxCharacters)
+    }
 
     /// Replaces `ranges` — character offsets, as `TextSearch.matches` gives
     /// them — with `replacement`, and returns how many were applied. Zero if
@@ -322,8 +343,14 @@ public final class EditorController {
         replace: @escaping ([Range<Int>], String) -> Int,
         metrics: @escaping (String?) -> (bytes: Int, lines: Int)?,
         caretLine: @escaping () -> Int?,
+        caretOffset: @escaping () -> Int?,
+        insert: @escaping (String, Range<Int>, Int?) -> Bool,
+        linePrefix: @escaping (Int) -> String?,
         focus: @escaping () -> Void
     ) {
+        caretOffsetAction = caretOffset
+        insertAction = insert
+        linePrefixAction = linePrefix
         revealAction = reveal
         revealRangeAction = revealRange
         captureAction = capture
@@ -428,6 +455,19 @@ public struct EditorView: PrimitiveView {
     public var onDecorationTap: ((EditorDecoration) -> Void)?
     /// Ctrl+wheel notches, consumed even when the document cannot scroll.
     public var onZoom: ((Float) -> Void)?
+    /// A card about the text at its anchor, drawn below it. See `EditorHoverCard`.
+    public var hoverCard: EditorHoverCard?
+    /// Completions at the caret. Steer it with `onKey`; see `EditorCompletionList`.
+    public var completion: EditorCompletionList?
+    /// A click on a completion row, with the item's index — or nil for a
+    /// click anywhere else in the editor while the list is up, which the app
+    /// takes as "close it".
+    public var onCompletionPick: ((Int?) -> Void)?
+    /// The character under the resting pointer, or nil — told only when it
+    /// changes, and never while Control is held (that is a link).
+    public var onPointerOffset: ((Int?) -> Void)?
+    /// Sees each key press before the editor. Return true to take it.
+    public var onKey: ((KeyEvent) -> Bool)?
     /// A language server's highlighting, laid over the highlighter's per
     /// logical line. Its line numbers must describe the bound text as it is
     /// now — the app shifts them across edits until the server replies.
@@ -459,6 +499,11 @@ public struct EditorView: PrimitiveView {
         controller: EditorController? = nil,
         onZoom: ((Float) -> Void)? = nil,
         semanticHighlights: SemanticHighlights? = nil,
+        hoverCard: EditorHoverCard? = nil,
+        completion: EditorCompletionList? = nil,
+        onCompletionPick: ((Int?) -> Void)? = nil,
+        onPointerOffset: ((Int?) -> Void)? = nil,
+        onKey: ((KeyEvent) -> Bool)? = nil,
         onFollow: ((Int) -> Void)? = nil
     ) {
         self._text = text
@@ -478,6 +523,11 @@ public struct EditorView: PrimitiveView {
         self.onZoom = onZoom
         self.onFollow = onFollow
         self.semanticHighlights = semanticHighlights
+        self.hoverCard = hoverCard
+        self.completion = completion
+        self.onCompletionPick = onCompletionPick
+        self.onPointerOffset = onPointerOffset
+        self.onKey = onKey
     }
 
     /// The font the editor draws with: `font`, or the environment's when that is `nil`.
@@ -518,7 +568,8 @@ public struct EditorView: PrimitiveView {
     /// reaches the app.
     private func configureFollow(_ leaf: LeafNode) {
         leaf.onFollow = onFollow
-        guard onFollow != nil else {
+        leaf.onPointerOffset = onPointerOffset
+        guard onFollow != nil || onPointerOffset != nil else {
             leaf.onPointerHoverLocal = nil
             if leaf.onHover != nil {
                 leaf.onHover = nil
@@ -535,6 +586,7 @@ public struct EditorView: PrimitiveView {
             guard !inside, let leaf else { return }
             leaf.pointerCursor = nil
             leaf.setLink(nil)
+            leaf.reportPointer(nil)
         }
         HoverState.register(leaf.id) { [weak leaf] inside in leaf?.onHover?(inside) }
         leaf.onPointerHoverLocal = { [weak leaf] x, y in
@@ -613,6 +665,10 @@ public struct EditorView: PrimitiveView {
         leaf.lineMarks = lineMarks.sorted { $0.lines.lowerBound < $1.lines.lowerBound }
         leaf.onDecorationTap = onDecorationTap
         leaf.semanticHighlights = semanticHighlights?.isEmpty == false ? semanticHighlights : nil
+        leaf.hoverCard = hoverCard
+        leaf.completion = completion
+        leaf.onCompletionPick = onCompletionPick
+        leaf.keyInterceptor = onKey
         configureFollow(leaf)
 
         let binding = _text
@@ -658,6 +714,34 @@ public struct EditorView: PrimitiveView {
             caretLine: { [weak leaf] in
                 leaf.map { $0.logicalLine(ofRow: $0.focusRow()) + 1 }
             },
+            caretOffset: { [weak leaf] in leaf?.focusOffset() },
+            insert: { [weak leaf] text, range, caretAt in
+                guard let leaf, !leaf.isReadOnly else { return false }
+                leaf.editing.replace(offsets: range, with: text)
+                if let caretAt, caretAt < text.count {
+                    leaf.editing.setCursor(leaf.textIndex(atOffset: range.lowerBound + caretAt))
+                }
+                leaf.seedLogicalRows()
+                leaf.markMeasureDirty()
+                binding.wrappedValue = leaf.editing.text
+                CaretBlink.noteEdit()
+                ViewInvalidation.markDirty()
+                return true
+            },
+            linePrefix: { [weak leaf] limit in
+                guard let leaf else { return nil }
+                let text = leaf.editing.text
+                let caret = leaf.textIndex(atOffset: leaf.focusOffset())
+                var start = caret
+                var taken = 0
+                while start > text.startIndex, taken < limit {
+                    let previous = text.index(before: start)
+                    if text[previous] == "\n" || text[previous] == "\r\n" { break }
+                    start = previous
+                    taken += 1
+                }
+                return String(text[start..<caret])
+            },
             focus: { [weak leaf] in
                 leaf?.focusSelf(binding: binding, onSubmit: nil)
             }
@@ -696,6 +780,15 @@ public struct EditorView: PrimitiveView {
 
         leaf.onClickLocal = { [weak leaf] localX, localY, originX, originY, mods, _ in
             guard let leaf else { return }
+            // The list is drawn over the text, so a press on it is read that
+            // way first, like the scrollbars.
+            if let hit = leaf.completionHit, let pick = leaf.onCompletionPick {
+                if let item = hit.item(atLocalX: localX, localY: localY) {
+                    pick(item)
+                    return
+                }
+                pick(nil)
+            }
             // Before anything else: the bars are painted over the text, so a
             // press on one has to be read that way too. Without this, grabbing
             // the thumb would put the caret behind it.
@@ -767,11 +860,25 @@ extension LeafNode {
     /// nothing. `localX`/`localY` are the box's own, gutter included.
     func updateLink(localX: Float, localY: Float) {
         var link: Range<Int>?
-        if HeldModifiers.control, !PointerCapture.isActive, localX >= gutterWidth {
-            link = wordUnder(localX: localX - gutterWidth + scrollX, localY: Double(localY) + scrollY)
+        var pointer: Int?
+        if !PointerCapture.isActive, localX >= gutterWidth {
+            let contentX = localX - gutterWidth + scrollX
+            let contentY = Double(localY) + scrollY
+            if HeldModifiers.control, onFollow != nil {
+                link = wordUnder(localX: contentX, localY: contentY)
+            } else if onPointerOffset != nil {
+                pointer = characterUnder(localX: contentX, localY: contentY)?.offset
+            }
         }
         pointerCursor = link == nil ? nil : .pointer
         setLink(link)
+        reportPointer(pointer)
+    }
+
+    func reportPointer(_ offset: Int?) {
+        guard offset != reportedPointerOffset else { return }
+        reportedPointerOffset = offset
+        onPointerOffset?(offset)
     }
 
     func setLink(_ link: Range<Int>?) {

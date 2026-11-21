@@ -67,7 +67,13 @@ public struct ServerCapabilities: Decodable, Sendable {
             "publishDiagnostics": .object(["versionSupport": .bool(true)]),
             "definition": .object(["linkSupport": .bool(true)]),
             "hover": .object(["contentFormat": .array([.string("plaintext"), .string("markdown")])]),
-            "completion": .object(["completionItem": .object(["insertReplaceSupport": .bool(true)])]),
+            // Snippets are what tell an editor where in `foo(, )` the caret
+            // goes; without them a server sends the call with its arguments
+            // empty and nothing to say which one comes first.
+            "completion": .object(["completionItem": .object([
+                "insertReplaceSupport": .bool(true),
+                "snippetSupport": .bool(true),
+            ])]),
             "semanticTokens": .object([
                 "requests": .object(["full": .object(["delta": .bool(true)])]),
                 "tokenTypes": .array([

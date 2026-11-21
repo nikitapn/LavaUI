@@ -622,6 +622,17 @@ final class LeafNode: YogaBoxNode {
     var linkRange: Range<Int>?
     /// `EditorView(semanticHighlights:)`, nil when there are none.
     var semanticHighlights: SemanticHighlights?
+    /// `EditorView(hoverCard:)` and `(completion:)`. See `EditorPopups.swift`.
+    var hoverCard: EditorHoverCard?
+    var completion: EditorCompletionList?
+    /// Where the completion list's rows were last drawn, for clicks.
+    var completionHit: EditorCompletionHit?
+    var onCompletionPick: ((Int?) -> Void)?
+    /// `EditorView(onPointerOffset:)` and the last offset it was told.
+    var onPointerOffset: ((Int?) -> Void)?
+    var reportedPointerOffset: Int?
+    /// `EditorView(onKey:)`: sees a key before the editor does.
+    var keyInterceptor: ((KeyEvent) -> Bool)?
     /// Whole-line marks, sorted by first line. See `EditorLineMark`.
     var lineMarks: [EditorLineMark] = []
     /// Vertical scroll offset in pixels. Positive scrolls content up.

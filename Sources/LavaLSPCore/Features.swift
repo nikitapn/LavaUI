@@ -160,6 +160,10 @@ public struct CompletionItem: Decodable, Sendable, Equatable {
     public let textEdit: CompletionTextEdit?
     public let sortText: String?
     public let filterText: String?
+    /// 2 when `insertText` / `textEdit` is a snippet; see `SnippetText`.
+    public let insertTextFormat: Int?
+
+    public var isSnippet: Bool { insertTextFormat == 2 }
 }
 
 public struct CompletionResult: Decodable, Sendable, Equatable {

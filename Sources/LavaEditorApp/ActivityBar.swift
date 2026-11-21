@@ -77,7 +77,7 @@ struct ActivityBar: View {
                           w: w, h: font.lineHeight, color: .white, font: font)
             }
         }
-        .hoverBackground(theme.hover)
+        .hoverBackground(selected ? .clear : theme.hover)
         .cornerRadius(7)
         .cursor(.pointer)
         .tooltip(view.title)
