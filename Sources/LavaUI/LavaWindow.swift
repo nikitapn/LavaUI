@@ -161,6 +161,7 @@ public final class LavaWindow {
         self.editor = editor
         self.id = id
         self.scope = scope
+        scope.editor = editor
         self.drawList = DrawList(editor: editor, window: id)
         self.menuHost = menu != nil ? MenuHost(editor: editor) : nil
         self.makeMenu = menu
@@ -768,7 +769,12 @@ public final class LavaWindow {
         case .text:
             FocusManager.releaseIfGone { host.contains($0) }
             if let scalar = Unicode.Scalar(UInt32(bitPattern: ev.button)) {
-                _ = FocusManager.handle(character: Character(scalar))
+                let character = Character(scalar)
+                if let modal = keyboardModal, !hasFocus(in: modal) {
+                    modal.onUnfocusedText?(character)
+                } else {
+                    FocusManager.handle(character: character)
+                }
             }
         case .key:
             Tooltips.dismiss()
@@ -781,19 +787,22 @@ public final class LavaWindow {
                 localHover(x: p.x, y: p.y, menuH: menuH)
             }
             FocusManager.releaseIfGone { host.contains($0) }
-            if onRawKey?(ev) == true { break }
             let isPress = ev.x > 0
+            let key = KeyEvent(key: ev.button, mods: Int32(ev.y), isRepeat: ev.x > 1)
+            if let modal = keyboardModal {
+                if isPress, modal.onKey?(key) != true, hasFocus(in: modal) {
+                    FocusManager.handle(key)
+                }
+                break
+            }
+            if onRawKey?(ev) == true { break }
             if isPress, ev.button == KeyCode.escape, host.dismissOverlays() { break }
             if isPress, let menuHost,
                menuHost.activate(matchingKey: ev.button, mods: Int32(ev.y))
             {
                 break
             }
-            if isPress,
-               FocusManager.handle(
-                   KeyEvent(key: ev.button, mods: Int32(ev.y), isRepeat: ev.x > 1)
-               )
-            {
+            if isPress, FocusManager.handle(key) {
                 break
             }
             // Metrics invalidation is handled centrally off
@@ -803,6 +812,18 @@ public final class LavaWindow {
         default:
             break
         }
+    }
+
+    private var keyboardModal: OverlayAttachment? {
+        guard let root = host.rootNode,
+              let modal = OverlayScan.presented(in: root).last(where: \.modal),
+              modal.onKey != nil || modal.onUnfocusedText != nil else { return nil }
+        return modal
+    }
+
+    private func hasFocus(in modal: OverlayAttachment) -> Bool {
+        guard let id = FocusManager.focusedID else { return false }
+        return findNode(id, in: modal.root) != nil
     }
 
     /// The node with this id anywhere in the window, **including inside an
