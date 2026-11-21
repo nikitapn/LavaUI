@@ -97,8 +97,14 @@ struct LavaEditorApp {
                             isEnabled: session.active.saveUnavailable == nil
                         ) { session.saveAs() }
                         MenuItem("Reload from Disk", id: "file.reload") { session.reload() }
-                        MenuItem("Close Folder", id: "file.close-folder",
-                                 isEnabled: session.project != nil) { session.closeFolder() }
+                        // Not inside a workspace: the folder is part of it,
+                        // and closing it there was a workspace that saved
+                        // itself without one. Close Workspace is the way out,
+                        // and keeps the folder — VS Code draws the same line.
+                        if session.workspaceURL == nil {
+                            MenuItem("Close Folder", id: "file.close-folder",
+                                     isEnabled: session.project != nil) { session.closeFolder() }
+                        }
                         MenuSeparator()
                         MenuItem(
                             "Close Tab", id: "file.close",
