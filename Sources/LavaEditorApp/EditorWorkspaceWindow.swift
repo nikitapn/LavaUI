@@ -9,6 +9,7 @@ import LavaUI
 struct EditorWorkspaceWindow: View {
     let session: EditorSession
     let appearance: EditorAppearance
+    let fontDialog: EditorFontDialog
 
     var body: some View {
         VStack(flexGrow: 1, spacing: 0) {
@@ -39,6 +40,15 @@ struct EditorWorkspaceWindow: View {
                     }
                 }
             }
+        }
+        .overlay(
+            isPresented: Binding(get: { fontDialog.chooser != nil }, set: { presented in
+                if !presented { fontDialog.chooser = nil }
+            }),
+            placement: FontChooser.placement,
+            style: fontDialog.chooser?.overlayStyle(theme: appearance.theme) ?? OverlayStyle()
+        ) {
+            if let chooser = fontDialog.chooser { chooser }
         }
     }
 }

@@ -45,8 +45,17 @@ public enum EditorToggle: String, CaseIterable, Sendable {
 
 public enum UserSettingsFile {
     /// Re-reads the user file under a lock and rewrites it as sorted JSON.
-    /// A settings toggle removes comments and rewrites formatting.
+    /// A settings write removes comments and rewrites formatting.
     public static func set(_ key: EditorToggle, to value: Bool, at userFile: URL) throws {
+        try setEditorFields([key.rawValue: .bool(value)], at: userFile)
+    }
+
+    /// Update both preferences in one atomic write so the watcher sees a pair.
+    public static func setFont(family: String, size: Int, at userFile: URL) throws {
+        try setEditorFields(["fontFamily": .string(family), "fontSize": .number(String(size))], at: userFile)
+    }
+
+    private static func setEditorFields(_ updates: [String: JSONValue], at userFile: URL) throws {
         let directory = userFile.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let lockFile = userFile.appendingPathExtension("lock")
@@ -59,12 +68,12 @@ public enum UserSettingsFile {
 
         let document = try SettingsDocument.read(at: userFile)
         var fields = document?.value.object ?? [:]
-        let group = key.path[0]
+        let group = "editor"
         var editor = fields[group]?.object ?? [:]
         if fields[group] != nil, fields[group]?.object == nil, let location = document?.location(at: [group]) {
             throw SettingsDiagnostic(severity: .error, location: location, message: "\(group) must be an object")
         }
-        editor[key.rawValue] = .bool(value)
+        editor.merge(updates) { _, value in value }
         fields[group] = .object(editor)
         try encoded(.object(fields)).write(to: userFile, options: .atomic)
     }
@@ -102,18 +111,5 @@ public enum UserSettingsFile {
 
     private static func currentPOSIXError() -> POSIXError {
         .init(POSIXErrorCode(rawValue: errno) ?? .EIO)
-    }
-}
-
-public enum FontMatch {
-    public static func path(in output: String, requestedFamily: String) -> String? {
-        let lines = output.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
-        guard lines.count == 2, !lines[0].isEmpty else { return nil }
-        let families = lines[1].split(separator: ",")
-        guard families.contains(where: {
-            $0.trimmingCharacters(in: .whitespacesAndNewlines)
-                .caseInsensitiveCompare(requestedFamily) == .orderedSame
-        }) else { return nil }
-        return String(lines[0])
     }
 }

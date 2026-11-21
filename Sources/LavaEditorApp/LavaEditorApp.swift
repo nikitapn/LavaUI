@@ -14,6 +14,7 @@ struct LavaEditorApp {
         // Before the session, which reads the wrap and line-number settings
         // out of it in its initialiser.
         AppSettings.configure(appName: "LavaEditor")
+        FontCatalog.prewarm()
 
         // The windowed renderer changes directory to load its assets.
         let launchDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath,
@@ -23,6 +24,7 @@ struct LavaEditorApp {
         LavaHost.setMinimumSize(editor: editor, width: 480, height: 280)
 
         let session = EditorSession(editor: editor)
+        let fontDialog = EditorFontDialog()
         session.restoreSession()
         session.openArguments(Array(CommandLine.arguments.dropFirst()), relativeTo: launchDirectory)
 
@@ -37,6 +39,9 @@ struct LavaEditorApp {
                             )
                         }
                         MenuSeparator()
+                        MenuItem("Choose Font…", id: "app.choose-font") {
+                            fontDialog.present(for: session)
+                        }
                         MenuItem("Open User Settings", id: "app.user-settings") { session.openUserSettings() }
                         MenuItem("Open Folder Settings", id: "app.folder-settings",
                                  isEnabled: session.project != nil || session.workspaceURL != nil) {
@@ -202,7 +207,7 @@ struct LavaEditorApp {
             },
             makeRoot: {
                 let appearance = EditorAppearance(theme: Theme.current)
-                return EditorWorkspaceWindow(session: session, appearance: appearance)
+                return EditorWorkspaceWindow(session: session, appearance: appearance, fontDialog: fontDialog)
                     .theme(appearance.theme)
             }
         )

@@ -273,11 +273,39 @@ final class EditorSettingsTests: XCTestCase {
         }
     }
 
-    func testFontMatchChecksAllFamilyAliasesCaseInsensitively() {
-        let output = "/fonts/Font.ttf\nSome Font, Noto Sans Mono"
-        XCTAssertEqual(FontMatch.path(in: output, requestedFamily: "noto sans mono"), "/fonts/Font.ttf")
-        XCTAssertNil(FontMatch.path(in: output, requestedFamily: "Mono"))
-        XCTAssertNil(FontMatch.path(in: "/fonts/Font.ttf", requestedFamily: "Some Font"))
+    func testFontWritePreservesUnknownKeysAndLeavesFolderOverridesInPlace() throws {
+        try withTemporaryFiles { user, folder in
+            try write(#"{"editor":{"wordWrap":true,"future":9007199254740993},"other":[false,null]}"#, to: user)
+            let folderText = #"{"editor":{"fontSize":18}}"#
+            try write(folderText, to: folder)
+
+            try UserSettingsFile.setFont(family: "Acme \"Mono\"", size: 24, at: user)
+
+            var loader = EditorSettingsLoader()
+            let (userOnly, diagnostics) = loader.load(user: user, folder: nil)
+            XCTAssertFalse(diagnostics.contains { $0.severity == .error })
+            XCTAssertEqual(userOnly.editor.fontFamily, "Acme \"Mono\"")
+            XCTAssertEqual(userOnly.editor.fontSize, 24)
+            XCTAssertTrue(userOnly.editor.wordWrap)
+            let document = try XCTUnwrap(SettingsDocument.read(at: user))
+            XCTAssertEqual(document.value.object?["editor"]?.object?["future"], .number("9007199254740993"))
+            XCTAssertEqual(document.value.object?["other"], .array([.bool(false), .null]))
+            let (merged, _) = loader.load(user: user, folder: folder)
+            XCTAssertEqual(merged.editor.fontFamily, userOnly.editor.fontFamily)
+            XCTAssertEqual(merged.editor.fontSize, 18)
+            XCTAssertEqual(merged.folderEditorOverride(for: "fontSize")?.file, folder)
+            XCTAssertNil(merged.folderEditorOverride(for: "fontFamily"))
+            XCTAssertEqual(try String(contentsOf: folder, encoding: .utf8), folderText)
+        }
+    }
+
+    func testFontWriteLeavesAnInvalidUserFileAlone() throws {
+        try withTemporaryFiles { user, _ in
+            let source = #"{"editor":1,"future":true}"#
+            try write(source, to: user)
+            XCTAssertThrowsError(try UserSettingsFile.setFont(family: "Acme", size: 14, at: user))
+            XCTAssertEqual(try String(contentsOf: user, encoding: .utf8), source)
+        }
     }
 
     private func parse(_ source: String, at file: URL) throws -> SettingsDocument {
