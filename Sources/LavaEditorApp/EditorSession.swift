@@ -1,4 +1,5 @@
 import Foundation
+import LavaEditorSettings
 import LavaProjectCore
 import LavaText
 import LavaUI
@@ -51,7 +52,10 @@ final class EditorSession {
     /// next launch restored the implicit session and the workspace was only
     /// reachable through Open Recent.
     var workspaceURL: URL? {
-        didSet { AppSettings.set(workspaceURL?.path ?? "", forKey: "lastWorkspace") }
+        didSet {
+            AppSettings.set(workspaceURL?.path ?? "", forKey: "lastWorkspace")
+            if oldValue != workspaceURL { scheduleSettingsReload() }
+        }
     }
     var pendingWorkspace: WorkspaceOpening?
     @ObservationIgnored var hasCheckpointed = false
@@ -76,13 +80,21 @@ final class EditorSession {
     /// Bumped on every edit. `FindState.searchedRevision` compares against it.
     var revision = 0
 
-    var wraps: Bool { didSet { AppSettings.set(wraps, forKey: "wraps") } }
-    var showLineNumbers: Bool {
-        didSet { AppSettings.set(showLineNumbers, forKey: "lineNumbers") }
+    var wraps: Bool {
+        get { EditorToggle.wordWrap.value(in: editorPreferences) }
+        set { setEditorSetting(.wordWrap, to: newValue) }
     }
+    var showLineNumbers: Bool {
+        get { EditorToggle.lineNumbers.value(in: editorPreferences) }
+        set { setEditorSetting(.lineNumbers, to: newValue) }
+    }
+    private var editorPreferences = EditorPreferences.defaults
+    @ObservationIgnored let settingsFiles = EditorSettingsFiles()
 
     /// Local document zoom; the tab strip and toolbars keep their UI font.
-    let fonts: EditorFonts
+    private(set) var fonts: EditorFonts
+    @ObservationIgnored private var fontPreferences: DocumentFontPreferences?
+    @ObservationIgnored var fontSettingsWarning: String?
     private var zoomedDocument: (regular: UIFont, bold: UIFont?)?
     var documentFont: UIFont? { zoomedDocument?.regular ?? fonts.document }
     var documentBoldFont: UIFont? { zoomedDocument == nil ? fonts.documentBold : zoomedDocument?.bold }
@@ -99,7 +111,11 @@ final class EditorSession {
     @ObservationIgnored let diffScroll = ScrollPosition()
 
     /// The open folder, if any. See `EditorSession+Project`.
-    var project: ProjectSession?
+    var project: ProjectSession? {
+        didSet {
+            if oldValue?.tree.root != project?.tree.root { scheduleSettingsReload() }
+        }
+    }
     var showsSidebar = true
     /// Which view the sidebar shows. See `ActivityBar`.
     var sidebarView: SidebarView = .explorer
@@ -112,7 +128,8 @@ final class EditorSession {
     @ObservationIgnored var marksCache: (key: MarksKey, marks: [EditorLineMark])?
     /// Fill changed lines as well as marking them in the gutter.
     var highlightsChangedLines: Bool {
-        didSet { AppSettings.set(highlightsChangedLines, forKey: "highlightChangedLines") }
+        get { EditorToggle.highlightChangedLines.value(in: editorPreferences) }
+        set { setEditorSetting(.highlightChangedLines, to: newValue) }
     }
 
     struct TabDrag {
@@ -136,15 +153,32 @@ final class EditorSession {
     init(editor: Editor? = nil) {
         fontEditor = editor
         fonts = EditorFonts(editor: editor)
-        wraps = AppSettings.bool(forKey: "wraps") ?? false
-        showLineNumbers = AppSettings.bool(forKey: "lineNumbers") ?? true
-        highlightsChangedLines = AppSettings.bool(forKey: "highlightChangedLines") ?? true
         documents = [EditorDocument(id: takeID(), url: nil, text: "")]
         projectSearch.buffers = { [weak self] root in self?.searchBuffers(under: root) ?? [] }
         for kind in RecentProjectKind.allCases {
             let paths = AppSettings.value(forKey: kind.settingsKey, as: [String].self) ?? []
             recentProjectPaths[kind] = RecentProjectPaths.normalized(paths)
         }
+        startEditorSettings()
+    }
+
+    func applyEditorPreferences(_ preferences: EditorPreferences) {
+        if editorPreferences != preferences { editorPreferences = preferences }
+        let font = DocumentFontPreferences(
+            family: preferences.fontFamily, size: preferences.fontSize, lineHeight: preferences.lineHeight
+        )
+        guard fontPreferences != font else { return }
+        fontPreferences = font
+        fontSettingsWarning = fonts.updateDocument(preferences, editor: fontEditor)
+        zoomFonts.removeAll()
+        zoomedDocument = nil
+        zoomRemainder = 0
+    }
+
+    private struct DocumentFontPreferences: Equatable {
+        let family: String
+        let size: Float
+        let lineHeight: Float
     }
 
     /// Restore before command-line files are opened, so an explicit file wins
@@ -183,12 +217,13 @@ final class EditorSession {
 
         zoomedDocument = nil
         zoomRemainder = 0
-        if let size = saved.fontSize, let base = fonts.document ?? FontStore.default {
-            zoom(by: Float(min(48, max(8, size))) - base.pixelSize.rounded())
-        }
         if let root = saved.projectRoot, root.hasPrefix("/") {
             restoreProject(root, expanded: Set(saved.expandedFolders ?? []))
         }
+        reloadEditorSettings()
+        // Older snapshots recorded 17 even when the user had never zoomed.
+        // Let that value inherit the document size from settings.
+        if let size = saved.fontSize, size != 17 { zoomDocument(to: size) }
         controller.restore(active.position ?? .start)
         loadIfNeeded(activeIndex)
         if revealActive {
@@ -214,7 +249,7 @@ final class EditorSession {
         }
         return .init(
             files: files, activePath: active.url?.standardizedFileURL.path,
-            fontSize: (documentFont ?? FontStore.default).map { Int($0.pixelSize.rounded()) },
+            fontSize: zoomedDocument.map { Int($0.regular.pixelSize.rounded()) },
             projectRoot: project?.tree.root.path,
             expandedFolders: project.map { $0.tree.expanded.subtracting([""]).sorted() },
             showsSidebar: project == nil && workspaceURL == nil ? nil : showsSidebar,
@@ -223,36 +258,42 @@ final class EditorSession {
     }
 
     func zoom(by notches: Float) {
-        guard notches.isFinite, let editor = fontEditor,
-              let base = fonts.document ?? FontStore.default else { return }
+        guard notches.isFinite, let current = documentFont ?? FontStore.default else { return }
         zoomRemainder += notches
         let steps = Int(min(40, max(-40, zoomRemainder.rounded(.towardZero))))
         guard steps != 0 else { return }
         zoomRemainder -= Float(steps)
-        let current = Int((documentFont ?? base).pixelSize.rounded())
-        let size = min(48, max(8, current + steps))
-        guard size != current else { zoomRemainder = 0; return }
-        if Float(size) == base.pixelSize {
+        zoomDocument(to: Int(current.pixelSize.rounded()) + steps)
+    }
+
+    private func zoomDocument(to requestedSize: Int) {
+        guard let editor = fontEditor, let base = fonts.document ?? FontStore.default else { return }
+        let baseSize = Int(base.pixelSize.rounded())
+        let size = min(max(48, baseSize), max(min(8, baseSize), requestedSize))
+        if size == baseSize {
             zoomedDocument = nil
+            return
+        }
+        if let current = zoomedDocument?.regular, Int(current.pixelSize.rounded()) == size {
+            zoomRemainder = 0
             return
         }
         if let cached = zoomFonts[size] {
             zoomedDocument = cached
             return
         }
-        guard let font = EditorFonts.load("Regular", size: Float(size), document: true, editor: editor)
-                ?? fallbackDocumentFont(base, size: Float(size), editor: editor) else {
+        guard let font = resizedDocumentFont(base, size: Float(size), editor: editor) else {
             notice = "Could not load the editor font at \(size) px."
             return
         }
-        let bold = EditorFonts.load("Bold", size: Float(size), document: true, editor: editor)
+        let bold = fonts.documentBold.flatMap { resizedDocumentFont($0, size: Float(size), editor: editor) }
         zoomFonts[size] = (font, bold)
         zoomedDocument = (font, bold)
     }
 
-    private func fallbackDocumentFont(_ base: UIFont, size: Float, editor: Editor) -> UIFont? {
+    private func resizedDocumentFont(_ base: UIFont, size: Float, editor: Editor) -> UIFont? {
         guard let font = UIFont(path: base.path, pixelSize: size, faceIndex: base.faceIndex,
-                                raster: base.raster, lineHeightMultiple: 1.75),
+                                raster: base.raster, lineHeightMultiple: editorPreferences.lineHeight),
               font.registerWithEngine(editor) else { return nil }
         font.useFallbacks(base.fallbacks.map {
             FontFallback(path: $0.path, pixelSize: size)
