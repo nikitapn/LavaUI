@@ -21,8 +21,8 @@ struct SearchPanel: View {
             if model.root == root, let result = model.result {
                 let rows = model.rows
                 ScrollView(.vertical, position: model.scroll) {
-                    LazyVStack(rows.indices, rowHeight: rowHeight) { index in
-                        switch rows[index] {
+                    LazyVStack(rows, rowHeight: rowHeight) { entry in
+                        switch entry.row {
                         case .file(let file):
                             fileRow(result.files[file], font: font, height: rowHeight)
                         case .line(let file, let line):

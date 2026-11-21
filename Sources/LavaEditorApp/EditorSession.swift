@@ -34,7 +34,11 @@ final class EditorSession {
     /// Never empty. Closing the last document leaves a fresh empty one rather
     /// than a window with nothing in it, which is what lets `active` be
     /// non-optional everywhere else.
-    var documents: [EditorDocument] = []
+    var documents: [EditorDocument] = [] {
+        // Every edit, save, reload and close passes through here, which is the
+        // one place project search can hear about all of them. It debounces.
+        didSet { projectSearch.buffersChanged() }
+    }
     var activeIndex = 0
 
     private(set) var recentFiles: [String] = Array(
@@ -136,6 +140,7 @@ final class EditorSession {
         showLineNumbers = AppSettings.bool(forKey: "lineNumbers") ?? true
         highlightsChangedLines = AppSettings.bool(forKey: "highlightChangedLines") ?? true
         documents = [EditorDocument(id: takeID(), url: nil, text: "")]
+        projectSearch.buffers = { [weak self] root in self?.searchBuffers(under: root) ?? [] }
         for kind in RecentProjectKind.allCases {
             let paths = AppSettings.value(forKey: kind.settingsKey, as: [String].self) ?? []
             recentProjectPaths[kind] = RecentProjectPaths.normalized(paths)

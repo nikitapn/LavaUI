@@ -56,15 +56,20 @@ public enum ProjectSearchEngine {
     public static let matchLimit = 10_000
 
     /// Blocking. Call on a worker, and hand the result back to the UI thread.
+    ///
+    /// `paths` limits the search to those files, relative to `root` — how one
+    /// file is read again after its unsaved edits were saved or thrown away.
+    /// Nil walks the whole root.
     public static func search(
         root: URL, options: ProjectSearchOptions,
-        cancellation: ProjectSearchCancellation, limit: Int = matchLimit
+        cancellation: ProjectSearchCancellation, limit: Int = matchLimit,
+        paths: [String]? = nil
     ) throws -> ProjectSearchResult {
         try cancellation.check()
-        guard !options.query.isEmpty else { return ProjectSearchResult() }
+        guard !options.query.isEmpty, paths?.isEmpty != true else { return ProjectSearchResult() }
         guard let executable = findRipgrep() else { throw ProjectSearchError.missingRipgrep }
         return try search(root: root, options: options, cancellation: cancellation,
-                          limit: limit, executable: executable)
+                          limit: limit, executable: executable, paths: paths)
     }
 
     static func findRipgrep(path: String = ProcessInfo.processInfo.environment["PATH"] ?? "") -> URL? {
@@ -78,7 +83,7 @@ public enum ProjectSearchEngine {
 
     static func search(
         root: URL, options: ProjectSearchOptions, cancellation: ProjectSearchCancellation,
-        limit: Int, executable: URL
+        limit: Int, executable: URL, paths: [String]? = nil
     ) throws -> ProjectSearchResult {
         try cancellation.check()
         let process = Process()
@@ -86,7 +91,7 @@ public enum ProjectSearchEngine {
         let diagnostics = Pipe()
         process.executableURL = executable
         process.currentDirectoryURL = root
-        process.arguments = options.arguments
+        process.arguments = options.arguments(paths: paths ?? ["."])
         process.standardOutput = output
         process.standardError = diagnostics
 

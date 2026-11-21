@@ -11,7 +11,11 @@ public struct ProjectSearchOptions: Equatable, Sendable {
 
     public init() {}
 
-    var arguments: [String] {
+    var arguments: [String] { arguments(paths: ["."]) }
+
+    /// `paths` are relative to the search root. Naming a file searches it even
+    /// when an ignore file would have skipped it during a walk.
+    func arguments(paths: [String]) -> [String] {
         // Keep the byte offsets in the same UTF-8 the editor opens, including
         // a BOM if present. --crlf makes the regex end anchor work on CRLF.
         var args = ["--json", "--no-config", "--no-require-git", "--hidden",
@@ -19,7 +23,7 @@ public struct ProjectSearchOptions: Equatable, Sendable {
                     caseSensitive ? "--case-sensitive" : "--ignore-case"]
         if wholeWord { args.append("--word-regexp") }
         if !regularExpression { args.append("--fixed-strings") }
-        return args + ["-e", query, "--", "."]
+        return args + ["-e", query, "--"] + paths
     }
 }
 
@@ -140,14 +144,55 @@ public struct ProjectSearchLine: Sendable {
 
 public struct ProjectSearchFile: Sendable {
     public let path: String
-    public fileprivate(set) var lines: [ProjectSearchLine] = []
-    public fileprivate(set) var count = 0
+    public internal(set) var lines: [ProjectSearchLine] = []
+    public internal(set) var count = 0
 }
 
 public struct ProjectSearchResult: Sendable {
-    public fileprivate(set) var files: [ProjectSearchFile] = []
-    public fileprivate(set) var count = 0
-    public fileprivate(set) var capped = false
+    public internal(set) var files: [ProjectSearchFile] = []
+    public internal(set) var count = 0
+    public internal(set) var capped = false
+
+    public init() {}
+
+    /// This result with each path in `files` answered by the file given for it
+    /// instead — an unsaved buffer's matches over what is on disk, or a fresh
+    /// read of one file over a stale one. A file with no lines removes the
+    /// path. `capped` stays as it was, plus whether the total is now past
+    /// `limit`: a capped walk stopped early, and nothing here can say what it
+    /// would have found.
+    public func replacing(
+        _ files: [String: ProjectSearchFile], limit: Int = ProjectSearchEngine.matchLimit
+    ) -> ProjectSearchResult {
+        guard !files.isEmpty else { return self }
+        var out = ProjectSearchResult()
+        out.files = self.files.filter { files[$0.path] == nil }
+            + files.values.filter { !$0.lines.isEmpty }
+        out.files.sort { $0.path < $1.path }
+        out.count = out.files.reduce(0) { $0 + $1.count }
+        out.capped = capped || out.count > limit
+        return out
+    }
+
+    /// This result with `paths` answered by `fresh` — a search of just those
+    /// files — including the ones `fresh` found nothing in, which are dropped.
+    public func rereading(_ paths: [String], from fresh: ProjectSearchResult) -> ProjectSearchResult {
+        let found = Dictionary(fresh.files.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+        return replacing(Dictionary(paths.map { ($0, found[$0] ?? ProjectSearchFile(path: $0)) },
+                                    uniquingKeysWith: { first, _ in first }))
+    }
+}
+
+/// An open document's text, standing in for its file while it has unsaved
+/// edits. `path` is relative to the search root, as results name files.
+public struct ProjectSearchBuffer: Sendable, Equatable {
+    public let path: String
+    public let text: String
+
+    public init(path: String, text: String) {
+        self.path = path
+        self.text = text
+    }
 }
 
 struct ProjectSearchOutput {
