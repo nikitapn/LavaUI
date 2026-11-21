@@ -1,4 +1,5 @@
 import Foundation
+import LavaProjectCore
 import LavaText
 import LavaUI
 import Observation
@@ -39,6 +40,11 @@ final class EditorSession {
     private(set) var recentFiles: [String] = Array(
         (AppSettings.value(forKey: "recentFiles", as: [String].self) ?? []).prefix(10)
     )
+
+    var recentProjectPaths: [RecentProjectKind: [String]] = [:]
+    var workspaceURL: URL?
+    var pendingWorkspace: WorkspaceOpening?
+    @ObservationIgnored var hasCheckpointed = false
 
     var find = FindState()
     var findQueryFocused = false
@@ -121,50 +127,74 @@ final class EditorSession {
         showLineNumbers = AppSettings.bool(forKey: "lineNumbers") ?? true
         highlightsChangedLines = AppSettings.bool(forKey: "highlightChangedLines") ?? true
         documents = [EditorDocument(id: takeID(), url: nil, text: "")]
+        for kind in RecentProjectKind.allCases {
+            let paths = AppSettings.value(forKey: kind.settingsKey, as: [String].self) ?? []
+            recentProjectPaths[kind] = RecentProjectPaths.normalized(paths)
+        }
     }
 
     /// Restore before command-line files are opened, so an explicit file wins
     /// selection while reusing an existing tab from the previous session.
     func restoreSession() {
-        guard let saved = AppSettings.value(forKey: "session", as: SavedEditorSession.self) else { return }
-        if let root = saved.projectRoot {
-            showsSidebar = saved.showsSidebar ?? true
-            if let fraction = saved.sidebarFraction { sidebarFraction = min(0.6, max(0.1, fraction)) }
-            restoreProject(root, expanded: Set(saved.expandedFolders ?? []))
-        }
+        guard let saved = AppSettings.value(forKey: "session", as: EditorSessionSnapshot.self) else { return }
+        applySession(saved, revealActive: true)
+    }
+
+    func applySession(_ saved: EditorSessionSnapshot, revealActive: Bool) {
+        closeFolder()
+        showsSidebar = saved.showsSidebar ?? true
+        sidebarFraction = min(0.6, max(0.1, saved.sidebarFraction ?? 0.24))
+
         var seen = Set<String>()
         let files = saved.files.filter { $0.path.hasPrefix("/") && seen.insert($0.path).inserted }
-        guard !files.isEmpty else { return }
         documents = files.map {
             EditorDocument(id: takeID(), url: URL(fileURLWithPath: $0.path), text: "",
-                           position: $0.position, isLoaded: false)
+                           position: $0.position?.editorPosition, isLoaded: false)
+        }
+        if documents.isEmpty {
+            documents = [EditorDocument(id: takeID(), url: nil, text: "")]
         }
         activeIndex = files.firstIndex { $0.path == saved.activePath } ?? 0
+
+        zoomedDocument = nil
+        zoomRemainder = 0
         if let size = saved.fontSize, let base = fonts.document ?? FontStore.default {
             zoom(by: Float(min(48, max(8, size))) - base.pixelSize.rounded())
         }
+        if let root = saved.projectRoot, root.hasPrefix("/") {
+            restoreProject(root, expanded: Set(saved.expandedFolders ?? []))
+        }
         controller.restore(active.position ?? .start)
         loadIfNeeded(activeIndex)
-        followActive()
+        if revealActive {
+            followActive()
+        } else if let url = active.url, let project {
+            project.selected = project.tree.path(of: url)
+        }
     }
 
     /// Called after the editor emits, including scroll-only redraws. Reading
     /// the controller here avoids polling or observed writes on every frame.
     func checkpointSession() {
-        let live = active.isLoaded ? controller.position() : nil
-        let files = documents.compactMap { document -> SavedEditorSession.File? in
+        hasCheckpointed = true
+        SessionPersistence.shared.checkpoint(sessionSnapshot(), workspace: workspaceURL)
+    }
+
+    func sessionSnapshot(useLivePosition: Bool = true) -> EditorSessionSnapshot {
+        let live = useLivePosition && active.isLoaded ? controller.position() : nil
+        let files = documents.compactMap { document -> EditorSessionSnapshot.File? in
             guard let url = document.url else { return nil }
-            return .init(path: url.standardizedFileURL.path,
-                         position: (document.id == active.id ? live : nil) ?? document.position ?? .start)
+            let position = (document.id == active.id ? live : nil) ?? document.position ?? .start
+            return .init(path: url.standardizedFileURL.path, position: .init(position))
         }
-        SessionPersistence.shared.checkpoint(.init(
+        return .init(
             files: files, activePath: active.url?.standardizedFileURL.path,
             fontSize: (documentFont ?? FontStore.default).map { Int($0.pixelSize.rounded()) },
             projectRoot: project?.tree.root.path,
             expandedFolders: project.map { $0.tree.expanded.subtracting([""]).sorted() },
-            showsSidebar: project == nil ? nil : showsSidebar,
-            sidebarFraction: project == nil ? nil : sidebarFraction
-        ))
+            showsSidebar: project == nil && workspaceURL == nil ? nil : showsSidebar,
+            sidebarFraction: project == nil && workspaceURL == nil ? nil : sidebarFraction
+        )
     }
 
     func zoom(by notches: Float) {
@@ -282,12 +312,6 @@ final class EditorSession {
         }
         lineCountCache = (doc.id, bytes, revision, lines)
         return lines
-    }
-
-    var windowTitle: String {
-        let mark = active.isModified ? "• " : ""
-        let where_ = active.url?.deletingLastPathComponent().path
-        return "\(mark)\(active.name)\(where_.map { " — \($0)" } ?? "") — LavaEditor"
     }
 
     // MARK: - Switching
@@ -412,39 +436,37 @@ final class EditorSession {
     }
 
     @discardableResult
-    func save() -> Bool {
-        guard documents.indices.contains(activeIndex) else { return false }
-        guard let url = documents[activeIndex].url else { return saveAs() }
-        if let error = documents[activeIndex].save(to: url) {
-            notice = "Could not save \(documents[activeIndex].name): \(error)"
-            return false
-        }
-        if let url = documents[activeIndex].url { rememberFile(url) }
-        // The file may have just become tracked, or the user committed from
-        // a terminal while it was open; saving is a cheap moment to ask.
-        refreshBaseline(activeIndex)
-        project?.refreshStatus()
-        notice = "Saved \(documents[activeIndex].name)"
-        return true
-    }
+    func save() -> Bool { saveDocument(activeIndex) }
 
     @discardableResult
-    func saveAs() -> Bool {
-        guard documents.indices.contains(activeIndex) else { return false }
-        if let error = documents[activeIndex].saveUnavailable {
-            notice = "Could not save \(documents[activeIndex].name): \(error)"
+    func saveAs() -> Bool { saveDocument(activeIndex, choosePath: true) }
+
+    /// Save All can write a background tab without changing the mounted buffer
+    /// or recording its caret on a different document.
+    func saveDocument(_ index: Int, choosePath: Bool = false) -> Bool {
+        guard documents.indices.contains(index) else { return false }
+        let document = documents[index]
+        if let error = document.saveUnavailable {
+            notice = "Could not save \(document.name): \(error)"
             return false
         }
-        guard let target = FileDialog.saveFile(
-            title: "Save As", defaultName: documents[activeIndex].name
-        ) else { return false }
-        if let error = documents[activeIndex].save(to: target) {
+        let target: URL
+        if let url = document.url, !choosePath {
+            target = url
+        } else {
+            guard let url = FileDialog.saveFile(title: "Save As", defaultName: document.name) else { return false }
+            target = url
+        }
+        if let error = documents[index].save(to: target) {
             notice = "Could not save \(target.lastPathComponent): \(error)"
             return false
         }
-        if let url = documents[activeIndex].url { rememberFile(url) }
-        refreshBaseline(activeIndex)
-        notice = "Saved \(documents[activeIndex].name)"
+        if let url = documents[index].url { rememberFile(url) }
+        // The file may have just become tracked, or the user committed from
+        // a terminal while it was open; saving is a cheap moment to ask.
+        refreshBaseline(index)
+        if !choosePath, document.url != nil { project?.refreshStatus() }
+        notice = "Saved \(documents[index].name)"
         return true
     }
 
@@ -689,21 +711,31 @@ final class EditorSession {
 
     // MARK: - Command line
 
-    func openArguments(_ arguments: [String]) {
+    func openArguments(_ arguments: [String], relativeTo directory: URL) {
+        func fileURL(_ path: String) -> URL {
+            URL(fileURLWithPath: path, relativeTo: directory).standardizedFileURL
+        }
+
         // `--diff old new`: the new file opens as a document and the old one
         // is only read, as the left column.
         if let flag = arguments.firstIndex(of: "--diff"), arguments.count > flag + 2 {
-            let old = URL(fileURLWithPath: arguments[flag + 1])
-            let new = URL(fileURLWithPath: arguments[flag + 2])
+            let old = fileURL(arguments[flag + 1])
+            let new = fileURL(arguments[flag + 2])
             var rest = arguments
             rest.removeSubrange(flag...(flag + 2))
-            openArguments(rest)
+            openArguments(rest, relativeTo: directory)
             compare(old, with: new)
             return
         }
         var urls = arguments
             .filter { !$0.hasPrefix("-") }
-            .map { URL(fileURLWithPath: $0) }
+            .map(fileURL)
+        if let workspace = urls.first(where: {
+            $0.pathExtension.lowercased() == EditorWorkspace.pathExtension && !Self.isDirectory($0)
+        }) {
+            openWorkspace(workspace)
+            return
+        }
         // A folder on the command line is the project, as `code .` makes it.
         if let folder = urls.first(where: { $0.hasDirectoryPath || Self.isDirectory($0) }) {
             openFolder(folder)
