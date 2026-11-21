@@ -253,7 +253,7 @@ public:
   bool pollInputEvent(canvas::InputEvent &out, uint32_t windowId = 0);
 
   /// Paths from the most recent FileDrop event, pulled by index — see the
-  /// note on `canvas::InputEventKind::FileDrop`. Valid until the next drop.
+  /// note on `canvas::InputEventKind::fileDrop`. Valid until the next drop.
   int pendingDroppedFileCount(uint32_t windowId = 0);
   std::string pendingDroppedFile(int index, uint32_t windowId = 0);
 

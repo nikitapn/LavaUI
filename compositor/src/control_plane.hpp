@@ -550,7 +550,7 @@ struct CompositorHost {
   virtual void surfaceSize(uint32_t surfaceId, float &outW, float &outH) const = 0;
 
   /// The output scale a surface is drawn at, for the opening `Scale` — sent
-  /// only when it is not 1. See `InputEventKind::Scale`.
+  /// only when it is not 1. See `InputEventKind::scale`.
   virtual float surfaceScale(uint32_t /*surfaceId*/) const { return 1.f; }
 
   /// "The client has been told what size it is, on event `serial`." The

@@ -381,7 +381,7 @@ class RenderWindow {
 
   /// The part of the last frame that is genuinely opaque, or false if none is.
   ///
-  /// The producer's claim (`DrawCommandKind::OpaqueBounds`) narrowed by this
+  /// The producer's claim (`DrawCommandKind::opaqueBounds`) narrowed by this
   /// window's own rounding, because the corner mask runs *after* the client's
   /// content and clears pixels the client believed it had filled. Insetting
   /// here rather than in the caller keeps the two facts in the one place that
@@ -443,7 +443,7 @@ class RenderWindow {
   bool  cornerBottom_ = true;
 
   /// What the last replayed frame declared fully opaque, in viewport pixels —
-  /// see `DrawCommandKind::OpaqueBounds`. Zero width or height is "nothing
+  /// see `DrawCommandKind::opaqueBounds`. Zero width or height is "nothing
   /// claimed", which is where every frame starts.
   float opaqueX_ = 0.f;
   float opaqueY_ = 0.f;

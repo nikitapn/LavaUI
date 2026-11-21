@@ -59,7 +59,7 @@ void Decoration::build(const std::string &title, uint32_t width,
   const float w = static_cast<float>(width);
   const float h = static_cast<float>(kHeight);
 
-  commands_.push_back({.kind = static_cast<uint32_t>(Rect),
+  commands_.push_back({.kind = static_cast<uint32_t>(rect),
                        .x = 0, .y = 0, .w = w, .h = h,
                        .color = focused ? kBarFocused : kBarUnfocused});
 
@@ -86,7 +86,7 @@ void Decoration::build(const std::string &title, uint32_t width,
     if (!glyphs_.empty()) {
       // `param` is the first glyph index and `w` the count — the convention
       // every Text command follows, so the renderer never re-shapes.
-      commands_.push_back({.kind  = static_cast<uint32_t>(Text),
+      commands_.push_back({.kind  = static_cast<uint32_t>(text),
                            .w     = static_cast<float>(glyphs_.size()),
                            .color = focused ? kTitle : kTitleDim,
                            .param = 0});
@@ -100,23 +100,23 @@ void Decoration::build(const std::string &title, uint32_t width,
 
   const float closeX = buttonCenterX(width, 0);
   if (hovered == DecorationHit::Close) {
-    commands_.push_back({.kind = static_cast<uint32_t>(RoundedRect),
+    commands_.push_back({.kind = static_cast<uint32_t>(roundedRect),
                          .x = closeX - kButtonSize * 0.5f,
                          .y = cy - kButtonSize * 0.5f,
                          .w = kButtonSize, .h = kButtonSize,
                          .color = kCloseHover, .aux = 6.f});
   }
   const float arm = 4.5f;
-  commands_.push_back({.kind = static_cast<uint32_t>(Line),
+  commands_.push_back({.kind = static_cast<uint32_t>(line),
                        .x = closeX - arm, .y = cy - arm,
                        .w = closeX + arm, .h = cy + arm, .color = kGlyph});
-  commands_.push_back({.kind = static_cast<uint32_t>(Line),
+  commands_.push_back({.kind = static_cast<uint32_t>(line),
                        .x = closeX - arm, .y = cy + arm,
                        .w = closeX + arm, .h = cy - arm, .color = kGlyph});
 
   const float maxX = buttonCenterX(width, 1);
   if (hovered == DecorationHit::Maximize) {
-    commands_.push_back({.kind = static_cast<uint32_t>(RoundedRect),
+    commands_.push_back({.kind = static_cast<uint32_t>(roundedRect),
                          .x = maxX - kButtonSize * 0.5f,
                          .y = cy - kButtonSize * 0.5f,
                          .w = kButtonSize, .h = kButtonSize,
@@ -132,20 +132,20 @@ void Decoration::build(const std::string &title, uint32_t width,
       {maxX - box, cy + box, maxX - box, cy - box},
   };
   for (const auto &c : corners) {
-    commands_.push_back({.kind = static_cast<uint32_t>(Line),
+    commands_.push_back({.kind = static_cast<uint32_t>(line),
                          .x = c[0], .y = c[1], .w = c[2], .h = c[3],
                          .color = kGlyph});
   }
 
   const float minX = buttonCenterX(width, 2);
   if (hovered == DecorationHit::Minimize) {
-    commands_.push_back({.kind = static_cast<uint32_t>(RoundedRect),
+    commands_.push_back({.kind = static_cast<uint32_t>(roundedRect),
                          .x = minX - kButtonSize * 0.5f,
                          .y = cy - kButtonSize * 0.5f,
                          .w = kButtonSize, .h = kButtonSize,
                          .color = kButtonHover, .aux = 6.f});
   }
-  commands_.push_back({.kind = static_cast<uint32_t>(Line),
+  commands_.push_back({.kind = static_cast<uint32_t>(line),
                        .x = minX - box, .y = cy + 1.f,
                        .w = minX + box, .h = cy + 1.f, .color = kGlyph});
 }

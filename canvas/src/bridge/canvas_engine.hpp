@@ -278,7 +278,7 @@ class Engine {
   /// inset for rounded corners. False when nothing was claimed.
   ///
   /// What a compositor needs to stop blending a surface it does not have to —
-  /// see `DrawCommandKind::OpaqueBounds`.
+  /// see `DrawCommandKind::opaqueBounds`.
   bool opaqueBounds(uint32_t windowId, float &x, float &y, float &w,
                     float &h) const;
 
@@ -361,7 +361,7 @@ class Engine {
   bool pollInputEvent(InputEvent &out, uint32_t windowId = 0);
 
   /// Paths from the most recent FileDrop event — see
-  /// `canvas::InputEventKind::FileDrop`. Valid until the next drop.
+  /// `canvas::InputEventKind::fileDrop`. Valid until the next drop.
   StringVector pendingDroppedFiles(uint32_t windowId = 0);
 
   /// Current swapchain extent in pixels.
