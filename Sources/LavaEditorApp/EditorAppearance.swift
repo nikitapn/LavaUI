@@ -63,12 +63,18 @@ struct EditorFonts {
 
     mutating func updateDocument(_ settings: EditorPreferences, editor: Editor?) -> String? {
         guard let editor else { return nil }
-        func load(_ path: String?) -> UIFont? {
-            Self.load(path, size: settings.fontSize, lineHeight: settings.lineHeight, editor: editor)
+        let catalog = FontCatalog.installed
+        func load(_ path: String?, index: UInt32 = 0) -> UIFont? {
+            Self.load(path, size: settings.fontSize, faceIndex: index,
+                      lineHeight: settings.lineHeight, editor: editor)
+        }
+        func loadFace(_ family: String, style: FontStyle) -> UIFont? {
+            guard let face = catalog.resolveFace(family: family, style: style) else { return nil }
+            return load(face.path, index: face.index)
         }
         func faces(_ family: String) -> (UIFont, UIFont)? {
-            guard let regular = load(Self.match(family, style: "Regular")),
-                  let bold = load(Self.match(family, style: "Bold")) else { return nil }
+            guard let regular = loadFace(family, style: .regular),
+                  let bold = loadFace(family, style: .bold) else { return nil }
             return (regular, bold)
         }
 
@@ -91,33 +97,11 @@ struct EditorFonts {
         return "Could not load font family '\(requested)'. Using bundled Figtree."
     }
 
-    private static func match(_ family: String, style: String) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/fc-match")
-        let escaped = family.reduce(into: "") { pattern, character in
-            if "\\-,:=".contains(character) { pattern.append("\\") }
-            pattern.append(character)
-        }
-        process.arguments = ["-f", "%{file}\n%{family}", "--", "\(escaped):style=\(style)"]
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            let data = output.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else { return nil }
-            return FontMatch.path(in: String(decoding: data, as: UTF8.self), requestedFamily: family)
-        } catch {
-            return nil
-        }
-    }
-
     private static func load(
-        _ path: String?, size: Float, lineHeight: Float? = nil, editor: Editor?
+        _ path: String?, size: Float, faceIndex: UInt32 = 0, lineHeight: Float? = nil, editor: Editor?
     ) -> UIFont? {
         guard let editor, let path,
-              let font = UIFont(path: path, pixelSize: size, lineHeightMultiple: lineHeight),
+              let font = UIFont(path: path, pixelSize: size, faceIndex: faceIndex, lineHeightMultiple: lineHeight),
               font.registerWithEngine(editor) else { return nil }
 
         if let base = FontStore.default {

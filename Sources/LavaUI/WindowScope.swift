@@ -63,6 +63,7 @@ public final class WindowScope {
     /// an id through every body — the same ambient answer, from the same
     /// place, as the rest of this type.
     public let windowID: WindowID
+    weak var editor: Editor?
 
     /// Creates the state for one window. `label` is for diagnostics only.
     public init(label: String, windowID: WindowID = .main) {

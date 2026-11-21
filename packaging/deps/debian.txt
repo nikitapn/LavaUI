@@ -28,6 +28,7 @@ xz-utils
 libcairo2-dev
 libdbusmenu-glib-dev
 libdrm-dev
+libfontconfig-dev
 libfreetype-dev
 libglfw3-dev
 libglib2.0-dev

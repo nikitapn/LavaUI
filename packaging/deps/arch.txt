@@ -17,6 +17,7 @@ wget
 # ── canvas / LavaUI ────────────────────────────────────────────────────────
 boost
 cairo
+fontconfig
 freetype2
 glfw
 glib2

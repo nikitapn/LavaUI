@@ -105,6 +105,8 @@ final class OverlayAttachment {
     /// Nothing outside the panel takes input while it is up. See
     /// `OverlayStyle.modal`.
     var modal = false
+    var onKey: ((KeyEvent) -> Bool)?
+    var onUnfocusedText: ((Character) -> Void)?
 
     /// Resolved during emit, in the same space as the anchor.
     var origin: (x: Float, y: Float) = (0, 0)
@@ -164,6 +166,19 @@ final class OverlayAttachment {
             YGNodeStyleSetWidth(y, width)
             YGNodeStyleSetHeight(y, height)
             YGNodeCalculateLayout(y, width, height, YGDirectionLTR)
+            // Detached overlays bypass LayoutHost's post-Yoga pass. Settle
+            // their lazy rows only after placement has given them a viewport.
+            let grids = LazyGrid.nodes(in: root)
+            func settleRows() {
+                for _ in 0..<3 {
+                    let changed = grids.map { $0.settleWindow() }
+                    guard changed.contains(true) else { break }
+                    YGNodeCalculateLayout(y, width, height, YGDirectionLTR)
+                }
+            }
+            settleRows()
+            let repositioned = grids.map { $0.scrollNode?.applyPendingPosition() == true }
+            if repositioned.contains(true) { settleRows() }
             return
         }
 
@@ -306,6 +321,8 @@ public struct OverlayView<Content: View, OverlayContent: View>: PrimitiveView {
 
         att.scrim = style.scrim
         att.modal = style.modal
+        att.onKey = style.onKey
+        att.onUnfocusedText = style.onUnfocusedText
         att.border = style.plateBorder
         att.cornerRadius = style.cornerRadius
         root.fillColor = style.background
@@ -436,6 +453,9 @@ public struct OverlayStyle {
     /// side-effect. Keys are the app's: its handler decides what a dialog
     /// lets through.
     public var modal: Bool
+    // Opt into a keyboard scope as well as pointer modality.
+    var onKey: ((KeyEvent) -> Bool)?
+    var onUnfocusedText: ((Character) -> Void)?
 
     /// Creates a style. Colours and radius left `nil` come from the current theme.
     public init(

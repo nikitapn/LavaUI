@@ -45,4 +45,38 @@ final class ModalOverlayTests: XCTestCase {
         host.hitTestClick(x: 20, y: 20)?()
         XCTAssertEqual(clicks, 1)
     }
+
+    func testPlacedOverlayMountsOnlyTheLazyRowsAtItsScrollPosition() throws {
+        let position = ScrollPosition(offset: 6_000)
+        let host = LayoutHost()
+        var lastClick: Int?
+        host.setRoot(
+            Text("Behind").overlay(
+                isPresented: .constant(true),
+                placement: OverlayPlacement { _ in
+                    OverlayFrame(x: 50, y: 40, width: 200, height: 200)
+                },
+                style: OverlayStyle(padding: 0, modal: true)
+            ) {
+                ScrollView(.vertical, position: position) {
+                    LazyVStack(Array(0..<500), rowHeight: 30) { row in
+                        Text("Row \(row)", onClick: { lastClick = row })
+                            .frame(height: .pt(30))
+                    }
+                }
+            }
+        )
+        _ = host.calculateLayout(width: 400, height: 300)
+        let root = try XCTUnwrap(host.rootNode)
+        let overlay = try XCTUnwrap(OverlayScan.presented(in: root).first)
+        overlay.layoutAndPlace(anchorX: 0, anchorY: 0, anchorW: 0, anchorH: 0,
+                               viewportW: 400, viewportH: 300)
+        let panel = try XCTUnwrap(overlay.root)
+        let grid = try XCTUnwrap(LazyGrid.nodes(in: panel).first)
+        XCTAssertEqual(position.offset, 6_000)
+        XCTAssertGreaterThan(grid.mountedCount, 0)
+        XCTAssertLessThan(grid.mountedCount, 40)
+        host.hitTestClick(x: 65, y: 55)?()
+        XCTAssertEqual(lastClick, 200)
+    }
 }

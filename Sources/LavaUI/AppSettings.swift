@@ -268,6 +268,30 @@ public enum AppSettings {
         }
     }
 
+    /// Framework preferences shared by every LavaUI app. Read fresh so an
+    /// app which has been open all day still sees changes made by another.
+    static func sharedValue<T: Decodable>(forKey key: String, as type: T.Type) -> T? {
+        let url = configRoot(for: "LavaUI").appendingPathComponent("settings.json")
+        return readSettings(at: url)[key].flatMap { decodeStored($0, as: type) }
+    }
+
+    @discardableResult
+    static func updateSharedValue<T: Codable>(
+        _ type: T.Type, forKey key: String, _ body: (T?) -> T
+    ) -> T {
+        let url = configRoot(for: "LavaUI").appendingPathComponent("settings.json")
+        return withFileLock(in: url.deletingLastPathComponent()) {
+            var fields = readSettings(at: url)
+            let next = body(fields[key].flatMap { decodeStored($0, as: type) })
+            if let data = try? JSONEncoder().encode(next),
+               let object = try? JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed) {
+                fields[key] = object
+                writeSettings(fields, at: url)
+            }
+            return next
+        }
+    }
+
     /// Takes the file as it is on disk into the cache. Every write does this
     /// first: an app can run more than one process — two explorer windows —
     /// and writing a cache loaded at start-up put back every key as it was
@@ -289,56 +313,49 @@ public enum AppSettings {
     /// any other process of this app is concerned. Without the lock file —
     /// a directory that cannot be written — `body` runs anyway, as before.
     private static func withFileLock(_ body: () -> Void) {
-        let directory = configRoot(for: appName)
+        withFileLock(in: configRoot(for: appName), body)
+    }
+
+    private static func withFileLock<T>(in directory: URL, _ body: () -> T) -> T {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let path = directory.appendingPathComponent("settings.json.lock").path
         let fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
-        guard fd >= 0 else {
-            body()
-            return
-        }
+        guard fd >= 0 else { return body() }
         defer { close(fd) }
-        _ = flock(fd, LOCK_EX)
-        defer { _ = flock(fd, LOCK_UN) }
-        body()
+        while flock(fd, LOCK_EX) != 0 {
+            if errno != EINTR { return body() }
+        }
+        return body()
     }
 
     private static func ensureLoadedLocked() {
         guard !loaded else { return }
         loaded = true
         let url = configRoot(for: appName).appendingPathComponent("settings.json")
+        cache = readSettings(at: url)
+    }
+
+    private static func readSettings(at url: URL) -> [String: Any] {
         guard let data = try? Data(contentsOf: url),
-              let obj = try? JSONSerialization.jsonObject(with: data),
-              let dict = obj as? [String: Any]
-        else {
-            cache = [:]
-            return
-        }
-        cache = dict
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let fields = object as? [String: Any] else { return [:] }
+        return fields
     }
 
     private static func persistLocked() {
         let url = configRoot(for: appName).appendingPathComponent("settings.json")
+        writeSettings(cache, at: url)
+    }
+
+    private static func writeSettings(_ fields: [String: Any], at url: URL) {
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        guard JSONSerialization.isValidJSONObject(cache),
-              let data = try? JSONSerialization.data(
-                withJSONObject: cache,
-                options: [.prettyPrinted, .sortedKeys]
-              )
+        guard JSONSerialization.isValidJSONObject(fields),
+              let data = try? JSONSerialization.data(withJSONObject: fields, options: [.prettyPrinted, .sortedKeys])
         else { return }
-        let tmp = url.appendingPathExtension("tmp")
-        do {
-            try data.write(to: tmp, options: .atomic)
-            if FileManager.default.fileExists(atPath: url.path) {
-                try FileManager.default.removeItem(at: url)
-            }
-            try FileManager.default.moveItem(at: tmp, to: url)
-        } catch {
-            try? FileManager.default.removeItem(at: tmp)
-        }
+        try? data.write(to: url, options: .atomic)
     }
 
     private static func configRoot(for name: String) -> URL {

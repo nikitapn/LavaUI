@@ -102,9 +102,13 @@ public struct EditorSettings: Sendable {
     }
 
     public func folderOverride(for key: EditorToggle) -> SettingsLocation? {
+        folderEditorOverride(for: key.rawValue)
+    }
+
+    public func folderEditorOverride(for key: String) -> SettingsLocation? {
         let editor = configuredRoot.node(at: ["editor"])
         // A malformed folder editor object can also shadow a user preference.
-        let origin = configuredOrigin(at: key.path) ?? (editor?.object == nil ? editor?.origin : nil)
+        let origin = configuredOrigin(at: ["editor", key]) ?? (editor?.object == nil ? editor?.origin : nil)
         return origin?.layer == .folder ? origin?.location : nil
     }
 

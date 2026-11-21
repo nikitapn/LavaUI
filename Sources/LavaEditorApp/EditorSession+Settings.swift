@@ -122,6 +122,24 @@ extension EditorSession {
         }
     }
 
+    func setEditorFont(_ choice: FontChoice) {
+        let user = settingsFiles.user
+        do {
+            try UserSettingsFile.setFont(family: choice.family, size: choice.size, at: user)
+            scheduleSettingsReload()
+            let overridden = ["fontFamily", "fontSize"].compactMap { key in
+                settingsFiles.effective.folderEditorOverride(for: key).map {
+                    "\($0) — The folder setting for editor.\(key) wins."
+                }
+            }
+            if !overridden.isEmpty {
+                notice = (overridden + ["Updated \(user.path)."]).joined(separator: " • ")
+            }
+        } catch {
+            showSettingsFileError(error, at: user)
+        }
+    }
+
     func openUserSettings() { openSettingsFile(settingsFiles.user) }
 
     func openFolderSettings() {
