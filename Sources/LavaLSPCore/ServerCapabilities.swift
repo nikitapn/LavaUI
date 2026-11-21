@@ -55,7 +55,13 @@ public struct ServerCapabilities: Decodable, Sendable {
 
     static let client: JSON = .object([
         "general": .object(["positionEncodings": .array([.string("utf-8"), .string("utf-16")])]),
-        "workspace": .object(["configuration": .bool(true)]),
+        // Refresh support is what makes a server's highlighting arrive at all
+        // for a file it is still preparing: sourcekit-lsp answers the first
+        // request with nothing, and asks for another once it knows more.
+        "workspace": .object([
+            "configuration": .bool(true),
+            "semanticTokens": .object(["refreshSupport": .bool(true)]),
+        ]),
         "window": .object(["workDoneProgress": .bool(true)]),
         "textDocument": .object([
             "publishDiagnostics": .object(["versionSupport": .bool(true)]),

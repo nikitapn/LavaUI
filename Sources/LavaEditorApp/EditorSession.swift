@@ -38,9 +38,15 @@ final class EditorSession {
     var documents: [EditorDocument] = [] {
         // Every edit, save, reload and close passes through here, which is the
         // one place project search can hear about all of them. It debounces.
-        didSet { projectSearch.buffersChanged() }
+        didSet {
+            projectSearch.buffersChanged()
+            scheduleLanguageSync()
+        }
     }
-    var activeIndex = 0
+    var activeIndex = 0 {
+        // The tab in front is the one whose highlighting a server is asked for.
+        didSet { if activeIndex != oldValue { scheduleLanguageSync() } }
+    }
 
     private(set) var recentFiles: [String] = Array(
         (AppSettings.value(forKey: "recentFiles", as: [String].self) ?? []).prefix(10)
@@ -90,6 +96,8 @@ final class EditorSession {
     }
     private var editorPreferences = EditorPreferences.defaults
     @ObservationIgnored let settingsFiles = EditorSettingsFiles()
+    let languageServers = LanguageServers()
+    @ObservationIgnored var languageSyncScheduled = false
 
     /// Local document zoom; the tab strip and toolbars keep their UI font.
     private(set) var fonts: EditorFonts
@@ -155,6 +163,7 @@ final class EditorSession {
         fonts = EditorFonts(editor: editor)
         documents = [EditorDocument(id: takeID(), url: nil, text: "")]
         projectSearch.buffers = { [weak self] root in self?.searchBuffers(under: root) ?? [] }
+        startLanguageServers()
         for kind in RecentProjectKind.allCases {
             let paths = AppSettings.value(forKey: kind.settingsKey, as: [String].self) ?? []
             recentProjectPaths[kind] = RecentProjectPaths.normalized(paths)

@@ -620,6 +620,8 @@ final class LeafNode: YogaBoxNode {
     /// The word underlined as a link while Control is held over it, as
     /// character offsets. Paint-only: setting it costs a redraw, not a body.
     var linkRange: Range<Int>?
+    /// `EditorView(semanticHighlights:)`, nil when there are none.
+    var semanticHighlights: SemanticHighlights?
     /// Whole-line marks, sorted by first line. See `EditorLineMark`.
     var lineMarks: [EditorLineMark] = []
     /// Vertical scroll offset in pixels. Positive scrolls content up.

@@ -65,6 +65,8 @@ extension EditorSession {
         let (settings, diagnostics) = settingsFiles.loader.load(user: settingsFiles.user, folder: folder)
         settingsFiles.effective = settings
         applyEditorPreferences(settings.editor)
+        languageServers.settingsChanged()
+        scheduleLanguageSync()
 
         var messages = [settingsFiles.migrationMessage].compactMap { $0 }
         messages += diagnostics.map(\.localizedDescription)

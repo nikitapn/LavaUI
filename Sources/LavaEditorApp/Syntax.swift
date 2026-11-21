@@ -209,6 +209,9 @@ enum Language: String, CaseIterable {
                     Color(rgb24: 0x6b_62_54),  // comment
                     Color(rgb24: 0x8e_47_20),  // number
                     Color(rgb24: 0x23_5c_73),  // type / key
+                    Color(rgb24: 0x7a_5a_12),  // function (language server)
+                    Color(rgb24: 0x9a_4a_2e),  // parameter (language server)
+                    Color(rgb24: 0x2d_6a_5a),  // property / member (language server)
                 ]
             )
         }
@@ -220,6 +223,11 @@ enum Language: String, CaseIterable {
                 Color(r: 0.45, g: 0.50, b: 0.58),  // 2 comment
                 Color(r: 0.90, g: 0.68, b: 0.40),  // 3 number
                 Color(r: 0.40, g: 0.72, b: 0.92),  // 4 type / key
+                // From here only a language server colours: the lexer cannot
+                // tell a call from any other identifier.
+                Color(r: 0.88, g: 0.80, b: 0.52),  // 5 function
+                Color(r: 0.92, g: 0.62, b: 0.55),  // 6 parameter
+                Color(r: 0.55, g: 0.82, b: 0.80),  // 7 property / member
             ]
         )
     }

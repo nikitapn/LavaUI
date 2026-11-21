@@ -33,7 +33,11 @@ public enum LSPClientError: Error, Sendable, Equatable {
 }
 
 public enum LSPEvent: Sendable {
+    /// Something the server asked the client to request again.
+    public enum Refresh: Sendable { case semanticTokens }
+
     case ready(ServerCapabilities)
+    case refresh(Refresh)
     case diagnostics(PublishedDiagnostics)
     case notification(method: String, params: JSON?)
     case exited(ServerExit, willRestart: Bool)
@@ -374,6 +378,11 @@ public final class LSPClient: @unchecked Sendable {
             send(["id": id, "result": .array(values)])
         case "client/registerCapability", "client/unregisterCapability", "window/workDoneProgress/create":
             send(["id": id, "result": .null])
+        case "workspace/semanticTokens/refresh":
+            // Answered here, acted on by the app: the request is the server
+            // saying what it said before is out of date.
+            send(["id": id, "result": .null])
+            emit(.refresh(.semanticTokens))
         default:
             send(["id": id, "error": .object(["code": .integer(-32601), "message": .string("Method not found")])])
         }

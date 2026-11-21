@@ -428,6 +428,10 @@ public struct EditorView: PrimitiveView {
     public var onDecorationTap: ((EditorDecoration) -> Void)?
     /// Ctrl+wheel notches, consumed even when the document cannot scroll.
     public var onZoom: ((Float) -> Void)?
+    /// A language server's highlighting, laid over the highlighter's per
+    /// logical line. Its line numbers must describe the bound text as it is
+    /// now — the app shifts them across edits until the server replies.
+    public var semanticHighlights: SemanticHighlights?
     /// Ctrl+click on a word, with the character offset clicked: go to
     /// definition, open a link. While Control is held, the word under the
     /// pointer is underlined and the pointer becomes a hand, all drawn by the
@@ -454,6 +458,7 @@ public struct EditorView: PrimitiveView {
         onDecorationTap: ((EditorDecoration) -> Void)? = nil,
         controller: EditorController? = nil,
         onZoom: ((Float) -> Void)? = nil,
+        semanticHighlights: SemanticHighlights? = nil,
         onFollow: ((Int) -> Void)? = nil
     ) {
         self._text = text
@@ -472,6 +477,7 @@ public struct EditorView: PrimitiveView {
         self.controller = controller
         self.onZoom = onZoom
         self.onFollow = onFollow
+        self.semanticHighlights = semanticHighlights
     }
 
     /// The font the editor draws with: `font`, or the environment's when that is `nil`.
@@ -606,6 +612,7 @@ public struct EditorView: PrimitiveView {
         // Sorted once here so the paint can binary-search a screenful of rows.
         leaf.lineMarks = lineMarks.sorted { $0.lines.lowerBound < $1.lines.lowerBound }
         leaf.onDecorationTap = onDecorationTap
+        leaf.semanticHighlights = semanticHighlights?.isEmpty == false ? semanticHighlights : nil
         configureFollow(leaf)
 
         let binding = _text

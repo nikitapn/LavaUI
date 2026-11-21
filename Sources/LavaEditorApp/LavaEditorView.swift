@@ -84,9 +84,12 @@ struct LavaEditorView: View {
                     wraps: session.wraps,
                     visibleLines: 24,
                     search: session.find.isOpen ? session.find.search : TextSearch(),
+                    decorations: session.languageDecorations(),
                     lineMarks: session.changeMarks(appearance),
+                    onDecorationTap: { session.notice = $0.message },
                     controller: session.controller,
                     onZoom: { session.zoom(by: $0) },
+                    semanticHighlights: session.languageHighlights(),
                     onFollow: { session.follow(at: $0) }
                 )
                 .flexGrow(1)

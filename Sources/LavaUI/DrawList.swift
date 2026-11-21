@@ -2864,7 +2864,7 @@ extension DrawList {
                 )
             }
 
-            let lineSpans: [HighlightSpan]
+            var lineSpans: [HighlightSpan]
             // A highlighter with no rules and no lexer has nothing to say, and
             // asking it costs the line: while wrapping, that is an index walk
             // and a copy per visible logical line, every frame, for an empty
@@ -2876,6 +2876,9 @@ extension DrawList {
                     lineSpans = highlighter.isStateful
                         ? leaf.highlightCache.spans(atRow: row)
                         : highlighter.spans(in: lineText)
+                    if let semantic = leaf.semanticHighlights {
+                        lineSpans = semantic.overlay(lineSpans, line: row)
+                    }
                 } else {
                     // Wrapped. Both kinds of highlighter are stated in logical
                     // lines and this row is a slice of one, so the spans are
@@ -2900,6 +2903,11 @@ extension DrawList {
                                 start, offsetBy: extent.upperBound - extent.lowerBound
                             )
                             spanCache = highlighter.spans(in: String(state.text[start..<end]))
+                        }
+                        // On the logical line, before the cut to this row:
+                        // the server's columns are the line's.
+                        if let semantic = leaf.semanticHighlights {
+                            spanCache = semantic.overlay(spanCache, line: logical)
                         }
                     }
                     let column = leaf.columnStart(ofRow: row)

@@ -23,10 +23,10 @@ extension EditorSession {
         }
     }
 
-    /// Ctrl+click on a word. Until a language server can say where it is
-    /// defined, the honest answer is every place it is written: a whole-word,
-    /// case-sensitive project search for it.
-    func follow(at offset: Int) {
+    /// Every place a word is written: a whole-word, case-sensitive project
+    /// search. What Ctrl+click does when no language server can say where the
+    /// word is defined.
+    func searchForWord(at offset: Int) {
         let text = active.text
         guard let project, offset >= 0, offset < text.count else { return }
         let index = text.index(text.startIndex, offsetBy: offset)
@@ -48,6 +48,11 @@ extension EditorSession {
             notice = "This line has changed. Run the search again to refresh the results."
             return
         }
+        select(range)
+    }
+
+    /// Selects `range` in the document in front and scrolls it into view.
+    func select(_ range: Range<Int>) {
         if visibleDiff != nil { closeDiff() }
 
         let destination = active.id
