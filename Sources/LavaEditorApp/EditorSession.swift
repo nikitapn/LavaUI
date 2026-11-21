@@ -96,6 +96,8 @@ final class EditorSession {
     /// The open folder, if any. See `EditorSession+Project`.
     var project: ProjectSession?
     var showsSidebar = true
+    /// Which view the sidebar shows. See `ActivityBar`.
+    var sidebarView: SidebarView = .explorer
     var sidebarFraction: Float = 0.24
 
     /// HEAD's copy of each open document that has one, by document id. See

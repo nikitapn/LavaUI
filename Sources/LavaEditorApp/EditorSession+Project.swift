@@ -57,6 +57,18 @@ extension EditorSession {
         open([project.tree.url(of: path)])
     }
 
+    /// Shows `view` in the sidebar, asking for a folder first if none is
+    /// open — every view in it is about one.
+    func showSidebar(_ view: SidebarView) {
+        guard project != nil else {
+            openFolderDialog()
+            if project != nil { sidebarView = view }
+            return
+        }
+        sidebarView = view
+        showsSidebar = true
+    }
+
     func toggleSidebar() {
         if project == nil {
             openFolderDialog()

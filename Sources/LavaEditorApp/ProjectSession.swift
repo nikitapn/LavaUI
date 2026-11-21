@@ -20,6 +20,9 @@ final class ProjectSession {
     private(set) var rows: [ProjectRow] = []
     private(set) var decorations = GitDecorations()
     private(set) var branch: String?
+    /// What git reports as changed — staged, unstaged, untracked, in
+    /// conflict; never ignored. Paths are the repository's, not the tree's.
+    private(set) var changes: [GitStatusEntry] = []
     /// The row the keyboard and the highlight are on.
     var selected: String?
 
@@ -159,6 +162,7 @@ final class ProjectSession {
         let projectPath = self.projectPath
         DispatchQueue.global(qos: .utility).async {
             let entries = (try? repository.status(ignored: true)) ?? []
+            let changes = entries.filter { $0.kind != .ignored }
             let branch = try? repository.branch()
             let decorations = GitDecorations(
                 entries: entries, repositoryPath: repositoryPath, projectPath: projectPath
@@ -168,6 +172,7 @@ final class ProjectSession {
                 project.statusRunning = false
                 if project.decorations != decorations { project.decorations = decorations }
                 if project.branch != branch { project.branch = branch }
+                if project.changes != changes { project.changes = changes }
                 if project.statusAgain {
                     project.statusAgain = false
                     project.refreshStatus()

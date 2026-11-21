@@ -35,29 +35,42 @@ struct GitMarkColors {
     }
 }
 
-/// The project's files down the left of the window.
+/// What the sidebar is showing — VS Code's activity bar, as a row of icons
+/// under the window's buttons.
+enum SidebarView: String, CaseIterable {
+    case explorer, search, sourceControl
+
+    var title: String {
+        switch self {
+        case .explorer: return "Explorer"
+        case .search: return "Search"
+        case .sourceControl: return "Source Control"
+        }
+    }
+}
+
+/// The left of the window: the window's buttons, the row of views, and
+/// whichever view is chosen. Each view is its own type in its own file —
+/// `ProjectExplorer` below, `SearchPanel`, `SourceControlPanel`.
 struct ProjectSidebar: View {
     @Bindable var session: EditorSession
     let project: ProjectSession
     let appearance: EditorAppearance
 
     var body: some View {
-        let theme = appearance.theme
-        let font = session.fonts.tab ?? FontStore.default
-        let rowH = ((font?.lineHeight ?? 18) + 8).rounded()
-        let colors = GitMarkColors(appearance)
-        return VStack(flexGrow: 1, spacing: 0) {
+        VStack(flexGrow: 1, spacing: 0) {
             titleStrip
-            header(theme: theme)
-            ScrollView(.vertical, position: project.scroll) {
-                LazyVStack(project.rows.indices, rowHeight: rowH) { index in
-                    row(index, font: font, rowH: rowH, colors: colors, theme: theme)
-                }
+            ActivityBar(session: session, project: project, appearance: appearance)
+            switch session.sidebarView {
+            case .explorer:
+                ProjectExplorer(session: session, project: project, appearance: appearance)
+            case .search:
+                SearchPanel(session: session, project: project, appearance: appearance)
+            case .sourceControl:
+                SourceControlPanel(session: session, project: project, appearance: appearance)
             }
-            .flexGrow(1)
-            .agentId("project-rows")
         }
-        .background(theme.panel)
+        .background(appearance.theme.panel)
     }
 
     /// The window's buttons and somewhere to drag it by, at the height of
@@ -72,6 +85,31 @@ struct ProjectSidebar: View {
             Spacer()
                 .frame(height: .pt(EditorTabs.stripHeight), minWidth: 16)
                 .windowDrag()
+        }
+    }
+}
+
+/// The folder's files: a header with the folder (or workspace) and branch,
+/// then the tree.
+struct ProjectExplorer: View {
+    @Bindable var session: EditorSession
+    let project: ProjectSession
+    let appearance: EditorAppearance
+
+    var body: some View {
+        let theme = appearance.theme
+        let font = session.fonts.tab ?? FontStore.default
+        let rowH = ((font?.lineHeight ?? 18) + 8).rounded()
+        let colors = GitMarkColors(appearance)
+        return VStack(flexGrow: 1, spacing: 0) {
+            header(theme: theme)
+            ScrollView(.vertical, position: project.scroll) {
+                LazyVStack(project.rows.indices, rowHeight: rowH) { index in
+                    row(index, font: font, rowH: rowH, colors: colors, theme: theme)
+                }
+            }
+            .flexGrow(1)
+            .agentId("project-rows")
         }
     }
 

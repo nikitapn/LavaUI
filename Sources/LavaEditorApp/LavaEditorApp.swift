@@ -125,9 +125,11 @@ struct LavaEditorApp {
                             "Find Next", id: "search.next",
                             shortcut: KeyShortcut(KeyCode.g, .primary)
                         ) { session.findNext() }
+                        // Shift+F3 rather than Ctrl+Shift+G, which opens
+                        // Source Control — as both are in VS Code.
                         MenuItem(
                             "Find Previous", id: "search.previous",
-                            shortcut: KeyShortcut(KeyCode.g, [.primary, .shift])
+                            shortcut: KeyShortcut(KeyCode.f3, .shift)
                         ) { session.findPrevious() }
                         MenuSeparator()
                         MenuItem(
@@ -158,6 +160,18 @@ struct LavaEditorApp {
                             "Toggle Sidebar", id: "view.sidebar",
                             shortcut: KeyShortcut(KeyCode.b, .primary)
                         ) { session.toggleSidebar() }
+                        MenuItem(
+                            "Explorer", id: "view.explorer",
+                            shortcut: KeyShortcut(KeyCode.e, [.primary, .shift])
+                        ) { session.showSidebar(.explorer) }
+                        MenuItem(
+                            "Search", id: "view.search",
+                            shortcut: KeyShortcut(KeyCode.f, [.primary, .shift])
+                        ) { session.showSidebar(.search) }
+                        MenuItem(
+                            "Source Control", id: "view.source-control",
+                            shortcut: KeyShortcut(KeyCode.g, [.primary, .shift])
+                        ) { session.showSidebar(.sourceControl) }
                         MenuItem("Refresh Folder", id: "view.refresh-folder",
                                  isEnabled: session.project != nil) { session.project?.refresh() }
                         MenuItem("Toggle Soft Wrap", id: "view.wrap") {
