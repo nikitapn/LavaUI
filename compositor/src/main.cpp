@@ -1326,7 +1326,7 @@ struct Server {
   uint32_t lastBarClickSurface = 0;
 
   /// Remembers a move until the pointer leaves the slop, or the button
-  /// comes up. `fromClient` is who holds the press — see `dragFromClient`.
+  /// comes up. `fromClient` means the client received the original press.
   void armInteractiveMove(ClientSurface &surface, bool fromClient);
   /// Starts the armed move if the pointer has travelled far enough.
   void flushPendingMove();
@@ -13007,7 +13007,9 @@ void Server::flushPendingMove() {
   if (dx * dx + dy * dy < kSlop * kSlop) return;
   pendingMove = false;
   if (ClientSurface *surface = surfaces->find(pendingSurface)) {
-    beginInteractiveMove(*surface, pendingFromClient);
+    // Lava clients get a synthetic release when the move starts. Foreign
+    // clients still need the real release forwarded through the seat.
+    beginInteractiveMove(*surface, pendingFromClient && surface->isForeign());
   }
 }
 
@@ -14061,7 +14063,17 @@ bool SurfaceRegistry::beginMove(uint32_t id) {
   // True means "the surface is yours", not "the drag started": a client that
   // asked with no button down has made a harmless mistake, and turning it
   // into `SurfaceNotFound` would say something false about the window.
-  if (server_ != nullptr) server_->beginInteractiveMove(*surface);
+  if (server_ == nullptr || server_->pointerButtonsDown == 0 || surface->panel ||
+      surface->fixedFrame) {
+    return true;
+  }
+  if (surface->maximized || surface->fullscreen) {
+    // A press can still be a single click or the start of a double-click.
+    // Wait for motion before restoring the window to start a drag.
+    server_->armInteractiveMove(*surface, true);
+  } else {
+    server_->beginInteractiveMove(*surface);
+  }
   return true;
 }
 

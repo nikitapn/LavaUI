@@ -45,8 +45,8 @@ public enum WindowControlKind: Sendable, Equatable, CaseIterable {
 /// NPRPC notices the process is gone — and `LavaClient.run` does that when
 /// the frame loop returns.
 public enum WindowBridge {
-    /// "The user has grabbed the window" — starts an interactive move.
-    /// Called on the *press*; everything after it belongs to the compositor.
+    /// Requests an interactive move on press. The compositor waits for drag
+    /// motion before restoring a maximized or fullscreen window.
     nonisolated(unsafe) public static var beginDrag: (@Sendable () -> Void)?
     /// Fills the work area, or restores.
     nonisolated(unsafe) public static var toggleMaximize: (@Sendable () -> Void)?
@@ -407,11 +407,9 @@ private func control(
 /// controls sit in — anything interactive inside still wins, because the hit
 /// test reaches children first.
 ///
-/// The press is *all* it takes. From the moment the compositor is told, the
-/// pointer is the compositor's: the motion never reaches this process, the
-/// window follows the cursor, and the drag ends when the button comes up
-/// somewhere this app will never hear about. That is why nothing here tracks a
-/// drag — there is none to track on this side.
+/// The compositor handles movement and release once a drag starts. For a
+/// maximized or fullscreen window it waits for pointer movement, so a click
+/// can finish without restoring the window.
 public struct WindowDragArea<Content: View>: PrimitiveView {
     /// The view that drags the window.
     public var content: Content

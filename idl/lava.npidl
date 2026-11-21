@@ -1756,9 +1756,9 @@ interface Compositor {
   /// the compositor still has the pointer that produced the press, and a
   /// position from the client would be a position it could aim anywhere.
   ///
-  /// The move ends when the button comes up, which the compositor sees and
-  /// the client does not — from the moment this returns, the pointer is the
-  /// compositor's and the client stops receiving motion. The release it would
+  /// A maximized or fullscreen window waits for drag motion before restoring.
+  /// Once the move starts, the compositor owns pointer motion and ends the
+  /// move on release. The release the client would
   /// otherwise never see is delivered anyway, synthetically, before the grab
   /// starts: a client left believing a button is still down is a client with a
   /// stuck drag, and that is a worse bug than a release that arrives early.
