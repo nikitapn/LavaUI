@@ -54,15 +54,29 @@ enum Language: String, CaseIterable {
         }
     }
 
-    /// Rules for `SyntaxHighlighter`, ordered by nothing — `priority` decides
-    /// what wins where two match the same characters.
+    /// What colours a document in this language.
     ///
-    /// Every language here is coloured one line at a time, which is what a
-    /// rule list can do. A `/* */` or a `"""` spanning lines is therefore
-    /// coloured only on the lines whose own text says so; the middle of a
-    /// long block comment reads as code. Closing that gap means a
-    /// `StatefulLexer` per language, which is a real piece of work and not
-    /// what a first version of a text editor needs.
+    /// The languages with comments and strings that span lines — Swift's
+    /// nested `/* */` and `"""`, C's `/* */`, Python's `"""`, JavaScript's
+    /// template strings — get `CodeLexer`, which carries that state from line
+    /// to line. The rest are coloured one line at a time by `rules`, which is
+    /// all YAML or an INI file needs.
+    var highlighter: SyntaxHighlighter {
+        // Built per call: a `CodeLexer` is a few small arrays, and a
+        // highlighter is not `Sendable`, so it cannot be a shared static.
+        switch self {
+        case .swift: return SyntaxHighlighter(lexer: CodeLexer(.swift), identity: "swift")
+        case .c: return SyntaxHighlighter(lexer: CodeLexer(.c), identity: "c")
+        case .javascript:
+            return SyntaxHighlighter(lexer: CodeLexer(.javascript), identity: "javascript")
+        case .python: return SyntaxHighlighter(lexer: CodeLexer(.python), identity: "python")
+        default: return SyntaxHighlighter(rules: rules)
+        }
+    }
+
+    /// Rules for `SyntaxHighlighter`, ordered by nothing — `priority` decides
+    /// what wins where two match the same characters. Applied one line at a
+    /// time; the languages that need more than that use `highlighter`.
     var rules: [HighlightRule] {
         switch self {
         case .plain:

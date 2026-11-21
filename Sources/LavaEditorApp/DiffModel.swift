@@ -35,13 +35,19 @@ final class DiffModel {
 
     @ObservationIgnored private var oldSpans: [Int: [HighlightSpan]] = [:]
     @ObservationIgnored private var newSpans: [Int: [HighlightSpan]] = [:]
+    /// For a stateful highlighter, the state each line starts in, as far
+    /// down each side as anything has been drawn. A line's colour depends on
+    /// every line above it, so a row near the end lexes its way down to there
+    /// once, and everything above it is then cached too.
+    @ObservationIgnored private var oldStarts: [AnyHashable] = []
+    @ObservationIgnored private var newStarts: [AnyHashable] = []
     @ObservationIgnored private var intraline: [Int: (old: [Range<Int>], new: [Range<Int>])?] = [:]
 
     static let context = 3
 
     init(
         old: String, new: String, oldTitle: String, newTitle: String,
-        rules: [HighlightRule], documentID: Int?
+        highlighter: SyntaxHighlighter, documentID: Int?
     ) {
         self.oldTitle = oldTitle
         self.newTitle = newTitle
@@ -49,7 +55,7 @@ final class DiffModel {
         diff = TextDiff(old: old, new: new)
         oldLines = diff.old.lines.map(Self.display)
         newLines = diff.new.lines.map(Self.display)
-        highlighter = SyntaxHighlighter(rules: rules)
+        self.highlighter = highlighter
         rebuildRows()
     }
 
@@ -86,17 +92,39 @@ final class DiffModel {
     /// file is mostly folded away, and the rest scrolls into view a screen at
     /// a time.
     func spans(old index: Int) -> [HighlightSpan] {
-        if let cached = oldSpans[index] { return cached }
-        let spans = highlighter.isEmpty ? [] : highlighter.spans(in: oldLines[index])
-        oldSpans[index] = spans
-        return spans
+        Self.spans(index, lines: oldLines, highlighter: highlighter,
+                   cache: &oldSpans, starts: &oldStarts)
     }
 
     func spans(new index: Int) -> [HighlightSpan] {
-        if let cached = newSpans[index] { return cached }
-        let spans = highlighter.isEmpty ? [] : highlighter.spans(in: newLines[index])
-        newSpans[index] = spans
-        return spans
+        Self.spans(index, lines: newLines, highlighter: highlighter,
+                   cache: &newSpans, starts: &newStarts)
+    }
+
+    private static func spans(
+        _ index: Int, lines: [String], highlighter: SyntaxHighlighter,
+        cache: inout [Int: [HighlightSpan]], starts: inout [AnyHashable]
+    ) -> [HighlightSpan] {
+        if let cached = cache[index] { return cached }
+        guard !highlighter.isEmpty else { return [] }
+        guard highlighter.isStateful else {
+            let spans = highlighter.spans(in: lines[index])
+            cache[index] = spans
+            return spans
+        }
+        // Lex forward from the last line whose start is known, keeping every
+        // line passed on the way: they are the rows above this one.
+        if starts.isEmpty { starts.append(highlighter.initialState) }
+        var line = starts.count - 1
+        var state = starts[line]
+        while line <= index {
+            let (spans, next) = highlighter.highlight(lines[line], state: state)
+            cache[line] = spans
+            state = next
+            line += 1
+            if line == starts.count { starts.append(state) }
+        }
+        return cache[index] ?? []
     }
 
     /// The word-level changes inside a changed row, keyed by its old line.

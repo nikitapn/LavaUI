@@ -153,4 +153,38 @@ final class StatefulLexerTests: XCTestCase {
         XCTAssertEqual(cache.spans(atRow: 0), [])
         XCTAssertEqual(cache.spans(atRow: 1), [])
     }
+
+    func testInsertedLineConvergesWithTheShiftedLinesBelow() {
+        let counter = CallCounter()
+        let highlighter = SyntaxHighlighter(lexer: CountingBlockCommentLexer(counter: counter))
+        var cache = SyntaxHighlighter.Cache()
+        var lines: [Substring] = (0..<200).map { Substring("line \($0)") }
+        cache.update(lines: lines, with: highlighter)
+
+        counter.count = 0
+        lines.insert("new", at: 3)
+        cache.update(lines: lines, with: highlighter)
+        // The new line, then the first shifted line confirms the state and
+        // the remaining 196 are copied rather than lexed.
+        XCTAssertLessThanOrEqual(counter.count, 2)
+        XCTAssertEqual(cache.spans(atRow: 199), [])
+
+        counter.count = 0
+        lines.remove(at: 3)
+        cache.update(lines: lines, with: highlighter)
+        XCTAssertLessThanOrEqual(counter.count, 1)
+    }
+
+    func testInsertedCommentOpenerStillRelexesEverythingBelow() {
+        let highlighter = SyntaxHighlighter(lexer: BlockCommentLexer())
+        var cache = SyntaxHighlighter.Cache()
+        var lines: [Substring] = ["a", "b", "c", "d"]
+        cache.update(lines: lines, with: highlighter)
+        lines.insert("/*", at: 1)
+        cache.update(lines: lines, with: highlighter)
+        XCTAssertEqual(cache.spans(atRow: 4), [HighlightSpan(range: 0..<1, styleIndex: 0)])
+        lines.remove(at: 1)
+        cache.update(lines: lines, with: highlighter)
+        XCTAssertEqual(cache.spans(atRow: 3), [])
+    }
 }

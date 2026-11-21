@@ -396,6 +396,10 @@ public struct EditorView: PrimitiveView {
     public var isReadOnly: Bool
     /// Syntax colouring rules, applied per line. Each rule's `styleIndex` picks a colour from `style.palette`.
     public var rules: [HighlightRule]
+    /// A highlighter to use instead of `rules` — one built from a
+    /// `StatefulLexer`, so a block comment or a multi-line string is coloured
+    /// on every line it spans. Nil uses `rules`.
+    public var highlighter: SyntaxHighlighter?
     /// Colours for text, gutter, current line and search matches.
     public var style: CodeStyle
     /// The editor's font, or `nil` for the environment's.
@@ -432,6 +436,7 @@ public struct EditorView: PrimitiveView {
         text: Binding<String>,
         isReadOnly: Bool = false,
         rules: [HighlightRule] = [],
+        highlighter: SyntaxHighlighter? = nil,
         style: CodeStyle = CodeStyle(),
         font: UIFont? = nil,
         showLineNumbers: Bool = true,
@@ -447,6 +452,7 @@ public struct EditorView: PrimitiveView {
         self._text = text
         self.isReadOnly = isReadOnly
         self.rules = rules
+        self.highlighter = highlighter
         self.style = style
         self.font = font
         self.showLineNumbers = showLineNumbers
@@ -542,7 +548,14 @@ public struct EditorView: PrimitiveView {
             leaf.logicalLineIndex = LineIndex()
         }
         leaf.wraps = wraps
-        leaf.highlighter = SyntaxHighlighter(rules: rules)
+        let next = highlighter ?? SyntaxHighlighter(rules: rules)
+        // The cache holds spans per line and re-lexes only lines whose text
+        // changed. A different highlighter changes every line's spans without
+        // changing a character, so its results are dropped with it.
+        if leaf.highlighter?.identity != next.identity {
+            leaf.highlightCache = SyntaxHighlighter.Cache()
+        }
+        leaf.highlighter = next
         leaf.codeStyle = style
         leaf.showsGutter = showLineNumbers
         leaf.search = search

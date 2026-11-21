@@ -127,12 +127,20 @@ private struct AnyStatefulLexer {
 public struct SyntaxHighlighter {
     /// The rules this highlighter applies. Empty for one built from a lexer.
     public var rules: [HighlightRule]
+    /// Says whether two highlighters colour the same way. A view keeping
+    /// per-line results across frames drops them when this changes — the
+    /// same text under a different language is different spans, and a cache
+    /// that compares only text would keep the old ones.
+    public let identity: String
     private let compiled: [(regex: NSRegularExpression, rule: HighlightRule)]
     private let lexer: AnyStatefulLexer?
 
     /// Creates a highlighter that applies `rules` to each line independently.
     public init(rules: [HighlightRule]) {
         self.rules = rules
+        self.identity = "rules:" + rules
+            .map { "\($0.styleIndex)/\($0.priority)/\($0.pattern)" }
+            .joined(separator: "\u{1}")
         // Invalid patterns are dropped rather than thrown: a bad rule should
         // cost its own highlighting, not the whole editor.
         self.compiled = rules.compactMap { rule in
@@ -145,8 +153,11 @@ public struct SyntaxHighlighter {
     }
 
     /// Creates a highlighter that runs `lexer`, carrying its state line to line.
-    public init<L: StatefulLexer>(lexer: L) {
+    /// `identity` tells two lexers of one type apart — one `CodeLexer` per
+    /// language — and defaults to the type's name.
+    public init<L: StatefulLexer>(lexer: L, identity: String? = nil) {
         self.rules = []
+        self.identity = "lexer:" + (identity ?? String(describing: L.self))
         self.compiled = []
         self.lexer = AnyStatefulLexer(lexer)
     }
@@ -268,12 +279,12 @@ public struct SyntaxHighlighter {
     ///    and text both match what was cached there before, because from
     ///    that point on every line downstream would recompute to exactly
     ///    what it already has.
-    /// The second check only fires when the line count hasn't changed — an
-    /// inserted or deleted line shifts every index below it, so comparing
-    /// old and new content at the same index would compare the wrong lines.
-    /// Missing that convergence in the insert/delete case just means
-    /// re-lexing to the end of the file instead of stopping early: slower,
-    /// never wrong.
+    /// When the line count changed, an inserted or deleted line shifts every
+    /// index below it, so the comparison is made against the old line the
+    /// new one was shifted from — within the common suffix, where that
+    /// correspondence holds. Above the suffix nothing is assumed, and a
+    /// change that never converges (an unclosed `/*` typed at the top)
+    /// re-lexes to the end, which is what it should do.
     public struct Cache {
         private var lines: [Substring] = []
         private var startStates: [AnyHashable] = []
@@ -314,6 +325,21 @@ public struct SyntaxHighlighter {
             var nextStartStates = Array(startStates.prefix(prefix))
             var nextSpans = Array(lineSpans.prefix(prefix))
 
+            // Lines below an inserted or deleted one are the old lines shifted
+            // by the difference in count. Within the common suffix, new line
+            // `i` is old line `i - delta`, so convergence can be tested there
+            // too — without it, pressing Enter near the top of a 3,000-line
+            // file re-lexed all of it below (38 ms in a debug build), where
+            // now it stops a line or two down.
+            let delta = newLines.count - lines.count
+            var suffix = 0
+            while suffix < newLines.count - prefix, suffix < lines.count - prefix,
+                  newLines[newLines.count - 1 - suffix] == lines[lines.count - 1 - suffix]
+            {
+                suffix += 1
+            }
+            let suffixStart = newLines.count - suffix
+
             var i = prefix
             while i < newLines.count {
                 if sameCount, i < lines.count, i < startStates.count,
@@ -321,6 +347,15 @@ public struct SyntaxHighlighter {
                 {
                     nextStartStates.append(contentsOf: startStates[i...])
                     nextSpans.append(contentsOf: lineSpans[i...])
+                    i = newLines.count
+                    break
+                }
+                let old = i - delta
+                if !sameCount, i >= suffixStart, old >= 0, old < startStates.count,
+                   startStates[old] == state
+                {
+                    nextStartStates.append(contentsOf: startStates[old...])
+                    nextSpans.append(contentsOf: lineSpans[old...])
                     i = newLines.count
                     break
                 }

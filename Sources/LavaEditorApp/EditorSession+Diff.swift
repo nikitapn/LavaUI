@@ -58,7 +58,7 @@ extension EditorSession {
         let newTitle = document.isModified ? "Editor · \(path) (unsaved)" : "Working tree · \(path)"
         show(DiffModel(
             old: headText, new: document.text, oldTitle: oldTitle, newTitle: newTitle,
-            rules: document.language.rules, documentID: document.id
+            highlighter: document.language.highlighter, documentID: document.id
         ))
     }
 
@@ -78,7 +78,7 @@ extension EditorSession {
         }
         show(DiffModel(
             old: oldText, new: document.text, oldTitle: Self.title(old), newTitle: Self.title(new),
-            rules: document.language.rules, documentID: document.id
+            highlighter: document.language.highlighter, documentID: document.id
         ))
     }
 

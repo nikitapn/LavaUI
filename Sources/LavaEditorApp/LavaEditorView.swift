@@ -77,7 +77,7 @@ struct LavaEditorView: View {
                 EditorView(
                     text: session.text,
                     isReadOnly: session.active.hasInvalidUTF8,
-                    rules: session.active.language.rules,
+                    highlighter: session.active.language.highlighter,
                     style: documentStyle(appearance),
                     font: session.documentFont,
                     showLineNumbers: session.showLineNumbers,
