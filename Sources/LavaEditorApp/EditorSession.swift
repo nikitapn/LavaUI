@@ -86,7 +86,8 @@ final class EditorSession {
     /// A close the user has to confirm, because the document has unsaved
     /// changes. Holds the document's id rather than its index — the array can
     /// move underneath a pending question.
-    var pendingClose: Int?
+    private(set) var pendingClose: Int?
+    private var closeQueue: [Int] = []
 
     /// Bumped on every edit. `FindState.searchedRevision` compares against it.
     var revision = 0
@@ -229,14 +230,17 @@ final class EditorSession {
 
         var seen = Set<String>()
         let files = saved.files.filter { $0.path.hasPrefix("/") && seen.insert($0.path).inserted }
-        documents = files.map {
+        cancelPendingClose()
+        documents = EditorTabPolicy.restored(files.map {
             EditorDocument(id: takeID(), url: URL(fileURLWithPath: $0.path), text: "",
+                           tabState: $0.tabState ?? .open,
                            position: $0.position?.editorPosition, isLoaded: false)
-        }
+        })
         if documents.isEmpty {
             documents = [EditorDocument(id: takeID(), url: nil, text: "")]
         }
-        activeIndex = files.firstIndex { $0.path == saved.activePath } ?? 0
+        activeIndex = documents.firstIndex { $0.url?.path == saved.activePath } ?? 0
+        tabScroll.scrollToTop()
 
         zoomedDocument = nil
         zoomRemainder = 0
@@ -268,7 +272,7 @@ final class EditorSession {
         let files = documents.compactMap { document -> EditorSessionSnapshot.File? in
             guard let url = document.url else { return nil }
             let position = (document.id == active.id ? live : nil) ?? document.position ?? .start
-            return .init(path: url.standardizedFileURL.path, position: .init(position))
+            return .init(path: url.standardizedFileURL.path, position: .init(position), tabState: document.tabState)
         }
         return .init(
             files: files, activePath: active.url?.standardizedFileURL.path,
@@ -353,7 +357,7 @@ final class EditorSession {
                 // count walks the buffer. One typed character is one to four.
                 let grew = newValue.utf8.count - self.documents[self.activeIndex].text.utf8.count
                 self.documents[self.activeIndex].text = newValue
-                self.documents[self.activeIndex].isModified = true
+                self.markModified()
                 self.revision &+= 1
                 // Matches found against the previous text point at characters
                 // that have moved. Re-run rather than clear, so the bar keeps
@@ -483,15 +487,24 @@ final class EditorSession {
     /// file already open is brought forward rather than opened twice — two
     /// tabs onto one file are two buffers, and the second save silently
     /// discards the first.
-    func open(_ urls: [URL]) {
+    // The language extension calls the same entry point from its asynchronous
+    // definition callback. Keep that extension untouched and preview only that call.
+    func open(_ urls: [URL], caller: StaticString = #function) {
+        open(urls, mode: caller.description == "goTo(_:encoding:)" ? .preview : .normal)
+    }
+
+    func open(_ urls: [URL], mode: EditorTabPolicy.OpenMode) {
         guard !urls.isEmpty else { return }
         notice = nil
         stashPosition()
+        let outgoingID = active.id
         var target: Int?
         for url in urls {
             let resolved = url.standardizedFileURL
-            if let existing = documents.firstIndex(where: { $0.url?.standardizedFileURL == resolved }) {
+            switch EditorTabPolicy.opening(resolved, mode: mode, in: documents) {
+            case .activate(let existing, let keepOpen):
                 target = existing
+                if keepOpen { keepTabOpen(existing) }
                 if documents[existing].isLoaded {
                     rememberFile(resolved)
                 } else {
@@ -499,12 +512,17 @@ final class EditorSession {
                     // been restored or its permissions fixed since then.
                     documents[existing].loadError = nil
                 }
-                continue
+            case .append(let state, let preview):
+                if let preview { keepTabOpen(preview) }
+                documents.append(EditorDocument(id: takeID(), url: resolved, text: "",
+                                                tabState: state, isLoaded: false))
+                target = documents.count - 1
+            case .replacePreview(let preview):
+                forgetTab(documents[preview].id)
+                documents[preview] = EditorDocument(id: takeID(), url: resolved, text: "",
+                                                    tabState: .preview, isLoaded: false)
+                target = preview
             }
-            documents.append(
-                EditorDocument(id: takeID(), url: resolved, text: "", isLoaded: false)
-            )
-            target = documents.count - 1
         }
         guard let target else { return }
         // Straight to the index rather than through `activate`, which stashes
@@ -513,15 +531,22 @@ final class EditorSession {
         activeIndex = target
         controller.restore(documents[target].position ?? .start)
         loadIfNeeded(target)
+        if active.id != outgoingID {
+            hoverCard = nil
+            completion = nil
+            find.search = TextSearch()
+            if find.isOpen, !find.query.isEmpty { runSearch() }
+        }
         // Replaces a single untouched scratch document. Opening a file into a
         // window that has never been typed in should not leave an empty tab
         // behind, and every editor does this.
         if documents.count > 1,
            let scratch = documents.firstIndex(where: {
-               $0.url == nil && !$0.isModified && $0.text.isEmpty
+               $0.url == nil && $0.tabState == .open && !$0.isModified && $0.text.isEmpty
            }),
            scratch != activeIndex
         {
+            forgetTab(documents[scratch].id)
             documents.remove(at: scratch)
             if scratch < activeIndex { activeIndex -= 1 }
         }
@@ -554,6 +579,7 @@ final class EditorSession {
             notice = "Could not save \(target.lastPathComponent): \(error)"
             return false
         }
+        keepTabOpen(index)
         if let url = documents[index].url { rememberFile(url) }
         // The file may have just become tracked, or the user committed from
         // a terminal while it was open; saving is a cheap moment to ask.
@@ -582,7 +608,7 @@ final class EditorSession {
     /// on Ctrl+W is a text editor nobody uses twice.
     func requestClose(_ index: Int? = nil) {
         let target = index ?? activeIndex
-        guard documents.indices.contains(target) else { return }
+        guard pendingClose == nil, documents.indices.contains(target) else { return }
         if documents[target].isModified {
             if target != activeIndex { activate(target) }
             pendingClose = documents[target].id
@@ -593,8 +619,8 @@ final class EditorSession {
 
     func close(_ index: Int) {
         guard documents.indices.contains(index) else { return }
-        pendingClose = nil
-        gitBaselines[documents[index].id] = nil
+        if pendingClose == documents[index].id { pendingClose = nil }
+        forgetTab(documents[index].id)
         if documents.count == 1 {
             documents = [EditorDocument(id: takeID(), url: nil, text: "")]
             activeIndex = 0
@@ -618,7 +644,8 @@ final class EditorSession {
         guard let from = documents.firstIndex(where: { $0.id == id }) else {
             return
         }
-        let destination = min(max(0, dest), documents.count - 1)
+        guard documents[from].tabState != .pinned else { return }
+        let destination = EditorTabPolicy.dragDestination(dest, in: documents.filter { $0.id != id })
         guard from != destination else { return }
         let activeID = active.id
         let document = documents.remove(at: from)
@@ -660,10 +687,11 @@ final class EditorSession {
 
     private func updateTabDrag(_ id: Int, x: Float) {
         let remaining = documents.filter { $0.id != id }
-        let destination = remaining.firstIndex { document in
+        let proposed = remaining.firstIndex { document in
             guard let frame = tabFrames[document.id] else { return false }
             return x < frame.x + frame.w * 0.5
         } ?? remaining.count
+        let destination = EditorTabPolicy.dragDestination(proposed, in: remaining)
         let caretX: Float
         if destination < remaining.count, let frame = tabFrames[remaining[destination].id] {
             caretX = frame.x - 2
@@ -683,14 +711,58 @@ final class EditorSession {
     func resolvePendingClose(save shouldSave: Bool) {
         guard let id = pendingClose,
               let index = documents.firstIndex(where: { $0.id == id }) else {
-            pendingClose = nil
+            cancelPendingClose()
             return
         }
-        if shouldSave {
-            activeIndex = index
-            guard save() else { pendingClose = nil; return }
+        if shouldSave, !saveDocument(index) {
+            cancelPendingClose()
+            return
         }
         close(index)
+        continueClosingTabs()
+    }
+
+    var closingDocument: EditorDocument? {
+        documents.first { $0.id == pendingClose }
+    }
+
+    func cancelPendingClose() {
+        pendingClose = nil
+        closeQueue.removeAll()
+    }
+
+    func requestCloseTabs(_ action: EditorTabPolicy.BulkClose, from index: Int) {
+        guard pendingClose == nil else { return }
+        closeQueue = EditorTabPolicy.closing(action, from: index, in: documents)
+        continueClosingTabs()
+    }
+
+    private func continueClosingTabs() {
+        while pendingClose == nil, !closeQueue.isEmpty {
+            let id = closeQueue.removeFirst()
+            if let index = documents.firstIndex(where: { $0.id == id && $0.tabState != .pinned }) {
+                requestClose(index)
+            }
+        }
+    }
+
+    func keepTabOpen(_ index: Int) {
+        let state = documents[index].tabState
+        if state == .preview { documents[index].tabState = state.keptOpen }
+    }
+
+    func toggleTabPin(_ index: Int) {
+        let activeID = active.id
+        let pinning = documents[index].tabState != .pinned
+        EditorTabPolicy.togglePin(at: index, in: &documents)
+        if let index = documents.firstIndex(where: { $0.id == activeID }) { activeIndex = index }
+        if pinning { tabScroll.scrollToTop() }
+    }
+
+    private func forgetTab(_ id: Int) {
+        gitBaselines[id] = nil
+        tabFrames[id] = nil
+        if diff?.documentID == id { closeDiff() }
     }
 
     // MARK: - Find and replace
@@ -775,6 +847,7 @@ final class EditorSession {
     /// setter that would have noticed runs before `isModified` means anything.
     private func markModified() {
         guard documents.indices.contains(activeIndex) else { return }
+        keepTabOpen(activeIndex)
         documents[activeIndex].isModified = true
     }
 

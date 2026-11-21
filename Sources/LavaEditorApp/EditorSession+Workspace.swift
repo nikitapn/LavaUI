@@ -140,7 +140,7 @@ extension EditorSession {
     private func resetForNewSession() {
         flushOutgoingSession()
         notice = nil
-        pendingClose = nil
+        cancelPendingClose()
         find = FindState()
         findQueryFocused = false
         gotoOpen = false

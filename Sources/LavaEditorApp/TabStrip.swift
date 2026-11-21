@@ -6,12 +6,15 @@ struct EditorTabs: View {
     /// False when something to the left — the project sidebar — carries the
     /// window's buttons, as it does when it runs the full height of the window.
     var showsWindowControls = true
+    @State private var contextMenu: TabContextMenu.Anchor? = nil
 
     static let stripHeight: Float = 54
     private static let tabHeight: Float = 42
 
     var body: some View {
         let theme = appearance.theme
+        let menuStyle = TabContextMenu.style(theme: theme)
+        let anchor = contextMenu
         return HStack(height: .pt(Self.stripHeight), padding: 0, alignment: .end, spacing: 4) {
             if showsWindowControls, WindowBridge.drawsOwnChrome {
                 WindowControls(style: appearance.windowControls)
@@ -64,21 +67,49 @@ struct EditorTabs: View {
             }
         }
         .agentId("tabs")
+        .overlay(
+            isPresented: Binding(get: { contextMenu != nil }, set: { if !$0 { contextMenu = nil } }),
+            placement: OverlayPlacement { context in
+                let width = context.idealSize.width
+                let height = context.idealSize.height
+                let x = min(max(0, anchor?.x ?? 0), max(0, context.viewport.width - width))
+                let y = min(max(0, anchor?.y ?? 0), max(0, context.viewport.height - height))
+                return OverlayFrame(x: x, y: y, width: width, height: height)
+            },
+            style: menuStyle.overlayStyle
+        ) {
+            if let anchor, let document = session.documents.first(where: { $0.id == anchor.id }) {
+                TabContextMenu(session: session, document: document, style: menuStyle) {
+                    contextMenu = nil
+                }
+            }
+        }
     }
 
     private func tab(_ document: EditorDocument) -> some View {
         let selected = document.id == session.active.id
         let theme = appearance.theme
+        let pinned = document.tabState == .pinned
+        let uprightFont = selected ? session.fonts.tabSelected : session.fonts.tab
+        let font = document.tabState == .preview ? session.fonts.tabPreview ?? uprightFont : uprightFont
         return TabStripItem(
             document.name, selected: selected, modified: document.isModified,
             outlined: false, fill: theme.inset,
             style: .init(height: Self.tabHeight, radius: 16,
-                         font: selected ? session.fonts.tabSelected : session.fonts.tab,
+                         font: font,
                          text: selected ? theme.textPrimary : theme.textSecondary,
                          modified: appearance.modified, closeHover: theme.selectionFill),
-            closeID: "close-tab-\(document.id)",
+            closeID: pinned ? "unpin-tab-\(document.id)" : "close-tab-\(document.id)",
+            onUnpin: pinned ? {
+                if let index = session.documents.firstIndex(where: { $0.id == document.id }) {
+                    session.toggleTabPin(index)
+                }
+            } : nil,
             onSelect: {
                 if let index = session.documents.firstIndex(where: { $0.id == document.id }) {
+                    let point = PointerState.window
+                    let clicks = ClickCounter.register(x: point.x, y: point.y)
+                    if index == session.activeIndex || clicks > 1 { session.keepTabOpen(index) }
                     session.activate(index)
                 }
             }, onClose: {
@@ -88,7 +119,12 @@ struct EditorTabs: View {
             }
         )
         .onFrame { session.tabFrames[document.id] = $0 }
-        .onDragGesture { session.dragTab(document.id, $0) }
+        .onDragGesture { if !pinned { session.dragTab(document.id, $0) } }
+        .onAnyPress { button in
+            guard button == PointerButton.right else { return }
+            let point = PointerState.window
+            contextMenu = TabContextMenu.Anchor(id: document.id, x: point.x, y: point.y)
+        }
         .agentId("tab-\(document.id)")
     }
 }

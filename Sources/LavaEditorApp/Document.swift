@@ -1,4 +1,5 @@
 import Foundation
+import LavaProjectCore
 import LavaUI
 
 /// One open file.
@@ -7,12 +8,13 @@ import LavaUI
 /// `EditorSession.documents` and the window rebuilds. `text` is a `String`,
 /// which is a reference underneath — moving a document around costs a retain
 /// rather than a copy of the file.
-struct EditorDocument: Identifiable {
+struct EditorDocument: EditorTab {
     let id: Int
     /// Where it came from, and where `Save` writes. Nil for a file that has
     /// never been saved, which is what makes `Save` fall back to `Save As`.
     var url: URL?
     var text: String
+    var tabState: EditorTabState = .open
 
     /// Whether the buffer differs from what is on disk.
     ///
