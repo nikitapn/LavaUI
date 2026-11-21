@@ -124,6 +124,68 @@ public struct GitRepository: Sendable, Equatable {
         return GitStatusEntry.parse(result.output)
     }
 
+    // MARK: - Changing things
+
+    /// Pathspecs that mean exactly these files: `:(literal)` stops git
+    /// reading `*`, `?` or `[` in a filename as a pattern, and a file named
+    /// `[1].txt` is otherwise "any file named 1.txt".
+    private static func literal(_ paths: [String]) -> [String] {
+        paths.map { ":(literal)" + $0 }
+    }
+
+    /// Stages `paths` — new, modified and deleted alike (`add -A`).
+    public func stage(_ paths: [String]) throws {
+        guard !paths.isEmpty else { return }
+        try run("add", ["add", "-A", "--"] + Self.literal(paths))
+    }
+
+    /// Takes `paths` out of the index, back to what HEAD has — leaving the
+    /// working tree alone. Before the first commit there is no HEAD to go
+    /// back to, so the files are simply untracked again.
+    public func unstage(_ paths: [String]) throws {
+        guard !paths.isEmpty else { return }
+        if try hasCommits() {
+            try run("restore", ["restore", "--staged", "--"] + Self.literal(paths))
+        } else {
+            try run("rm", ["rm", "--cached", "-r", "-q", "--"] + Self.literal(paths))
+        }
+    }
+
+    /// Throws away unstaged changes to tracked `paths`: the working tree
+    /// goes back to what the index has, so anything staged survives.
+    /// Untracked files are not git's to restore — the caller removes those.
+    public func discard(_ paths: [String]) throws {
+        guard !paths.isEmpty else { return }
+        try run("restore", ["restore", "--worktree", "--"] + Self.literal(paths))
+    }
+
+    /// Commits what is staged, or — with `all` — everything, untracked files
+    /// included, as VS Code's "smart commit" does when nothing is staged.
+    /// Returns the new commit's one-line summary.
+    @discardableResult
+    public func commit(message: String, all: Bool = false) throws -> String {
+        if all { try run("add", ["add", "-A"]) }
+        // `-m` as one argument, never through a shell: a message is
+        // whatever the user typed, quotes and newlines included.
+        try run("commit", ["commit", "-q", "-m", message])
+        let result = try GitCommand.run(executable, ["log", "-1", "--format=%h %s"], in: root)
+        return String(decoding: result.output, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Whether HEAD points at a commit — false in a repository that has
+    /// never been committed to.
+    public func hasCommits() throws -> Bool {
+        try GitCommand.run(executable, ["rev-parse", "--verify", "-q", "HEAD"], in: root).status == 0
+    }
+
+    private func run(_ name: String, _ arguments: [String]) throws {
+        let result = try GitCommand.run(executable, arguments, in: root)
+        guard result.status == 0 else {
+            throw GitError.failed(command: name, message: result.errorText)
+        }
+    }
+
     /// The current branch, or nil when HEAD is detached.
     public func branch() throws -> String? {
         let result = try GitCommand.run(executable, ["symbolic-ref", "--quiet", "--short", "HEAD"], in: root)

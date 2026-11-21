@@ -37,6 +37,8 @@ final class ProjectSession {
     /// checkout — so the gutter's copy of HEAD can be fetched again.
     @ObservationIgnored var onRepositoryChanged: (() -> Void)?
     @ObservationIgnored let scroll = ScrollPosition()
+    /// The Source Control panel's own state. See `SourceControlModel`.
+    let sourceControl = SourceControlModel()
 
     var name: String { tree.root.lastPathComponent }
 

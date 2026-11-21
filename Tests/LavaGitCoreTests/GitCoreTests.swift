@@ -118,4 +118,84 @@ final class GitRepositoryTests: XCTestCase {
         XCTAssertEqual(ignored.map(\.path), [".build/"])
         XCTAssertTrue(try repo.status().allSatisfy { $0.kind != .ignored })
     }
+
+    /// `commit` runs git with the user's own config, so the repository gets
+    /// an identity and no signing of its own.
+    private func localIdentity() throws {
+        try git_("config", "user.name", "Test")
+        try git_("config", "user.email", "test@example.invalid")
+        try git_("config", "commit.gpgsign", "false")
+    }
+
+    private func write(_ text: String, _ name: String) throws {
+        try text.write(to: directory.appendingPathComponent(name), atomically: true, encoding: .utf8)
+    }
+
+    func testStageUnstageAndCommit() throws {
+        try localIdentity()
+        let repo = try XCTUnwrap(GitRepository.containing(directory))
+        try write("one\nTWO\n", "a.txt")
+        // A name git would read as a pattern without `:(literal)`.
+        try write("x", "[1].txt")
+        try repo.stage(["a.txt", "[1].txt"])
+        var status = try repo.status()
+        XCTAssertEqual(status.first { $0.path == "a.txt" }?.staged, .modified)
+        XCTAssertEqual(status.first { $0.path == "[1].txt" }?.staged, .added)
+
+        try repo.unstage(["[1].txt"])
+        status = try repo.status()
+        XCTAssertEqual(status.first { $0.path == "[1].txt" }?.kind, .untracked)
+
+        let summary = try repo.commit(message: "change \"a\"\n\nwith a body")
+        XCTAssertTrue(summary.hasSuffix("change \"a\""), summary)
+        XCTAssertEqual(try repo.contents(of: directory.appendingPathComponent("a.txt")), .text("one\nTWO\n"))
+        // The unstaged file was not swept into the commit.
+        XCTAssertEqual(try repo.status().map(\.path), ["[1].txt"])
+    }
+
+    func testCommitAllTakesUntrackedToo() throws {
+        try localIdentity()
+        let repo = try XCTUnwrap(GitRepository.containing(directory))
+        try write("changed", "a.txt")
+        try write("new", "b.txt")
+        try repo.commit(message: "everything", all: true)
+        XCTAssertEqual(try repo.status(), [])
+    }
+
+    func testDiscardRestoresFromTheIndexAndKeepsWhatIsStaged() throws {
+        let repo = try XCTUnwrap(GitRepository.containing(directory))
+        try write("staged\n", "a.txt")
+        try repo.stage(["a.txt"])
+        try write("staged\nand more\n", "a.txt")
+        try repo.discard(["a.txt"])
+        let text = try String(contentsOf: directory.appendingPathComponent("a.txt"), encoding: .utf8)
+        XCTAssertEqual(text, "staged\n")
+        XCTAssertEqual(try repo.status().first?.staged, .modified)
+    }
+
+    func testUnstageBeforeTheFirstCommit() throws {
+        let fresh = directory.appendingPathComponent("fresh", isDirectory: true)
+        try FileManager.default.createDirectory(at: fresh, withIntermediateDirectories: true)
+        let process = Process()
+        process.executableURL = GitRepository.defaultExecutable
+        process.arguments = ["init", "-q"]
+        process.currentDirectoryURL = fresh
+        try process.run()
+        process.waitUntilExit()
+        try "x".write(to: fresh.appendingPathComponent("f.txt"), atomically: true, encoding: .utf8)
+        let repo = GitRepository(root: fresh)
+        XCTAssertFalse(try repo.hasCommits())
+        try repo.stage(["f.txt"])
+        XCTAssertEqual(try repo.status().first?.staged, .added)
+        try repo.unstage(["f.txt"])
+        XCTAssertEqual(try repo.status().first?.kind, .untracked)
+    }
+
+    func testFailureSaysWhy() throws {
+        let repo = try XCTUnwrap(GitRepository.containing(directory))
+        XCTAssertThrowsError(try repo.commit(message: "nothing staged")) { error in
+            guard case GitError.failed(let command, _) = error else { return XCTFail("\(error)") }
+            XCTAssertEqual(command, "commit")
+        }
+    }
 }

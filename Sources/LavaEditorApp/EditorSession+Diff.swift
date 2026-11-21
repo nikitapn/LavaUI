@@ -1,5 +1,6 @@
 import Foundation
 import LavaGitCore
+import LavaProjectCore
 import LavaUI
 
 /// Comparisons: the document in front against what git has, or one file
@@ -87,6 +88,68 @@ extension EditorSession {
     /// the part they have in common.
     private static func title(_ url: URL) -> String {
         "\(url.lastPathComponent) · \(url.deletingLastPathComponent().path)"
+    }
+
+    /// The diff a Source Control row opens, as VS Code shows it: for a
+    /// change, what is staged (the index) against the working file; for a
+    /// staged change, the last commit against what is staged. The working
+    /// side is the open buffer when the file has a tab — what the user is
+    /// looking at — and the file on disk otherwise.
+    func compareChange(_ item: SourceControlList.Item) {
+        guard let project, let repository = project.repository else { return }
+        let url = repository.root.appendingPathComponent(item.path)
+        func read(_ revision: GitRepository.Revision, _ path: String) throws -> String? {
+            let file = repository.root.appendingPathComponent(path)
+            switch try repository.contents(of: file, at: revision) {
+            case .text(let text): return text
+            case .absent: return ""
+            case .binary: return nil
+            }
+        }
+        let old: String?, new: String?
+        let oldTitle: String, newTitle: String
+        do {
+            if item.group == .staged {
+                old = try read(.head, item.originalPath ?? item.path)
+                new = try read(.index, item.path)
+                oldTitle = "HEAD · \(item.originalPath ?? item.path)"
+                newTitle = "Staged · \(item.path)"
+            } else {
+                old = item.isUntracked ? "" : try read(.index, item.path)
+                if item.change == .deleted {
+                    new = ""
+                } else if let open = documents.first(where: {
+                    $0.url?.standardizedFileURL == url.standardizedFileURL && $0.isLoaded
+                }) {
+                    new = open.text
+                } else {
+                    new = (try? Data(contentsOf: url)).flatMap { String(data: $0, encoding: .utf8) }
+                }
+                // The index, which equals HEAD for a file with nothing staged —
+                // "Staged" would claim a staged change that is not there.
+                oldTitle = item.isUntracked ? "Not tracked" : "Index · \(item.path)"
+                newTitle = item.change == .deleted ? "Deleted" : "Working tree · \(item.path)"
+            }
+        } catch {
+            notice = "git: \(error)"
+            return
+        }
+        guard let old, let new else {
+            notice = "\(item.name) is not text, so there is nothing to show line by line."
+            return
+        }
+        let language = Language.of(url)
+        // A file that still exists opens in its tab with the diff over it,
+        // so Done lands in the file; a deleted one has no tab to open.
+        var documentID: Int?
+        if item.change != .deleted, FileManager.default.fileExists(atPath: url.path) {
+            open([url])
+            documentID = active.id
+        }
+        show(DiffModel(
+            old: old, new: new, oldTitle: oldTitle, newTitle: newTitle,
+            highlighter: language.highlighter, documentID: documentID
+        ))
     }
 
     func closeDiff() {
