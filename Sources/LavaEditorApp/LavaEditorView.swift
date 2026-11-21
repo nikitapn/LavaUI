@@ -86,7 +86,8 @@ struct LavaEditorView: View {
                     search: session.find.isOpen ? session.find.search : TextSearch(),
                     lineMarks: session.changeMarks(appearance),
                     controller: session.controller,
-                    onZoom: { session.zoom(by: $0) }
+                    onZoom: { session.zoom(by: $0) },
+                    onFollow: { session.follow(at: $0) }
                 )
                 .flexGrow(1)
                 .theme(appearance.documentTheme)

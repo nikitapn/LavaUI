@@ -58,6 +58,30 @@ public final class LavaWindow {
     /// enough to be a drag: the source, and where the press was.
     private var pendingFileDrag: (source: NodeID, x: Float, y: Float)?
 
+    /// Asks the widget under the pointer where, inside itself, the pointer is.
+    ///
+    /// Which node is hovered is the renderer's answer, and arrives as
+    /// `.nodeHover`. This walk is only for the part it cannot answer — where
+    /// inside a widget the pointer is, in that widget's own terms. Its return
+    /// value is deliberately discarded: two answers to "what is hovered" is a
+    /// bug waiting for the frame where they disagree. Run on every move, and
+    /// on a Control press or release with the pointer still, which changes
+    /// what a code editor shows under it without anything moving.
+    private func localHover(x: Float, y: Float, menuH: Float) {
+        guard LocalHoverTargets.isInUse else { return }
+        _ = host.hitTestHover(x: x, y: y, originY: menuH)
+        // A widget may have just changed its mind about the cursor without the
+        // hovered node changing — a canvas whose pointer went onto a link —
+        // and the cursor is otherwise only resolved when it does. Asked of the
+        // renderer's hovered node, so there is still one answer to what is
+        // under the pointer; only the shape is asked again. `apply` drops a
+        // repeat of the shape. Reconciliation can clear the old id before the
+        // renderer reports the new one: only a hover report clears the cursor.
+        if let hovered = HoverState.current {
+            CursorBridge.hover(hovered, in: host.rootNode, window: id, editor: editor)
+        }
+    }
+
     /// Starts the OS drag a press on `source` turned into.
     ///
     /// The chip is captured now rather than when the view was built: it is
@@ -554,6 +578,7 @@ public final class LavaWindow {
         switch ev.kind {
         case .mouseDown:
             Tooltips.dismiss()
+            HeldModifiers.notePress(mods: ev.mods)
             // Looked up before the click handler, which may rebuild the view
             // under the pointer — a row selecting itself, say.
             pendingFileDrag = nil
@@ -657,25 +682,8 @@ public final class LavaWindow {
             }
             if PointerCapture.isActive {
                 PointerCapture.move(x: ev.x, y: ev.y - menuH)
-            } else if LocalHoverTargets.isInUse {
-                // Which node is hovered is the renderer's answer, and arrives
-                // as `.nodeHover`. This walk is only here for the part it
-                // cannot answer — where inside a widget the pointer is, in
-                // that widget's own terms. Its return value is deliberately
-                // discarded: two answers to "what is hovered" is a bug
-                // waiting for the frame where they disagree.
-                _ = host.hitTestHover(x: ev.x, y: ev.y, originY: menuH)
-                // A widget may have just changed its mind about the cursor
-                // without the hovered node changing — a canvas whose pointer
-                // went onto a link — and the cursor is otherwise only resolved
-                // when it does. Asked of the renderer's hovered node, so there
-                // is still one answer to what is under the pointer; only the
-                // shape is asked again. `apply` drops a repeat of the shape.
-                // Reconciliation can clear the old id before the renderer
-                // reports the new one. Only a hover report can clear the cursor.
-                if let hovered = HoverState.current {
-                    CursorBridge.hover(hovered, in: host.rootNode, window: id, editor: editor)
-                }
+            } else {
+                localHover(x: ev.x, y: ev.y, menuH: menuH)
             }
         case .mouseUp:
             pendingFileDrag = nil
@@ -730,6 +738,7 @@ public final class LavaWindow {
             // difference between working and not.
             PointerCapture.release()
             PointerRelease.fire()
+            HeldModifiers.clear()
             HoverState.clear()
             HoverRegions.update(hovered: nil, in: host.rootNode)
             PointerState.left()
@@ -763,6 +772,14 @@ public final class LavaWindow {
             }
         case .key:
             Tooltips.dismiss()
+            // Before anything can consume the key: a Control press has to
+            // reach the hover walk even when a shortcut or a raw-key handler
+            // takes it. The pointer has not moved, so nothing else would ask
+            // the widget under it again.
+            if HeldModifiers.noteKey(ev.button, isPress: ev.x > 0, mods: Int32(ev.y)) {
+                let p = PointerState.window
+                localHover(x: p.x, y: p.y, menuH: menuH)
+            }
             FocusManager.releaseIfGone { host.contains($0) }
             if onRawKey?(ev) == true { break }
             let isPress = ev.x > 0

@@ -614,6 +614,12 @@ final class LeafNode: YogaBoxNode {
     /// the underline" — see `docs/traceloom-lavaui-gaps.md` #4.
     var decorations: [EditorDecoration] = []
     var onDecorationTap: ((EditorDecoration) -> Void)?
+    /// `EditorView(onFollow:)`: Ctrl+click on a word calls it with the offset
+    /// of the character clicked. Nil turns Ctrl+hover links off.
+    var onFollow: ((Int) -> Void)?
+    /// The word underlined as a link while Control is held over it, as
+    /// character offsets. Paint-only: setting it costs a redraw, not a body.
+    var linkRange: Range<Int>?
     /// Whole-line marks, sorted by first line. See `EditorLineMark`.
     var lineMarks: [EditorLineMark] = []
     /// Vertical scroll offset in pixels. Positive scrolls content up.

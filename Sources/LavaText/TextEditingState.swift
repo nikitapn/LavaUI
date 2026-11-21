@@ -633,7 +633,7 @@ public struct TextEditingState: Equatable {
     /// swift-corelibs-foundation, and pulling in ICU for this would be
     /// disproportionate. Identifier-style words (letters, digits, underscore)
     /// are also the right unit for a code editor, which is where this lands.
-    private static func isWordCharacter(_ c: Character) -> Bool {
+    public static func isWordCharacter(_ c: Character) -> Bool {
         c.isLetter || c.isNumber || c == "_"
     }
 

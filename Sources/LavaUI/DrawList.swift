@@ -2925,6 +2925,18 @@ extension DrawList {
                 )
             }
 
+            // The Ctrl+hover link, under the text like a decoration.
+            if let link = leaf.linkRange, link.overlaps(range) {
+                let from = max(link.lowerBound, range.lowerBound)
+                let to = min(link.upperBound, range.upperBound)
+                emitUnderline(
+                    .straight, color: leaf.theme.accent,
+                    x0: textX + columnX(from - range.lowerBound),
+                    x1: textX + columnX(to - range.lowerBound),
+                    y: rowTop + lineH - 2
+                )
+            }
+
             if focused, !state.hasSelection, CaretBlink.isVisible, row == caretRow {
                 let column = caretOffset - range.lowerBound
                 caret(x: textX + columnX(column), y: rowTop, h: lineH, theme: leaf.theme)

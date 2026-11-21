@@ -1,5 +1,6 @@
 import Foundation
 import LavaProjectCore
+import LavaText
 import LavaUI
 
 extension EditorSession {
@@ -20,6 +21,24 @@ extension EditorSession {
             guard project.decorations.mark(for: node) != .ignored else { return nil }
             return ProjectSearchBuffer(path: path, text: document.text)
         }
+    }
+
+    /// Ctrl+click on a word. Until a language server can say where it is
+    /// defined, the honest answer is every place it is written: a whole-word,
+    /// case-sensitive project search for it.
+    func follow(at offset: Int) {
+        let text = active.text
+        guard let project, offset >= 0, offset < text.count else { return }
+        let index = text.index(text.startIndex, offsetBy: offset)
+        let state = TextEditingState(text)
+        let word = String(text[state.wordRange(at: index)])
+        guard let first = word.first, TextEditingState.isWordCharacter(first) else { return }
+        var options = ProjectSearchOptions()
+        options.query = word
+        options.wholeWord = true
+        options.caseSensitive = true
+        showSidebar(.search)
+        projectSearch.search(root: project.tree.root, options: options, immediate: true)
     }
 
     func openProjectMatch(_ url: URL, line: ProjectSearchLine, match: Int) {

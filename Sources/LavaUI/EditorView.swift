@@ -428,6 +428,12 @@ public struct EditorView: PrimitiveView {
     public var onDecorationTap: ((EditorDecoration) -> Void)?
     /// Ctrl+wheel notches, consumed even when the document cannot scroll.
     public var onZoom: ((Float) -> Void)?
+    /// Ctrl+click on a word, with the character offset clicked: go to
+    /// definition, open a link. While Control is held, the word under the
+    /// pointer is underlined and the pointer becomes a hand, all drawn by the
+    /// editor without asking the app. Nil turns the behaviour off, and a
+    /// Ctrl+click then places the caret as usual.
+    public var onFollow: ((Int) -> Void)?
     /// Handle for revealing lines, restoring positions and replacing matches.
     public var controller: EditorController?
 
@@ -447,7 +453,8 @@ public struct EditorView: PrimitiveView {
         lineMarks: [EditorLineMark] = [],
         onDecorationTap: ((EditorDecoration) -> Void)? = nil,
         controller: EditorController? = nil,
-        onZoom: ((Float) -> Void)? = nil
+        onZoom: ((Float) -> Void)? = nil,
+        onFollow: ((Int) -> Void)? = nil
     ) {
         self._text = text
         self.isReadOnly = isReadOnly
@@ -464,6 +471,7 @@ public struct EditorView: PrimitiveView {
         self.onDecorationTap = onDecorationTap
         self.controller = controller
         self.onZoom = onZoom
+        self.onFollow = onFollow
     }
 
     /// The font the editor draws with: `font`, or the environment's when that is `nil`.
@@ -497,6 +505,35 @@ public struct EditorView: PrimitiveView {
         if !leaf.usesTextMeasure { leaf.installTextMeasure() }
         leaf.markMeasureDirty()
         return leaf
+    }
+
+    /// Ctrl+hover links. The editor finds and draws the word itself — a
+    /// redraw per word the pointer crosses, never a body — and only a click
+    /// reaches the app.
+    private func configureFollow(_ leaf: LeafNode) {
+        leaf.onFollow = onFollow
+        guard onFollow != nil else {
+            leaf.onPointerHoverLocal = nil
+            if leaf.onHover != nil {
+                leaf.onHover = nil
+                HoverState.unregister(leaf.id)
+            }
+            leaf.pointerCursor = nil
+            leaf.setLink(nil)
+            return
+        }
+        // `onHover` is what makes the leaf a stop on the local hover walk, and
+        // its leave is what takes the underline down when the pointer goes on
+        // to something else with Control still held.
+        leaf.onHover = { [weak leaf] inside in
+            guard !inside, let leaf else { return }
+            leaf.pointerCursor = nil
+            leaf.setLink(nil)
+        }
+        HoverState.register(leaf.id) { [weak leaf] inside in leaf?.onHover?(inside) }
+        leaf.onPointerHoverLocal = { [weak leaf] x, y in
+            leaf?.updateLink(localX: x, localY: y)
+        }
     }
 
     private func configure(_ leaf: LeafNode) {
@@ -569,6 +606,7 @@ public struct EditorView: PrimitiveView {
         // Sorted once here so the paint can binary-search a screenful of rows.
         leaf.lineMarks = lineMarks.sorted { $0.lines.lowerBound < $1.lines.lowerBound }
         leaf.onDecorationTap = onDecorationTap
+        configureFollow(leaf)
 
         let binding = _text
         controller?.install(
@@ -649,7 +687,7 @@ public struct EditorView: PrimitiveView {
             }
         }
 
-        leaf.onClickLocal = { [weak leaf] localX, localY, originX, originY, _, _ in
+        leaf.onClickLocal = { [weak leaf] localX, localY, originX, originY, mods, _ in
             guard let leaf else { return }
             // Before anything else: the bars are painted over the text, so a
             // press on one has to be read that way too. Without this, grabbing
@@ -670,6 +708,16 @@ public struct EditorView: PrimitiveView {
                 } else {
                     leaf.selectRow(atLocalY: localY)
                 }
+            } else if KeyMods.contains(mods, KeyMods.control), let follow = leaf.onFollow,
+                      let offset = leaf.linkOffset(
+                          localX: localX - leaf.gutterWidth + leaf.scrollX,
+                          localY: Double(localY) + leaf.scrollY
+                      )
+            {
+                // The link, not the caret: a go-to that also moved the caret
+                // would leave the old file's position wherever the user
+                // happened to click.
+                follow(offset)
             } else if let hit = leaf.index(
                 atLocalX: localX - leaf.gutterWidth + leaf.scrollX,
                 localY: Double(localY) + leaf.scrollY
@@ -708,6 +756,30 @@ public struct EditorView: PrimitiveView {
 extension LeafNode {
     /// Scroll offsets and selection, as `EditorController.position()` reports
     /// them.
+    /// Ctrl+hover: the word under the pointer while Control is held, else
+    /// nothing. `localX`/`localY` are the box's own, gutter included.
+    func updateLink(localX: Float, localY: Float) {
+        var link: Range<Int>?
+        if HeldModifiers.control, !PointerCapture.isActive, localX >= gutterWidth {
+            link = wordUnder(localX: localX - gutterWidth + scrollX, localY: Double(localY) + scrollY)
+        }
+        pointerCursor = link == nil ? nil : .pointer
+        setLink(link)
+    }
+
+    func setLink(_ link: Range<Int>?) {
+        guard link != linkRange else { return }
+        linkRange = link
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    /// The offset a Ctrl+click follows: the character clicked, when it is in a
+    /// word. Content coordinates, as `characterUnder` takes them.
+    func linkOffset(localX: Float, localY: Double) -> Int? {
+        guard wordUnder(localX: localX, localY: localY) != nil else { return nil }
+        return characterUnder(localX: localX, localY: localY)?.offset
+    }
+
     func editorPosition() -> EditorPosition {
         // `charOffset` is anchored, so the second call walks only the distance
         // between the two ends rather than back to the start of the buffer.

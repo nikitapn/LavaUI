@@ -990,6 +990,45 @@ extension LeafNode {
         }
     }
 
+    /// The character under a point, as a character offset — not the nearest
+    /// caret position, which is what `index(atLocalX:localY:)` answers and
+    /// which, past the end of a row, is still beside its last word. Nil past
+    /// the end of a row and below the last one. Same coordinates as that.
+    ///
+    /// Works on the row's own text, never the whole buffer: it runs on every
+    /// pointer move while Control is held.
+    func characterUnder(localX x: Float, localY y: Double) -> (offset: Int, row: String, column: Int)? {
+        guard let f = font ?? FontStore.default else { return nil }
+        let inset = textInset
+        let rows = editing.layout.rows
+        let position = ((y - Double(inset)) / Double(f.lineHeight)).rounded(.down)
+        guard position >= 0, position < Double(rows.count) else { return nil }
+        let row = Int(position)
+        let line = rowText(row)
+        let run = f.shapedRun(line)
+        let local = run.index(atX: x - inset)
+        var column = line.distance(from: line.startIndex, to: local)
+        // The nearest boundary is to the right of the pointer when the pointer
+        // is over the right half of a glyph; the glyph is then the one before.
+        if x - inset < run.caretX(for: local) { column -= 1 }
+        guard column >= 0, column < line.count else { return nil }
+        return (editing.layout.offset(row: row, column: column), line, column)
+    }
+
+    /// The identifier under a point, as character offsets: letters, digits and
+    /// underscores, the run double-click selects. Nil over anything else.
+    func wordUnder(localX x: Float, localY y: Double) -> Range<Int>? {
+        guard let hit = characterUnder(localX: x, localY: y) else { return nil }
+        let characters = Array(hit.row)
+        guard TextEditingState.isWordCharacter(characters[hit.column]) else { return nil }
+        var lower = hit.column
+        while lower > 0, TextEditingState.isWordCharacter(characters[lower - 1]) { lower -= 1 }
+        var upper = hit.column + 1
+        while upper < characters.count, TextEditingState.isWordCharacter(characters[upper]) { upper += 1 }
+        let start = hit.offset - (hit.column - lower)
+        return start..<(start + upper - lower)
+    }
+
     // MARK: Secure fields
     //
     // A secure field's buffer is dots, so everything that measures, draws or
