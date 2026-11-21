@@ -52,6 +52,7 @@ final class EditorSession {
     var pendingWorkspace: WorkspaceOpening?
     @ObservationIgnored var hasCheckpointed = false
 
+    let projectSearch = SearchPanelModel()
     var find = FindState()
     var findQueryFocused = false
     /// Open, and what the user has typed into it, for `Go to Line`.

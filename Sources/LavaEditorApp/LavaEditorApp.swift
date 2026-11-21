@@ -167,7 +167,7 @@ struct LavaEditorApp {
                         MenuItem(
                             "Search", id: "view.search",
                             shortcut: KeyShortcut(KeyCode.f, [.primary, .shift])
-                        ) { session.showSidebar(.search) }
+                        ) { session.showProjectSearch() }
                         MenuItem(
                             "Source Control", id: "view.source-control",
                             shortcut: KeyShortcut(KeyCode.g, [.primary, .shift])
