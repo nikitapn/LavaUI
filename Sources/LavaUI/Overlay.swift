@@ -230,6 +230,7 @@ final class OverlayAttachment {
 /// nothing measurable, and it buys unambiguous reconcile identity.
 final class OverlayBoxNode: StyleBoxNode {
     let attachment = OverlayAttachment()
+    var menuBarTitleAction: (() -> (() -> Void)?)?
 }
 
 /// `content.overlay(isPresented:) { ... }`
@@ -247,6 +248,7 @@ public struct OverlayView<Content: View, OverlayContent: View>: PrimitiveView {
     public var placement: OverlayPlacement?
     /// Panel styling for the floating surface itself.
     public var style: OverlayStyle
+    var menuBarTitleAction: (() -> (() -> Void)?)? = nil
 
     /// Creates a popup overlay. Usually spelled `.overlay(isPresented:alignment:style:content:)`.
     public init(
@@ -321,6 +323,7 @@ public struct OverlayView<Content: View, OverlayContent: View>: PrimitiveView {
 
         att.scrim = style.scrim
         att.modal = style.modal
+        box.menuBarTitleAction = menuBarTitleAction
         att.onKey = style.onKey
         att.onUnfocusedText = style.onUnfocusedText
         att.border = style.plateBorder
@@ -448,10 +451,8 @@ public struct OverlayStyle {
     /// A dialog rather than a menu: while it is up nothing outside it takes
     /// the pointer — no click, hover, wheel, drag or drop reaches the window
     /// behind, and a click there neither dismisses it nor does anything else.
-    /// A menu wants the opposite (a click outside closes it and may land on a
-    /// menu title), which is why this is a choice and not the scrim's
-    /// side-effect. Keys are the app's: its handler decides what a dialog
-    /// lets through.
+    /// Non-modal popups close and consume outside presses. An open menu bar
+    /// can also switch titles on that press. Keyboard handling is separate.
     public var modal: Bool
     // Opt into a keyboard scope as well as pointer modality.
     var onKey: ((KeyEvent) -> Bool)?

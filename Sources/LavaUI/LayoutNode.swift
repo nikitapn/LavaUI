@@ -2364,47 +2364,61 @@ public final class LayoutHost {
         originX: Float = 0, originY: Float = 0,
         mods: Int32 = 0, button: Int32 = 0
     ) -> (() -> Void)? {
+        let overlays = presentedOverlaysForPress()
+        return outsideOverlayPress(
+            in: overlays, x: x, y: y, originX: originX, originY: originY
+        ) ?? clickAction(
+            x: x, y: y, originX: originX, originY: originY,
+            mods: mods, button: button, overlays: overlays
+        )
+    }
+
+    func clickAction(
+        x: Float, y: Float, originX: Float, originY: Float,
+        mods: Int32, button: Int32, overlays: [OverlayAttachment]
+    ) -> (() -> Void)? {
         guard layoutValid, let root else { return nil }
 
-        // Overlays first, topmost down. Two rules a menu has to obey and the
-        // main tree cannot express: a click on the popup must not fall through
-        // to whatever it covers, and a click outside must dismiss it rather
-        // than activate what it landed on.
-        let overlays = OverlayScan.presented(in: root)
-        if !overlays.isEmpty {
-            for att in overlays.reversed() {
-                guard let overlayRoot = att.root else { continue }
-                if let hit = hitWalk(
-                    overlayRoot, x: x, y: y,
-                    ox: originX + att.origin.x, oy: originY + att.origin.y,
-                    mods: mods, button: button
-                ) {
-                    return hit
-                }
-                // Inside the panel but on an inert part: swallow, so the click
-                // neither dismisses nor reaches the content below.
-                if att.contains(x - originX, y - originY) { return {} }
-            }
-            // A modal overlay owns the pointer: outside it, nothing happens.
-            if overlays.contains(where: \.modal) { return {} }
-            // Outside the popup but still on this window: prefer a real target
-            // in the main tree (menu bar titles especially) over a blind
-            // dismiss. A native menubar switches on the same click that leaves
-            // the previous menu; dismissing first then re-running the title
-            // handler used to reopen the same menu (blink) or require two
-            // clicks to change menus. Title handlers toggle presentation
-            // themselves — no second dismiss needed when they fire.
+        for att in overlays.reversed() {
+            guard let overlayRoot = att.root else { continue }
             if let hit = hitWalk(
-                root, x: x, y: y, ox: originX, oy: originY,
+                overlayRoot, x: x, y: y,
+                ox: originX + att.origin.x, oy: originY + att.origin.y,
                 mods: mods, button: button
             ) {
                 return hit
             }
-            return { for att in overlays { att.dismiss() } }
+            // The panel also owns presses on its padding and inert rows.
+            if att.contains(x - originX, y - originY) { return {} }
         }
+        if overlays.contains(where: \.modal) { return {} }
 
         return hitWalk(root, x: x, y: y, ox: originX, oy: originY,
                        mods: mods, button: button)
+    }
+
+    func presentedOverlaysForPress() -> [OverlayAttachment] {
+        guard layoutValid, let root else { return [] }
+        return OverlayScan.presented(in: root)
+    }
+
+    /// Resolves the press before focus, drag sources and press observers.
+    func outsideOverlayPress(
+        in overlays: [OverlayAttachment], x: Float, y: Float, originX: Float, originY: Float
+    ) -> (() -> Void)? {
+        guard !overlays.isEmpty, let root,
+              !overlays.contains(where: { $0.modal || $0.contains(x - originX, y - originY) })
+        else { return nil }
+        // Switch the menu bar before dismissing the old attachments. Its old
+        // title's binding is already false once a new title is selected.
+        let selectTitle = hitWalk(
+            root, x: x, y: y, ox: originX, oy: originY,
+            mods: 0, button: 0, menuBarTitlesOnly: true
+        )
+        return {
+            selectTitle?()
+            for overlay in overlays { overlay.dismiss() }
+        }
     }
 
     /// Topmost interactive node under the pointer, for hover highlighting.
@@ -2735,7 +2749,7 @@ public final class LayoutHost {
         _ node: any AnyViewNode,
         x: Float, y: Float,
         ox: Float, oy: Float,
-        mods: Int32, button: Int32
+        mods: Int32, button: Int32, menuBarTitlesOnly: Bool = false
     ) -> (() -> Void)? {
         // Clicking something that is fading out would run an action the view
         // tree no longer describes; clicking through to something hidden runs
@@ -2756,8 +2770,13 @@ public final class LayoutHost {
             {
                 return nil
             }
+            if menuBarTitlesOnly,
+               let title = box as? OverlayBoxNode,
+               x >= nx, x < nx + nw, y >= ny, y < ny + nh,
+               let action = title.menuBarTitleAction?()
+            { return action }
             // Before the children, and only this: see `onOverlayPress`.
-            if let overlay = box.onOverlayPress,
+            if !menuBarTitlesOnly, let overlay = box.onOverlayPress,
                x >= nx, x < nx + nw, y >= ny, y < ny + nh,
                let action = overlay(x - nx, y - ny, nx, ny)
             {
@@ -2768,9 +2787,10 @@ public final class LayoutHost {
                 let shift = box.childOffset
                 if let h = hitWalk(
                     child, x: x, y: y, ox: nx - shift.x, oy: ny - shift.y,
-                    mods: mods, button: button
+                    mods: mods, button: button, menuBarTitlesOnly: menuBarTitlesOnly
                 ) { return h }
             }
+            guard !menuBarTitlesOnly else { return nil }
             if let leaf = node as? LeafNode,
                x >= nx, x < nx + nw, y >= ny, y < ny + nh
             {
@@ -2811,7 +2831,8 @@ public final class LayoutHost {
         }
         for child in node.childNodes.reversed() {
             if let h = hitWalk(child, x: x, y: y, ox: ox, oy: oy,
-                               mods: mods, button: button) { return h }
+                               mods: mods, button: button,
+                               menuBarTitlesOnly: menuBarTitlesOnly) { return h }
         }
         return nil
     }
@@ -2854,6 +2875,14 @@ public final class LayoutHost {
     public private(set) var lastFrames: [LayoutFrame] = []
     public func diagramHostFrame() -> LayoutFrame? { nil }
     public func hitTestClick(x: Float, y: Float, originX: Float = 0, originY: Float = 0) -> (() -> Void)? { nil }
+    func clickAction(
+        x: Float, y: Float, originX: Float, originY: Float,
+        mods: Int32, button: Int32, overlays: [OverlayAttachment]
+    ) -> (() -> Void)? { nil }
+    func presentedOverlaysForPress() -> [OverlayAttachment] { [] }
+    func outsideOverlayPress(
+        in overlays: [OverlayAttachment], x: Float, y: Float, originX: Float, originY: Float
+    ) -> (() -> Void)? { nil }
 }
 
 // Minimal stubs so primitives compile without CYoga.

@@ -49,20 +49,22 @@ final class MenuScrollTests: XCTestCase {
 
     // MARK: - Driving
 
-    private func menu(rows: Int) -> MenuModel {
+    private func menu(rows: Int, includeEdit: Bool) -> MenuModel {
         let items: [MenuEntry] = (0..<rows).map {
             .item(MenuItemModel(id: MenuID("i\($0)"), title: "row \($0)"))
         }
-        return MenuModel(
-            menus: [MenuNode(id: MenuID("m"), title: "File", items: items)]
-        )
+        var menus = [MenuNode(id: MenuID("m"), title: "File", items: items)]
+        if includeEdit {
+            menus.append(MenuNode(id: MenuID("edit"), title: "Edit", items: items))
+        }
+        return MenuModel(menus: menus)
     }
 
     /// One frame: layout, then emit, which is what places the dropdown. The
     /// strip is pinned to the top by a spacer below it, the way
     /// `MenuChromeRoot` pins it above app content.
-    private func settle(rows: Int) {
-        let model = menu(rows: rows)
+    private func settle(rows: Int, includeEdit: Bool = false) {
+        let model = menu(rows: rows, includeEdit: includeEdit)
         host.setRoot(
             VStack(flexGrow: 1, padding: 0, spacing: 0) {
                 MenuBarStrip(
@@ -82,6 +84,13 @@ final class MenuScrollTests: XCTestCase {
         let list = DrawList(editor: editor)
         list.clear()
         list.emitTree(root, viewportW: Self.viewport.w, viewportH: Self.viewport.h)
+    }
+
+    func testClickingAnotherMenuTitleSwitchesTheOpenDropdown() throws {
+        settle(rows: 3, includeEdit: true)
+        let title = try XCTUnwrap(try stripFrame("Edit"))
+        try XCTUnwrap(host.hitTestClick(x: title.x + title.w / 2, y: title.y + title.h / 2))()
+        XCTAssertEqual(open, MenuID("edit"))
     }
 
     private func dropdown() throws -> OverlayAttachment {

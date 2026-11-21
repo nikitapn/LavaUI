@@ -286,7 +286,6 @@ public struct MenuBarStrip: View {
         .agentId("menu.bar")
     }
 
-    @ViewBuilder
     private func topLevelTitle(
         _ menu: MenuNode,
         theme: Theme,
@@ -296,19 +295,14 @@ public struct MenuBarStrip: View {
         let binding = openMenuID
         let activate = onActivate
         let menuID = menu.id
+        let toggle = { binding.wrappedValue = binding.wrappedValue == menuID ? nil : menuID }
         // Stack carries click + hover so the hit target is the padded title
         // chrome, not the text glyphs alone — and so hover can open the next
         // menu while one is already showing (native menubar behaviour).
-        HStack(
+        var title = HStack(
             padding: 0,
             alignment: .center,
-            onClick: {
-                if binding.wrappedValue == menuID {
-                    binding.wrappedValue = nil
-                } else {
-                    binding.wrappedValue = menuID
-                }
-            },
+            onClick: toggle,
             onHover: { inside in
                 guard inside else { return }
                 // After the first click opens a menu, moving across titles
@@ -351,6 +345,12 @@ public struct MenuBarStrip: View {
                 style: style
             )
         }
+        if !externalMenus {
+            title.menuBarTitleAction = {
+                binding.wrappedValue == nil ? nil : toggle
+            }
+        }
+        return title
     }
 
     private func titleFill(isIcon: Bool, isOpen: Bool) -> Color {

@@ -583,6 +583,16 @@ public final class LavaWindow {
             // Looked up before the click handler, which may rebuild the view
             // under the pointer — a row selecting itself, say.
             pendingFileDrag = nil
+            // Press observers can open a popup. Route this press against the
+            // overlays that were already present when it began.
+            let overlays = host.presentedOverlaysForPress()
+            if let action = host.outsideOverlayPress(
+                in: overlays, x: ev.x, y: ev.y, originX: 0, originY: menuH
+            ) {
+                action()
+                ViewInvalidation.markNeedsRedraw()
+                break
+            }
             if DragBridge.startFileDrag != nil,
                let source = host.fileDragSource(
                    x: ev.x, y: ev.y, originY: menuH, button: ev.button
@@ -611,9 +621,9 @@ public final class LavaWindow {
             for id in host.pressObservers(x: ev.x, y: ev.y, originY: menuH) {
                 PressObserverRouter.notify(id, button: ev.button)
             }
-            if let action = host.hitTestClick(
+            if let action = host.clickAction(
                 x: ev.x, y: ev.y, originX: 0, originY: menuH, mods: ev.mods,
-                button: ev.button
+                button: ev.button, overlays: overlays
             ) {
                 action()
                 // A handler exists to change something, so a click is a repaint
