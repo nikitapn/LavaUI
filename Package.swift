@@ -151,6 +151,12 @@ var targets: [Target] = [
     // LavaEditor's hand-edited settings: defaults, then the user's
     // `editor.json`, then a folder's `.lava/settings.json`.
     .target(name: "LavaEditorSettings"),
+    .systemLibrary(
+        name: "CFontconfig",
+        pkgConfig: "fontconfig",
+        providers: [.apt(["libfontconfig-dev"])]
+    ),
+    .target(name: "LavaFontCore", dependencies: ["CFontconfig"]),
     // What a search row says about a file: size, date, badge, `~` paths,
     // the match highlight. No engine — see Sources/LavaFindCore.
     .target(name: "LavaFindCore"),
@@ -444,6 +450,7 @@ var targets: [Target] = [
     .target(
         name: "LavaUI",
         dependencies: [
+            "LavaFontCore",
             "LavaText",
             "LavaMenu",
             .product(
@@ -583,6 +590,7 @@ var targets: [Target] = [
     .testTarget(name: "LavaProjectCoreTests", dependencies: ["LavaProjectCore", "LavaGitCore"]),
     .testTarget(name: "LavaLSPCoreTests", dependencies: ["LavaLSPCore"]),
     .testTarget(name: "LavaEditorSettingsTests", dependencies: ["LavaEditorSettings"]),
+    .testTarget(name: "LavaFontCoreTests", dependencies: ["LavaFontCore", "CFontconfig"]),
     .testTarget(name: "LavaPDFCoreTests", dependencies: ["LavaPDFCore"]),
     .testTarget(name: "LavaPlayerCoreTests", dependencies: ["LavaPlayerCore"]),
     .testTarget(name: "LavaFindCoreTests", dependencies: ["LavaFindCore"]),
