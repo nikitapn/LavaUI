@@ -42,6 +42,7 @@ final class ViewStyleMergeTests: XCTestCase {
         s.isHidden = false
         s.cursor = .resizeUpDown
         s.hoverSnap = true
+        s.hoverInset = HoverInset(horizontal: 6, vertical: 1)
         s.border = BorderStyle(Color(r: 0.5, g: 0, b: 0.5), width: 4)
         s.frameAlignment = .bottomTrailing
         s.hoverRegion = HoverRegionAction { _ in }
