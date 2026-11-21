@@ -515,6 +515,7 @@ var targets: [Target] = [
             "LavaUI", "LavaHost", "LavaText", "LavaDiffCore", "LavaGitCore", "LavaProjectCore",
             "LavaExplorerCore", "LavaLSPCore", "LavaEditorSettings",
         ],
+        resources: [.copy("Resources")],
         swiftSettings: interopCxx
     ),
     .executableTarget(

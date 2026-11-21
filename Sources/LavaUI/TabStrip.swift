@@ -101,13 +101,16 @@ public struct TabStripItem: View {
     private let closeID: String
     private let onSelect: () -> Void
     private let onClose: () -> Void
+    private let leading: ((DrawList, CanvasFrame) -> Void)?
 
     public init(
         _ title: String, selected: Bool, emphasized: Bool = true,
         modified: Bool = false, outlined: Bool = true, fill: Color? = nil,
         style: Style? = nil, closeID: String = "close-tab",
+        leading: ((DrawList, CanvasFrame) -> Void)? = nil,
         onSelect: @escaping () -> Void, onClose: @escaping () -> Void
     ) {
+        self.leading = leading
         self.title = title
         self.selected = selected
         self.emphasized = emphasized
@@ -139,6 +142,11 @@ public struct TabStripItem: View {
                                          color: style?.modified ?? theme.accent, radius: size / 2)
                     }
                 }
+            }
+            // A 16-point square before the title — a file-type icon, say. The
+            // app paints it; the strip does not know what a file is.
+            if let leading {
+                Canvas(label: "tab-icon", width: .pt(16), height: .pt(16), paint: leading)
             }
             Text(title, color: text, font: font, lineLimit: 1)
                 .frame(width: .pt(min(200, max(style == nil ? 60 : 0, font?.measure(title).width ?? 120))))

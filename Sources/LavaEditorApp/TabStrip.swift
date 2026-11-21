@@ -77,6 +77,10 @@ struct EditorTabs: View {
                          text: selected ? theme.textPrimary : theme.textSecondary,
                          modified: appearance.modified, closeHover: theme.selectionFill),
             closeID: "close-tab-\(document.id)",
+            leading: { [session] list, frame in
+                FileIcons.draw(document.name, in: list, x: frame.x, y: frame.y, size: frame.w,
+                               theme: theme, editor: session.imageEditor)
+            },
             onSelect: {
                 if let index = session.documents.firstIndex(where: { $0.id == document.id }) {
                     session.activate(index)

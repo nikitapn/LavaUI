@@ -121,6 +121,9 @@ final class EditorSession {
     var documentFont: UIFont? { zoomedDocument?.regular ?? fonts.document }
     var documentBoldFont: UIFont? { zoomedDocument == nil ? fonts.documentBold : zoomedDocument?.bold }
     @ObservationIgnored private weak var fontEditor: Editor?
+    /// The engine images are decoded into — file-type icons in a canvas
+    /// paint need it, and have no view of their own to ask.
+    var imageEditor: Editor? { fontEditor }
     @ObservationIgnored private var zoomFonts: [Int: (regular: UIFont, bold: UIFont?)] = [:]
     @ObservationIgnored private var zoomRemainder: Float = 0
 

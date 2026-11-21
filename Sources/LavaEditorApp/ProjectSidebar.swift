@@ -140,6 +140,7 @@ struct ProjectExplorer: View {
         let mark = project.decorations.mark(for: row.node)
         let isSelected = project.selected == row.node.path
         let session = self.session
+        let imageEditor = session.imageEditor
         let project = self.project
         return Canvas(
             label: "project-row",
@@ -163,6 +164,12 @@ struct ProjectExplorer: View {
             let indent = frame.x + 12 + Float(row.depth) * 14
             let midY = frame.y + frame.h / 2
             let ink = colors.color(mark, theme: theme)
+            if !row.node.isDirectory {
+                // In the column a folder's chevron takes, so a file's name lines
+                // up with its sibling folders' names.
+                FileIcons.draw(row.node.name, in: list, x: indent - 3, y: midY - 7, size: 14,
+                               theme: theme, editor: imageEditor)
+            }
             if row.node.isDirectory {
                 // A chevron: right when closed, down when open.
                 let c = theme.textSecondary
