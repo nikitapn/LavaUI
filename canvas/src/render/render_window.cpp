@@ -1649,6 +1649,8 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
     float    parentOx = 0.f, parentOy = 0.f;
     float    parentOpacity = 1.f;
     uint32_t flags     = 0;
+    /// Where the hover and press tints sit inside the box. See `BeginNode`.
+    float    hoverInsetX = 0.f, hoverInsetY = 0.f;
     size_t   recordIndex = 0;
     bool     clipped   = false;
     /// The scissor in force *inside* this node, so children inherit it.
@@ -1700,6 +1702,11 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       OpenNode node;
       node.id       = cmd.param;
       node.flags    = cmd.color;
+      if (cmd.aux > 0.f) {
+        const auto packed = static_cast<uint32_t>(cmd.aux);
+        node.hoverInsetX = static_cast<float>(packed & 0x3ffu) * 0.25f;
+        node.hoverInsetY = static_cast<float>(packed >> 10) * 0.25f;
+      }
       sceneState_[node.id].hoverSnap =
         (node.flags & canvas::kSceneNodeHoverSnap) != 0;
       node.parentOx      = ox;
@@ -1905,12 +1912,18 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
         // rounded row has to match the fill underneath or it reads as a
         // hard box leaking past the corners.
         const float radius = cmd.aux > 0.f ? cmd.aux : 0.f;
+        // The chip, not the hit rect: a full-width row is clickable to its
+        // edges and still lights up as the inset shape it selects with.
+        const float tintW = std::max(0.f, node.w - 2.f * node.hoverInsetX);
+        const float tintH = std::max(0.f, node.h - 2.f * node.hoverInsetY);
+        const float tintX = node.x + node.hoverInsetX;
+        const float tintY = node.y + node.hoverInsetY;
         if (hoverTint != 0 && hoverK > 0.f) {
-          quads_.pushBox({node.x, node.y}, {node.w, node.h},
+          quads_.pushBox({tintX, tintY}, {tintW, tintH},
                          withScaledAlpha(hoverTint, hoverK), radius);
         }
         if (pressK > 0.f) {
-          quads_.pushBox({node.x, node.y}, {node.w, node.h},
+          quads_.pushBox({tintX, tintY}, {tintW, tintH},
                          withScaledAlpha(pressTint, pressK), radius);
         }
       }

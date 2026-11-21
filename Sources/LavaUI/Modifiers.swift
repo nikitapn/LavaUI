@@ -105,6 +105,8 @@ public struct ViewStyle: Equatable {
     public var cursor: CursorShape?
     /// Snap hover off rather than ease it. See `View.hoverSnap(_:)`.
     public var hoverSnap: Bool?
+    /// How far inside the box the hover tint is drawn. See `View.hoverInset`.
+    public var hoverInset: HoverInset?
     /// Stroke on this node's edge, drawn over its children. See
     /// `View.border(_:width:)`.
     public var border: BorderStyle?
@@ -159,6 +161,7 @@ public struct ViewStyle: Equatable {
         out.isHidden = isHidden ?? base.isHidden
         out.cursor = cursor ?? base.cursor
         out.hoverSnap = hoverSnap ?? base.hoverSnap
+        out.hoverInset = hoverInset ?? base.hoverInset
         out.border = border ?? base.border
         out.hoverRegion = hoverRegion ?? base.hoverRegion
         out.tooltip = tooltip ?? base.tooltip
@@ -311,6 +314,7 @@ extension YogaBoxNode {
             base.isHidden = isHidden
             base.cursor = cursor
             base.hoverSnap = hoverSnap
+            base.hoverInset = hoverInset
             base.border = borderStyle
             styleBaseline = base
         }
@@ -337,6 +341,7 @@ extension YogaBoxNode {
         // view is sitting in.
         cursor = style.cursor ?? base.cursor
         hoverSnap = style.hoverSnap ?? base.hoverSnap ?? false
+        hoverInset = style.hoverInset ?? base.hoverInset ?? .zero
         // Through the baseline, like blur and cursor rather than like fill:
         // a border is chrome the modifier owns outright, so dropping the
         // modifier has to take the stroke off. `fill` is set-if-present
@@ -541,8 +546,21 @@ extension View {
 
     /// Fills the view's box with `color` while the pointer is over it. The
     /// renderer draws the fill, so hovering costs the app no frame.
+    ///
+    /// `.clear` turns the fill off while keeping the view a hover target —
+    /// the way a selected row, which paints its own fill, states none. Passing
+    /// it from the body rather than leaving the modifier out matters on a
+    /// reconciled node: an absent modifier leaves the last colour in place.
     public func hoverBackground(_ color: Color) -> ModifiedView<Self> {
         styled { $0.hoverFill = color }
+    }
+
+    /// Draws the hover tint `horizontal` points in from the left and right
+    /// edges and `vertical` from the top and bottom, rather than over the
+    /// whole box — so a full-width row, clickable edge to edge, can light up
+    /// as the same inset chip it paints for its selection.
+    public func hoverInset(horizontal: Float = 0, vertical: Float = 0) -> ModifiedView<Self> {
+        styled { $0.hoverInset = HoverInset(horizontal: horizontal, vertical: vertical) }
     }
 
     /// When true, the hover chip vanishes the frame the pointer leaves.
@@ -835,6 +853,11 @@ extension ModifiedView {
         adding { $0.hoverSnap = snap }
     }
 
+    /// See `View.hoverInset(horizontal:vertical:)`.
+    public func hoverInset(horizontal: Float = 0, vertical: Float = 0) -> ModifiedView<Content> {
+        adding { $0.hoverInset = HoverInset(horizontal: horizontal, vertical: vertical) }
+    }
+
     /// See `View.cornerRadius(_:)`.
     public func cornerRadius(_ radius: Float) -> ModifiedView<Content> {
         adding { $0.cornerRadius = radius }
@@ -920,4 +943,18 @@ extension ModifiedView {
             )
         }
     }
+}
+
+/// How far inside a box its renderer-drawn hover and press tints sit.
+/// See `View.hoverInset(horizontal:vertical:)`.
+public struct HoverInset: Equatable, Sendable {
+    public var horizontal: Float
+    public var vertical: Float
+
+    public init(horizontal: Float = 0, vertical: Float = 0) {
+        self.horizontal = horizontal
+        self.vertical = vertical
+    }
+
+    public static let zero = HoverInset()
 }

@@ -223,6 +223,9 @@ class YogaBoxNode: AnyViewNode {
     /// When true, the renderer drops this node's hover tint the frame the
     /// pointer leaves, instead of easing it out. See `View.hoverSnap(_:)`.
     var hoverSnap: Bool = false
+    /// Where inside this box the renderer draws its hover and press tints.
+    /// See `View.hoverInset(horizontal:vertical:)`.
+    var hoverInset: HoverInset = .zero
     /// Stroke on this box's own edge, drawn over its children
     /// (`View.border(_:width:)`).
     ///

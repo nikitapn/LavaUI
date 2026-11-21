@@ -104,8 +104,8 @@ struct ProjectExplorer: View {
         return VStack(flexGrow: 1, spacing: 0) {
             header(theme: theme)
             ScrollView(.vertical, position: project.scroll) {
-                LazyVStack(project.rows.indices, rowHeight: rowH) { index in
-                    row(index, font: font, rowH: rowH, colors: colors, theme: theme)
+                LazyVStack(project.rows, rowHeight: rowH) { entry in
+                    row(entry, font: font, rowH: rowH, colors: colors, theme: theme)
                 }
             }
             .flexGrow(1)
@@ -135,9 +135,8 @@ struct ProjectExplorer: View {
     }
 
     private func row(
-        _ index: Int, font: UIFont?, rowH: Float, colors: GitMarkColors, theme: Theme
+        _ row: ProjectRow, font: UIFont?, rowH: Float, colors: GitMarkColors, theme: Theme
     ) -> some View {
-        let row = project.rows[index]
         let mark = project.decorations.mark(for: row.node)
         let isSelected = project.selected == row.node.path
         let session = self.session
@@ -194,7 +193,13 @@ struct ProjectExplorer: View {
                       color: ink, font: font)
             list.popClip()
         }
-        .hoverBackground(theme.hover)
+        // The renderer's chip, the same shape as the selection fill. A
+        // selected row states none: both go out in one draw list, so the
+        // selection never shows with a hover wash over it.
+        .hoverBackground(isSelected ? .clear : theme.hover)
+        .hoverInset(horizontal: 6, vertical: 1)
+        .cornerRadius(5)
+        .hoverSnap()
         .cursor(.pointer)
     }
 }

@@ -1,8 +1,13 @@
+import Synchronization
 import XCTest
 
 @testable import LavaUI
 
 final class CursorTests: XCTestCase {
+    private final class CursorRequests: Sendable {
+        let shapes = Mutex<[UInt32]>([])
+    }
+
     /// The node the renderer would report for a label, found by walking the
     /// laid-out tree — the same tree `CursorBridge` resolves against.
     private func node(
@@ -65,6 +70,44 @@ final class CursorTests: XCTestCase {
 
         let root = try XCTUnwrap(host.rootNode)
         XCTAssertNil(CursorBridge.resolve(NodeID.generate(), in: root))
+    }
+
+    func testHoverReportForAReplacedRowKeepsTheCursorUntilTheRendererUpdates() throws {
+        let editor = try XCTUnwrap(Editor.openClient(width: 100, height: 100))
+        let host = LayoutHost()
+        func setRows() {
+            host.setRoot(ScrollView(.vertical) {
+                LazyVStack(0..<1, rowHeight: 24) { _ in
+                    Canvas(label: "row", width: .pct(100), height: .pt(24)) { _, _ in }
+                        .cursor(.pointer)
+                }
+            })
+            _ = host.calculateLayout(width: 100, height: 100)
+        }
+        setRows()
+        let before = try XCTUnwrap(host.hitTestSceneHover(x: 12, y: 12))
+        let requests = CursorRequests()
+        let originalRequest = CursorBridge.request
+        CursorBridge.invalidate()
+        CursorBridge.request = { shape, _ in requests.shapes.withLock { $0.append(shape) } }
+        defer {
+            CursorBridge.request = originalRequest
+            CursorBridge.invalidate()
+        }
+        CursorBridge.hover(before, in: host.rootNode, window: .main, editor: editor)
+
+        // The producer has replaced the rows. The renderer can still report
+        // the old target until it has received and replayed the new list.
+        setRows()
+        let after = try XCTUnwrap(host.hitTestSceneHover(x: 12, y: 12))
+        XCTAssertNotEqual(before, after)
+        CursorBridge.hover(before, in: host.rootNode, window: .main, editor: editor)
+        CursorBridge.hover(after, in: host.rootNode, window: .main, editor: editor)
+        CursorBridge.hover(nil, in: host.rootNode, window: .main, editor: editor)
+
+        XCTAssertEqual(requests.shapes.withLock { $0 }, [
+            CursorShape.pointer.rawValue, CursorShape.arrow.rawValue,
+        ])
     }
 
     /// The pointer image changes when the pointer *enters* a view, and only a

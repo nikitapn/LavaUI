@@ -93,6 +93,11 @@ enum class DrawCommandKind : uint32_t {
   ///   w, h  = viewport: the node's hit rect, and what it clips to when
   ///           `SceneNodeFlags::Clip` is set
   ///   color = `SceneNodeFlags` bitfield
+  ///   aux   = hover inset: how far inside `w`×`h` the hover and press tints
+  ///           of the matching `EndNode` are drawn. Two integers in quarter
+  ///           pixels carried as one integer-valued float — horizontal in
+  ///           bits 0–9, vertical above — so it stays exact below 2^24. 0 is
+  ///           the whole rect, which is what a producer that predates it sends.
   ///
   /// Bracketing rather than a separate node array, because the command list
   /// already works this way — `PushClip`/`PopClip` and the blur scopes are

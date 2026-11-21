@@ -891,11 +891,11 @@ public final class DrawList {
     /// the renderer sees stable *and* safe to hand on when the node is gone.
     public func beginNode(
         _ node: NodeID, x: Float, y: Float, w: Float, h: Float,
-        flags: SceneNodeFlags = []
+        flags: SceneNodeFlags = [], hoverInset: HoverInset = .zero
     ) {
         beginNode(
             id: SceneNodeIdentity.id(for: node),
-            x: x, y: y, w: w, h: h, flags: flags
+            x: x, y: y, w: w, h: h, flags: flags, hoverInset: hoverInset
         )
     }
 
@@ -908,9 +908,12 @@ public final class DrawList {
     /// Not routed through `append`, unlike every primitive: `color` here is a
     /// flags bitfield, and `append` exists to put a *colour* through the
     /// opacity multiplier. Fading a node would turn `scrollY` into `clip`.
+    ///
+    /// `hoverInset` moves the node's hover and press tints in from its edges;
+    /// the hit rect stays `w`×`h`. See `BeginNode.aux` for the encoding.
     public func beginNode(
         id: UInt32, x: Float, y: Float, w: Float, h: Float,
-        flags: SceneNodeFlags = []
+        flags: SceneNodeFlags = [], hoverInset: HoverInset = .zero
     ) {
         var cmd = canvas.DrawCommand()
         cmd.kind = DrawKind.beginNode.rawValue
@@ -920,7 +923,19 @@ public final class DrawList {
         cmd.h = h
         cmd.color = flags.rawValue
         cmd.param = id
+        cmd.aux = Self.packHoverInset(hoverInset)
         appendCommand(cmd)
+    }
+
+    /// `BeginNode.aux`: both insets in quarter points, horizontal in the low
+    /// ten bits, as one integer-valued float. Exact while the total stays
+    /// under 2^24 — horizontal up to 255.75, vertical up to 4095.75, which a
+    /// hover chip never comes near. Zero is no inset, which is also what a
+    /// producer that predates the field sends.
+    static func packHoverInset(_ inset: HoverInset) -> Float {
+        let x = UInt32(min(1023, max(0, (inset.horizontal * 4).rounded())))
+        let y = UInt32(min(16383, max(0, (inset.vertical * 4).rounded())))
+        return Float(x | y << 10)
     }
 
     /// Closes the innermost node. `contentW`/`contentH` are how big its
@@ -1748,7 +1763,8 @@ public final class DrawList {
                         hoverSnap: styled.hoverSnap
                     )
                     if let flags {
-                        beginNode(styled.id, x: x, y: y, w: w, h: h, flags: flags)
+                        beginNode(styled.id, x: x, y: y, w: w, h: h, flags: flags,
+                                  hoverInset: styled.hoverInset)
                     }
                     withGlass(styled.glass) {
                         if let g = styled.fillGradient {
@@ -1802,7 +1818,8 @@ public final class DrawList {
                         hoverSnap: stack.hoverSnap
                     )
                     if let flags {
-                        beginNode(stack.id, x: x, y: y, w: w, h: h, flags: flags)
+                        beginNode(stack.id, x: x, y: y, w: w, h: h, flags: flags,
+                                  hoverInset: stack.hoverInset)
                     }
                     let fill = stack.fillColor
                     withGlass(stack.glass) {
@@ -1858,7 +1875,8 @@ public final class DrawList {
                         hoverSnap: leaf.hoverSnap
                     )
                     if let flags {
-                        beginNode(leaf.id, x: x, y: y, w: w, h: h, flags: flags)
+                        beginNode(leaf.id, x: x, y: y, w: w, h: h, flags: flags,
+                                  hoverInset: leaf.hoverInset)
                     }
                     // Stacks and style boxes already scissor *children* for
                     // `.clipped()`. A leaf has no children — the overflow is
@@ -1928,7 +1946,10 @@ public final class DrawList {
     }
 
     private func hoverTint(base: Color?, target: Color?) -> Color? {
-        guard let target else { return nil }
+        // A transparent target is "no tint", not a tint towards nothing:
+        // `.hoverBackground(.clear)` is how a selected row keeps its own fill
+        // free of a wash while staying the node the renderer hovers.
+        guard let target, target.a > 0.01 else { return nil }
         // A fully transparent fill is not a colour — `.background(.clear)`
         // is how an open-state chip turns off, and treating it as black
         // made the hover tint a dark slab. Menu rows have no fill of their

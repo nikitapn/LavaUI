@@ -671,9 +671,11 @@ public final class LavaWindow {
                 // when it does. Asked of the renderer's hovered node, so there
                 // is still one answer to what is under the pointer; only the
                 // shape is asked again. `apply` drops a repeat of the shape.
-                CursorBridge.hover(
-                    HoverState.current, in: host.rootNode, window: id, editor: editor
-                )
+                // Reconciliation can clear the old id before the renderer
+                // reports the new one. Only a hover report can clear the cursor.
+                if let hovered = HoverState.current {
+                    CursorBridge.hover(hovered, in: host.rootNode, window: id, editor: editor)
+                }
             }
         case .mouseUp:
             pendingFileDrag = nil
@@ -707,7 +709,11 @@ public final class LavaWindow {
                 )
             }
         case .nodeHover:
-            let hovered = SceneNodeIdentity.node(for: UInt32(bitPattern: ev.button))
+            let sceneID = UInt32(bitPattern: ev.button)
+            let hovered = SceneNodeIdentity.node(for: sceneID)
+            // Zero is the renderer's explicit report that nothing is hovered.
+            // An unknown nonzero ID belongs to a scene we no longer have.
+            guard sceneID == 0 || hovered != nil else { break }
             HoverState.set(hovered)
             HoverRegions.update(hovered: hovered, in: host.rootNode)
             // The pointer image belongs to the same event: this is the only

@@ -115,9 +115,19 @@ public struct SourceControlList: Equatable, Sendable {
     public var isClean: Bool { conflicts.isEmpty && staged.isEmpty && changes.isEmpty }
 
     /// One line of the panel: a group's header, or a file in it.
-    public enum Row: Equatable, Sendable {
+    public enum Row: Equatable, Identifiable, Sendable {
         case header(Group, count: Int)
         case item(Item)
+
+        /// Stable while the status refreshes, so the list keeps the row's
+        /// node — and the renderer its hover. Carries the group: a file
+        /// staged and then edited again is a row in each.
+        public var id: String {
+            switch self {
+            case .header(let group, _): return "h:" + group.rawValue
+            case .item(let item): return item.group.rawValue + ":" + item.path
+            }
+        }
     }
 
     /// The rows to draw, with the groups in `collapsed` showing only their

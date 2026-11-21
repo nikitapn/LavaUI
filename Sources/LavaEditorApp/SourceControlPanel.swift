@@ -48,8 +48,8 @@ struct SourceControlPanel: View {
                 if let error = model.error { line(error, color: colors.deleted, id: "scm-error") }
                 if let done = model.committed { line("Committed \(done)", color: colors.added, id: "scm-committed") }
                 ScrollView(.vertical, position: model.scroll) {
-                    LazyVStack(rows.indices, rowHeight: rowH) { index in
-                        row(rows[index], font: font, colors: colors, theme: theme, rowH: rowH)
+                    LazyVStack(rows, rowHeight: rowH) { entry in
+                        row(entry, font: font, colors: colors, theme: theme, rowH: rowH)
                     }
                 }
                 .flexGrow(1)
@@ -191,18 +191,11 @@ struct SourceControlPanel: View {
     private static let actionWidth: Float = 24
     private static let letterWidth: Float = 26
 
-    private func key(_ row: SourceControlList.Row) -> String {
-        switch row {
-        case .header(let group, _): return "h:" + group.rawValue
-        case .item(let item): return item.group.rawValue + ":" + item.path
-        }
-    }
-
     private func row(
         _ row: SourceControlList.Row, font: UIFont?, colors: GitMarkColors, theme: Theme, rowH: Float
     ) -> some View {
         let model = project.sourceControl
-        let key = key(row)
+        let key = row.id
         let selected = model.selected == key
         let actions = model.hovered == key || selected ? actions(for: row) : []
         let session = self.session
@@ -287,7 +280,11 @@ struct SourceControlPanel: View {
                           h: font.lineHeight, color: ink, font: font)
             }
         }
-        .hoverBackground(theme.hover)
+        // Same chip as the explorer's; see `ProjectExplorer.row`.
+        .hoverBackground(selected ? .clear : theme.hover)
+        .hoverInset(horizontal: 6, vertical: 1)
+        .cornerRadius(5)
+        .hoverSnap()
         .cursor(.pointer)
         .agentId(key)
     }

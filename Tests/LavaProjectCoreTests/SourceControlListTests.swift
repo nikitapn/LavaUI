@@ -44,6 +44,14 @@ final class SourceControlListTests: XCTestCase {
         XCTAssertEqual(rows.filter { if case .item = $0 { return true } else { return false } }.count, 5)
     }
 
+    func testRowIdsTellTheTwoHalvesOfOneFileApart() {
+        let ids = SourceControlList(entries).rows().map(\.id)
+        XCTAssertEqual(Set(ids).count, ids.count)
+        XCTAssertTrue(ids.contains("staged:both.swift"))
+        XCTAssertTrue(ids.contains("changes:both.swift"))
+        XCTAssertTrue(ids.contains("h:changes"))
+    }
+
     func testCleanTreeStillShowsChanges() {
         let list = SourceControlList([])
         XCTAssertTrue(list.isClean)

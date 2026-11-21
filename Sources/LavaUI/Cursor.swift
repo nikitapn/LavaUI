@@ -96,18 +96,29 @@ public enum CursorBridge {
 
     /// Resolves what the pointer should show over `id`, and applies it.
     ///
-    /// `nil` — the pointer is over nothing this tree owns — is an arrow, which
-    /// is also what a node that states no cursor of its own inherits when no
-    /// ancestor states one either.
+    /// An empty hover report or a live node with no stated cursor uses the arrow.
+    /// A report for a removed node can arrive while the renderer is still
+    /// showing the previous draw list. Keep the cursor until its next report.
     static func hover(
         _ id: NodeID?, in root: (any AnyViewNode)?,
         window: WindowID, editor: Editor
     ) {
-        var shape = CursorShape.arrow
-        if let id, let root, let found = resolve(id, in: root), let stated = found {
-            shape = stated
+        guard let id else {
+            apply(.arrow, window: window, editor: editor)
+            return
         }
-        apply(shape, window: window, editor: editor)
+        guard let root else { return }
+        if let shape = resolve(id, in: root) {
+            apply(shape ?? .arrow, window: window, editor: editor)
+            return
+        }
+        for attachment in OverlayScan.presented(in: root) {
+            guard let overlay = attachment.root, let shape = resolve(id, in: overlay) else {
+                continue
+            }
+            apply(shape ?? .arrow, window: window, editor: editor)
+            return
+        }
     }
 
     /// Innermost stated cursor on the path from `node` to `id`, or nil when

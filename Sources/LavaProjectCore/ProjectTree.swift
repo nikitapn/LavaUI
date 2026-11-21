@@ -16,8 +16,10 @@ public struct ProjectNode: Equatable, Hashable, Sendable {
 }
 
 /// One visible line of the tree.
-public struct ProjectRow: Equatable, Sendable {
+public struct ProjectRow: Equatable, Identifiable, Sendable {
     public var node: ProjectNode
+    /// The path within the open project, stable when selection or expansion changes.
+    public var id: String { node.path }
     /// 0 for the root's own children.
     public var depth: Int
     public var isExpanded: Bool
