@@ -1,19 +1,17 @@
 import LavaUI
 
-/// The host only takes a title at window creation. Keep the changing title in
-/// the app's chrome, where it can follow workspace switches in either host.
+/// The window's root: the editor, and the question asked before a workspace
+/// replaces a session with unsaved changes.
+///
+/// Which workspace is open is said in the project sidebar's header, not in a
+/// bar of its own: a strip across the top would sit over the sidebar that is
+/// meant to run the window's full height.
 struct EditorWorkspaceWindow: View {
     let session: EditorSession
     let appearance: EditorAppearance
 
     var body: some View {
         VStack(flexGrow: 1, spacing: 0) {
-            if let name = session.workspaceName {
-                Text("\(name) — LavaEditor", color: .primary, font: session.fonts.tab, align: .center)
-                    .frame(height: .pt(30))
-                    .windowDrag()
-                    .agentId("workspace-title")
-            }
             LavaEditorView(session: session, appearance: appearance)
         }
         .background(appearance.theme.panel)

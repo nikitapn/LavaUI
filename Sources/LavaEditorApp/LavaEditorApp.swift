@@ -65,6 +65,10 @@ struct LavaEditorApp {
                         MenuItem("Save Workspace As…", id: "file.save-workspace-as") {
                             session.saveWorkspaceAs()
                         }
+                        MenuItem("Close Workspace", id: "file.close-workspace",
+                                 isEnabled: session.workspaceURL != nil) {
+                            session.closeWorkspace()
+                        }
                         Menu("Recent Files", id: "file.recent") {
                             if session.recentFiles.isEmpty {
                                 MenuItem("No Recent Files", id: "file.recent.empty",

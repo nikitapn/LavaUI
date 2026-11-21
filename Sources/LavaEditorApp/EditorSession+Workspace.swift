@@ -119,7 +119,25 @@ extension EditorSession {
         replaceWithWorkspace(opening)
     }
 
-    private func replaceWithWorkspace(_ opening: WorkspaceOpening) {
+    /// Leaves the workspace — saved as it stands — for the session the
+    /// window had without one.
+    ///
+    /// Refused while anything is unsaved rather than asked about: the files
+    /// belong to the workspace being left, and a question that offers to
+    /// discard them is one keystroke from losing work for a menu item.
+    func closeWorkspace() {
+        guard workspaceURL != nil else { return }
+        if hasUnsavedWork {
+            notice = "Save or close the modified files before closing the workspace."
+            return
+        }
+        resetForNewSession()
+        workspaceURL = nil
+        SessionPersistence.shared.adoptImplicit()
+        restoreImplicitSession()
+    }
+
+    private func resetForNewSession() {
         flushOutgoingSession()
         notice = nil
         pendingClose = nil
@@ -131,6 +149,10 @@ extension EditorSession {
         gitBaselines.removeAll()
         tabDrag = nil
         tabScroll.scrollToTop()
+    }
+
+    private func replaceWithWorkspace(_ opening: WorkspaceOpening) {
+        resetForNewSession()
 
         workspaceURL = opening.url
         applySession(opening.snapshot, revealActive: false)

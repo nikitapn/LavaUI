@@ -58,6 +58,15 @@ final class SessionPersistence: @unchecked Sendable {
         saved = checkpoint
     }
 
+    /// Back to the implicit session: forget the workspace checkpoint, so the
+    /// next one is compared against nothing and written to settings.
+    func adoptImplicit() {
+        lock.lock()
+        defer { lock.unlock() }
+        latest = nil
+        saved = nil
+    }
+
     static func writeWorkspace(_ snapshot: EditorSessionSnapshot, to url: URL) throws {
         try EditorWorkspace.encode(snapshot, at: url).write(to: url, options: .atomic)
     }

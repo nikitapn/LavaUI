@@ -42,7 +42,13 @@ final class EditorSession {
     )
 
     var recentProjectPaths: [RecentProjectKind: [String]] = [:]
-    var workspaceURL: URL?
+    /// The workspace this window is, if any. Remembered across launches, so
+    /// a window that was a workspace comes back as one — without that, the
+    /// next launch restored the implicit session and the workspace was only
+    /// reachable through Open Recent.
+    var workspaceURL: URL? {
+        didSet { AppSettings.set(workspaceURL?.path ?? "", forKey: "lastWorkspace") }
+    }
     var pendingWorkspace: WorkspaceOpening?
     @ObservationIgnored var hasCheckpointed = false
 
@@ -136,6 +142,17 @@ final class EditorSession {
     /// Restore before command-line files are opened, so an explicit file wins
     /// selection while reusing an existing tab from the previous session.
     func restoreSession() {
+        if let path = AppSettings.value(forKey: "lastWorkspace", as: String.self), !path.isEmpty,
+           FileManager.default.fileExists(atPath: path)
+        {
+            openWorkspace(URL(fileURLWithPath: path))
+            if workspaceURL != nil { return }
+        }
+        restoreImplicitSession()
+    }
+
+    /// The session kept in settings when no workspace is open.
+    func restoreImplicitSession() {
         guard let saved = AppSettings.value(forKey: "session", as: EditorSessionSnapshot.self) else { return }
         applySession(saved, revealActive: true)
     }

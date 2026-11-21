@@ -77,7 +77,10 @@ struct ProjectSidebar: View {
 
     private func header(theme: Theme) -> some View {
         HStack(padding: 0, alignment: .center, spacing: 8) {
-            Text(project.name, color: .primary, font: session.fonts.tabSelected, lineLimit: 1)
+            // The workspace when one is open — it is what the user named this
+            // window's contents — and the folder otherwise.
+            Text(session.workspaceName ?? project.name, color: .primary,
+                 font: session.fonts.tabSelected, lineLimit: 1)
                 .flexShrink(1)
                 .agentId("project-name")
             Spacer()
