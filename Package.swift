@@ -85,6 +85,8 @@ var products: [Product] = [
     .library(name: "LavaDiffCore", targets: ["LavaDiffCore"]),
     .library(name: "LavaGitCore", targets: ["LavaGitCore"]),
     .library(name: "LavaProjectCore", targets: ["LavaProjectCore"]),
+    .library(name: "LavaLSPCore", targets: ["LavaLSPCore"]),
+    .library(name: "LavaEditorSettings", targets: ["LavaEditorSettings"]),
     .library(name: "LavaFindCore", targets: ["LavaFindCore"]),
     .library(name: "LavaShotCore", targets: ["LavaShotCore"]),
     .library(name: "LavaExplorerCore", targets: ["LavaExplorerCore"]),
@@ -143,6 +145,12 @@ var targets: [Target] = [
     // An editor's project folder: the lazily listed tree and what git says
     // about each row of it. No engine.
     .target(name: "LavaProjectCore", dependencies: ["LavaExplorerCore", "LavaGitCore"]),
+    // A language server client: JSON-RPC over a child's stdio, document sync,
+    // positions. No engine, no UI — tested against a fake server.
+    .target(name: "LavaLSPCore"),
+    // LavaEditor's hand-edited settings: defaults, then the user's
+    // `editor.json`, then a folder's `.lava/settings.json`.
+    .target(name: "LavaEditorSettings"),
     // What a search row says about a file: size, date, badge, `~` paths,
     // the match highlight. No engine — see Sources/LavaFindCore.
     .target(name: "LavaFindCore"),
@@ -498,7 +506,7 @@ var targets: [Target] = [
         name: "LavaEditorApp",
         dependencies: [
             "LavaUI", "LavaHost", "LavaText", "LavaDiffCore", "LavaGitCore", "LavaProjectCore",
-            "LavaExplorerCore",
+            "LavaExplorerCore", "LavaLSPCore", "LavaEditorSettings",
         ],
         swiftSettings: interopCxx
     ),
@@ -573,6 +581,8 @@ var targets: [Target] = [
     .testTarget(name: "LavaDiffCoreTests", dependencies: ["LavaDiffCore"]),
     .testTarget(name: "LavaGitCoreTests", dependencies: ["LavaGitCore"]),
     .testTarget(name: "LavaProjectCoreTests", dependencies: ["LavaProjectCore", "LavaGitCore"]),
+    .testTarget(name: "LavaLSPCoreTests", dependencies: ["LavaLSPCore"]),
+    .testTarget(name: "LavaEditorSettingsTests", dependencies: ["LavaEditorSettings"]),
     .testTarget(name: "LavaPDFCoreTests", dependencies: ["LavaPDFCore"]),
     .testTarget(name: "LavaPlayerCoreTests", dependencies: ["LavaPlayerCore"]),
     .testTarget(name: "LavaFindCoreTests", dependencies: ["LavaFindCore"]),
