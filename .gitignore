@@ -36,5 +36,6 @@ build-release
 # desync that compiles. `scripts/bootstrap.sh` runs the generator; by hand it
 # is `scripts/gen_stubs.sh`.
 /Sources/LavaIDL/
+/Sources/LavaEditorExtensionAPI/Generated/
 /compositor/src/gen/
 /indexer/src/gen/

@@ -86,7 +86,8 @@ if [[ $do_meson -eq 1 || $do_swift_build -eq 1 ]]; then
   if "$here/gen_stubs.sh"; then
     :
   elif [[ -f "$here/../Sources/LavaIDL/lava.swift" \
-       && -f "$here/../compositor/src/gen/lava.cpp" ]]; then
+       && -f "$here/../compositor/src/gen/lava.cpp"
+       && ( $do_swift_build -eq 0 || -f "$here/../Sources/LavaEditorExtensionAPI/Generated/editor_extension.swift" ) ]]; then
     lava_info "npidl not found; keeping the stubs already in the tree"
   else
     lava_die "no npidl and no generated stubs — run scripts/build-nprpc.sh"

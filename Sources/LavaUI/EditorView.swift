@@ -372,6 +372,18 @@ public final class EditorController {
     }
 }
 
+/// An action beside a logical line. The gutter and inline label invoke the same handler.
+public struct EditorLineAction {
+    public let gutterPlay: Bool
+    public let hint: String
+    public let perform: () -> Void
+    public init(gutterPlay: Bool, hint: String, perform: @escaping () -> Void) {
+        self.gutterPlay = gutterPlay
+        self.hint = hint
+        self.perform = perform
+    }
+}
+
 /// Whole lines an app wants marked: a bar down the gutter, a fill behind the
 /// text, or both — what a gutter shows for lines changed since the last
 /// commit, or a run of lines a tool wants to point at.
@@ -594,6 +606,7 @@ public struct EditorView: PrimitiveView {
     /// Diagnostics to underline and mark in the gutter.
     public var decorations: [EditorDecoration]
     /// Whole lines to mark with a gutter bar or a fill. See `EditorLineMark`.
+    public var lineActions: [Int: [EditorLineAction]]
     public var lineMarks: [EditorLineMark]
     /// Fired when the user clicks a decorated row's gutter icon, instead of
     /// the default "select the whole row" gutter click.
@@ -650,6 +663,7 @@ public struct EditorView: PrimitiveView {
         search: TextSearch = TextSearch(),
         decorations: [EditorDecoration] = [],
         lineMarks: [EditorLineMark] = [],
+        lineActions: [Int: [EditorLineAction]] = [:],
         onDecorationTap: ((EditorDecoration) -> Void)? = nil,
         controller: EditorController? = nil,
         onZoom: ((Float) -> Void)? = nil,
@@ -683,6 +697,7 @@ public struct EditorView: PrimitiveView {
         self.search = search
         self.decorations = decorations
         self.lineMarks = lineMarks
+        self.lineActions = lineActions
         self.onDecorationTap = onDecorationTap
         self.controller = controller
         self.onZoom = onZoom
@@ -798,10 +813,10 @@ public struct EditorView: PrimitiveView {
         let nextFont = resolvedFont ?? FontStore.default
         let fontChanged = previousFont?.identity != nextFont?.identity
         if fontChanged, let previousFont, previousFont.lineHeight > 0 {
-            let rowPosition = max(0, leaf.scrollY / Double(previousFont.lineHeight))
+            let topRow = leaf.row(atScreenY: 0, lineHeight: previousFont.lineHeight)
             let rows = leaf.editing.layout.rows
-            let row = min(Int(rowPosition), rows.count - 1)
-            leaf.pendingFontAnchor = (rows[row].lowerBound, Float(rowPosition - Double(row)))
+            let row = min(max(0, topRow), rows.count - 1)
+            leaf.pendingFontAnchor = (rows[row].lowerBound, -leaf.screenY(ofRow: row, lineHeight: previousFont.lineHeight) / previousFont.lineHeight)
             if let nextFont {
                 leaf.scrollX *= nextFont.pixelSize / previousFont.pixelSize
             }
@@ -845,6 +860,7 @@ public struct EditorView: PrimitiveView {
         leaf.cursor = .text
         leaf.decorations = decorations
         // Sorted once here so the paint can binary-search a screenful of rows.
+        leaf.lineActions = lineActions
         leaf.lineMarks = lineMarks.sorted { $0.lines.lowerBound < $1.lines.lowerBound }
         leaf.onDecorationTap = onDecorationTap
         leaf.lineGaps = lineGaps
@@ -937,7 +953,7 @@ public struct EditorView: PrimitiveView {
         // the box always matches what is drawn.
         leaf.maxLines = visibleLines
         if let f = resolvedFont {
-            leaf.gutterWidth = showLineNumbers ? leaf.measuredGutterWidth(font: f) : 0
+            leaf.gutterWidth = (showLineNumbers ? leaf.measuredGutterWidth(font: f) : 0) + leaf.actionGutterWidth
         }
 
         leaf.isScrollable = true
@@ -982,6 +998,10 @@ public struct EditorView: PrimitiveView {
                 localX: localX, localY: localY, originX: originX, originY: originY
             ) {
                 ViewInvalidation.markNeedsRedraw()
+                return
+            }
+            if let hit = leaf.lineAction(atX: localX, y: localY) {
+                hit.perform()
                 return
             }
             leaf.focusSelf(binding: binding, onSubmit: nil)
@@ -1044,7 +1064,17 @@ extension LeafNode {
     /// them.
     /// Ctrl+hover: the word under the pointer while Control is held, else
     /// nothing. `localX`/`localY` are the box's own, gutter included.
+    func lineAction(atX x: Float, y: Float) -> EditorLineAction? {
+        lineActionHits.first { $0.rect.contains(CGPoint(x: CGFloat(x), y: CGFloat(y))) }?.action
+    }
+
     func updateLink(localX: Float, localY: Float) {
+        if !PointerCapture.isActive, lineAction(atX: localX, y: localY) != nil {
+            pointerCursor = .pointer
+            setLink(nil)
+            reportPointer(nil)
+            return
+        }
         var link: Range<Int>?
         var pointer: Int?
         if !PointerCapture.isActive, localX >= gutterWidth {
@@ -1084,9 +1114,9 @@ extension LeafNode {
         // `charOffset` is anchored, so the second call walks only the distance
         // between the two ends rather than back to the start of the buffer.
         let height = (font ?? FontStore.default)?.lineHeight ?? 1
-        let rowPosition = max(0, scrollY / Double(max(1, height)))
+        let topRow = self.row(atScreenY: 0, lineHeight: height)
         let rows = editing.layout.rows
-        let row = min(Int(rowPosition), max(0, rows.count - 1))
+        let row = min(max(0, topRow), max(0, rows.count - 1))
         // Through the caches the draw path keeps, not `charOffset`. LavaEditor
         // asks for this after every emit, scrolls included, and `charOffset`
         // measures from the leaf's one index anchor — which the emitter keeps
@@ -1110,7 +1140,7 @@ extension LeafNode {
             anchor: anchor,
             focus: focus,
             topOffset: rows.isEmpty ? 0 : rows[row].lowerBound,
-            topFraction: Float(rowPosition - rowPosition.rounded(.down))
+            topFraction: -screenY(ofRow: row, lineHeight: height) / max(1, height)
         )
     }
 
@@ -1140,7 +1170,7 @@ extension LeafNode {
         if let offset = position.topOffset {
             let fraction = position.topFraction ?? 0
             pendingFontAnchor = (min(max(0, offset), total),
-                                 fraction.isFinite ? min(0.999, max(0, fraction)) : 0)
+                                 fraction.isFinite ? min(0.999, max(-1, fraction)) : 0)
         }
         ViewInvalidation.markNeedsRedraw()
     }

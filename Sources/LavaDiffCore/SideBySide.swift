@@ -142,6 +142,24 @@ public struct TextDiff: Sendable {
         )
     }
 
+    /// Where a line of the old text is in the new one: moved by the lines
+    /// added and removed above it, or, inside a change, paired top-down with
+    /// the lines that replaced it. Nil when it was removed with nothing in
+    /// its place — for keeping things anchored to lines (a hint, a marker)
+    /// roughly right until whoever placed them has looked again.
+    public func newLine(forOld line: Int) -> Int? {
+        var delta = 0
+        for hunk in hunks {
+            if line < hunk.old.lowerBound { break }
+            if line < hunk.old.upperBound {
+                let offset = line - hunk.old.lowerBound
+                return offset < hunk.new.count ? hunk.new.lowerBound + offset : nil
+            }
+            delta += hunk.new.count - hunk.old.count
+        }
+        return line + delta
+    }
+
     /// Word-level change ranges for a `.changed` row, or nil when the pair is
     /// too different for them to help.
     public func intraline(_ row: DiffRow) -> (old: [Range<Int>], new: [Range<Int>])? {

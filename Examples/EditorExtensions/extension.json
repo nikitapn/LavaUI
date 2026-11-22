@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "lava.json-tools",
+  "library": "libFormatJSON.so",
+  "commands": [
+    {
+      "id": "format",
+      "title": "Format JSON",
+      "kind": "selectionEdit",
+      "languages": [
+        "json"
+      ]
+    },
+    {
+      "id": "compact",
+      "title": "Compact JSON",
+      "kind": "selectionEdit",
+      "languages": [
+        "json"
+      ]
+    }
+  ]
+}

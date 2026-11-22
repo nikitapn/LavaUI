@@ -2592,6 +2592,7 @@ extension DrawList {
     fileprivate func emitEditor(
         _ leaf: LeafNode, x: Float, y: Float, w: Float, h: Float
     ) {
+        leaf.lineActionHits.removeAll(keepingCapacity: true)
         guard let font = leaf.font ?? FontStore.default else { return }
         let style = leaf.codeStyle ?? CodeStyle()
         let inset = leaf.textInset
@@ -2706,7 +2707,7 @@ extension DrawList {
         }
         if !gaps.isEmpty {
             emitRowGaps(
-                gaps, rows: firstRow...(lastRow + 1), rowTop: rowTopOf, lineH: lineH,
+                gaps, leaf: leaf, rows: firstRow...(lastRow + 1), rowTop: rowTopOf, lineH: lineH,
                 style: style, x: x + leaf.gutterWidth, y: y, w: max(0, w - leaf.gutterWidth), h: h
             )
         }
@@ -2755,6 +2756,13 @@ extension DrawList {
                     w: w - gutter, h: lineH, color: style.currentLine
                 )
             }
+            if !leaf.lineActions.isEmpty, leaf.isLineStart(ofRow: row),
+               let action = leaf.lineActions[leaf.logicalLine(ofRow: row)]?.first(where: \.gutterPlay) {
+                let center = rowTop + lineH / 2
+                let tint = Color(r: 0.22, g: 0.68, b: 0.38)
+                polyline([(x + 5, center - 6), (x + 15, center), (x + 5, center + 6), (x + 5, center - 6)], color: tint)
+                leaf.lineActionHits.append((CGRect(x: 0, y: CGFloat(rowTop - y), width: CGFloat(leaf.actionGutterWidth), height: CGFloat(lineH)), action))
+            }
             if leaf.showsGutter, leaf.gutterWidth > 0 {
                 // Numbers count logical lines, and only the row a line starts
                 // on carries one. While wrapping, numbering every row would
@@ -2793,7 +2801,7 @@ extension DrawList {
                         .min(by: { $0.severity.rank < $1.severity.rank })
                     {
                         text(
-                            deco.resolvedGutterIcon, x: x + 2, y: rowTop,
+                            deco.resolvedGutterIcon, x: x + leaf.actionGutterWidth + 2, y: rowTop,
                             w: inset * 2, h: lineH,
                             color: deco.resolvedColor, font: font
                         )
@@ -2858,6 +2866,24 @@ extension DrawList {
 
             let lineText = String(state.text[lo..<hi])
             let run = font.shapedRun(lineText)
+            if !leaf.lineActions.isEmpty, leaf.isLineStart(ofRow: row),
+               let actions = leaf.lineActions[leaf.logicalLine(ofRow: row)] {
+                let indent = lineText.prefix { $0 == " " || $0 == "\t" }
+                var hintX = textX + font.shapedRun(String(indent)).width - 4
+                let hintY = rowTop - lineH
+                for action in actions where !action.hint.isEmpty {
+                    let width = font.shapedRun(action.hint).width + 8
+                    text(action.hint, x: hintX, y: hintY, w: width, h: lineH,
+                         color: style.gutterText, font: font)
+                    let left = max(x + leaf.gutterWidth, hintX)
+                    let right = min(x + w, hintX + width)
+                    if right > left {
+                        leaf.lineActionHits.append((CGRect(x: CGFloat(left - x), y: CGFloat(hintY - y),
+                                                         width: CGFloat(right - left), height: CGFloat(lineH)), action))
+                    }
+                    hintX += width + inset
+                }
+            }
 
             func columnX(_ column: Int) -> Float {
                 let clamped = max(0, min(column, lineText.count))
@@ -3127,14 +3153,17 @@ extension DrawList {
 
     /// Blank rows (`EditorView(lineGaps:)`): a fill and, with
     /// `CodeStyle.gapStripe`, diagonal hatching, over the text area only —
-    /// the gutter carries on as it was, unnumbered.
+    /// the gutter carries on as it was, unnumbered. A hint row shares the
+    /// gap above its line (nearest the line) and is left to the text pass.
     private func emitRowGaps(
-        _ gaps: RowGaps, rows: ClosedRange<Int>, rowTop: (Int) -> Float, lineH: Float,
+        _ gaps: RowGaps, leaf: LeafNode, rows: ClosedRange<Int>, rowTop: (Int) -> Float, lineH: Float,
         style: CodeStyle, x: Float, y: Float, w: Float, h: Float
     ) {
         for entry in gaps.entries(above: rows) {
-            let bottom = rowTop(entry.row)
-            let top = bottom - Float(entry.count) * lineH
+            let hint = leaf.hintRowCount(above: entry.row)
+            guard entry.count > hint else { continue }
+            let bottom = rowTop(entry.row) - Float(hint) * lineH
+            let top = bottom - Float(entry.count - hint) * lineH
             let y0 = max(top, y), y1 = min(bottom, y + h)
             guard y1 > y0, w > 0 else { continue }
             rect(x: x, y: y0, w: w, h: y1 - y0, color: style.gapFill ?? style.gutterBackground)

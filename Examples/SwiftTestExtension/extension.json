@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "lava.swift-tests",
+  "library": "libSwiftTestExtension.so",
+  "commands": [
+    { "id": "tests", "title": "Swift Tests", "kind": "documentActions", "languages": ["swift"] }
+  ]
+}

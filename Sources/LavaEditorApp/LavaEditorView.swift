@@ -107,6 +107,7 @@ struct LavaEditorView: View {
                     search: session.find.isOpen ? session.find.search : TextSearch(),
                     decorations: session.languageDecorations(),
                     lineMarks: session.changeMarks(appearance),
+                    lineActions: session.currentLineActions,
                     onDecorationTap: { session.notice = $0.message },
                     controller: session.controller,
                     onZoom: { session.zoom(by: $0) },

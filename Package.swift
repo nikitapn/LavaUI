@@ -522,7 +522,8 @@ var targets: [Target] = [
         dependencies: [
             "LavaUI", "LavaHost", "LavaText", "LavaDiffCore", "LavaGitCore", "LavaProjectCore",
             "LavaExplorerCore", "LavaLSPCore", "LavaEditorSettings", "LavaTerminal",
-        ],
+        ] + (haveNprpc ? [Target.Dependency("LavaClient"), "LavaEditorExtensionAPI",
+                           .product(name: "NPRPC", package: "nprpc_swift")] : []),
         resources: [.copy("Resources")],
         swiftSettings: interopCxx
     ),
@@ -617,7 +618,39 @@ var targets: [Target] = [
 ]
 
 if haveNprpc {
+    products.append(.library(name: "LavaEditorExtensionAPI", targets: ["LavaEditorExtensionAPI"]))
+    // SwiftParser and SwiftSyntax ship together in the active Linux toolchain.
+    let search = (ProcessInfo.processInfo.environment["PATH"] ?? "").components(separatedBy: ":")
+    let compiler = ProcessInfo.processInfo.environment["SWIFT_EXEC"]
+        ?? search.map { $0 + "/swiftc" }.first(where: FileManager.default.isExecutableFile(atPath:))
+        ?? "/usr/bin/swiftc"
+    let host = URL(fileURLWithPath: compiler).resolvingSymlinksInPath().deletingLastPathComponent()
+        .appendingPathComponent("../lib/swift/host").standardizedFileURL.path
+    // The compiler's own copy, not a package dependency — so only where this
+    // toolchain has one. Without the check, a toolchain that lays its
+    // libraries out differently fails the whole package's build, not just
+    // the example's.
+    if FileManager.default.fileExists(atPath: host + "/SwiftParser.swiftmodule") {
+        let syntaxSettings = interopCxx + [.unsafeFlags(["-I", host])]
+        let syntaxLinker: [LinkerSetting] = [.unsafeFlags(["-L", host, "-Xlinker", "-rpath", "-Xlinker", host])]
+        targets.append(.testTarget(name: "SwiftTestExtensionTests", dependencies: ["SwiftTestExtension"],
+                                   swiftSettings: syntaxSettings, linkerSettings: syntaxLinker))
+        products.append(.library(name: "SwiftTestExtension", type: .dynamic, targets: ["SwiftTestExtension"]))
+        targets.append(.target(name: "SwiftTestExtension", dependencies: ["LavaEditorExtensionAPI"],
+                               path: "Examples/SwiftTestExtension", exclude: ["extension.json", "README.md"],
+                               swiftSettings: syntaxSettings + [.enableExperimentalFeature("CheckImplementationOnly")],
+                               linkerSettings: syntaxLinker))
+    }
+    products.append(.library(name: "FormatJSON", type: .dynamic, targets: ["FormatJSON"]))
     targets.append(contentsOf: [
+        Target.target(name: "LavaEditorExtensionAPI",
+                      dependencies: [.product(name: "NPRPC", package: "nprpc_swift")],
+                      swiftSettings: interopCxx),
+        Target.testTarget(name: "LavaEditorExtensionAPITests", dependencies: ["LavaEditorExtensionAPI"],
+                          swiftSettings: interopCxx),
+        Target.target(name: "FormatJSON", dependencies: ["LavaEditorExtensionAPI"],
+                      path: "Examples/EditorExtensions", exclude: ["README.md", "extension.json"],
+                      swiftSettings: interopCxx),
         Target.target(
             name: "LavaIDL",
             dependencies: [.product(name: "NPRPC", package: "nprpc_swift")],

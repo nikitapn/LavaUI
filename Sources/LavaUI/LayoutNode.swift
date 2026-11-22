@@ -657,22 +657,54 @@ final class LeafNode: YogaBoxNode {
     var lineGaps: [EditorLineGap] = [] {
         didSet { if lineGaps != oldValue { gapCache = nil } }
     }
+    /// `EditorView(lineActions:)`: gutter buttons and hints, by logical line.
+    var lineActions: [Int: [EditorLineAction]] = [:] {
+        didSet {
+            let lines = lineActions.compactMap { line, actions in
+                actions.contains { !$0.hint.isEmpty } ? line : nil
+            }.sorted()
+            if lines != hintLines { hintLines = lines; gapCache = nil }
+            actionGutterWidth = lineActions.values.contains { $0.contains(where: \.gutterPlay) } ? 20 : 0
+        }
+    }
+    /// Lines with a hint over them, sorted. Each takes one row above its line,
+    /// counted in `rowGaps` like a blank row, so scrolling, clicks and the
+    /// caret go round it the same way.
+    private(set) var hintLines: [Int] = []
+    private(set) var actionGutterWidth: Float = 0
+    var lineActionHits: [(rect: CGRect, action: EditorLineAction)] = []
     private var gapCache: (generation: Int, revision: UInt64, gaps: RowGaps)?
 
-    /// `lineGaps` in visual rows. The same thing while not wrapping; while
-    /// wrapping a gap sits above the first row of its line. Rebuilt when the
-    /// row table is.
+    /// `lineGaps` and the hint rows of `lineActions`, in visual rows. The
+    /// same thing while not wrapping; while wrapping a gap sits above the
+    /// first row of its line. Rebuilt when the row table is. Of the rows
+    /// above a line, its hint is the one nearest it — see `hintRowCount`.
     var rowGaps: RowGaps {
         // On the text's revision as well as the rows': a line's row moves
         // with every edit above it, wrapped or not.
         if let cached = gapCache, cached.generation == rowsGeneration,
            cached.revision == editing.revision { return cached.gaps }
         let rowCount = editing.layout.count
-        let gaps = RowGaps(lineGaps.map { gap in
-            (row: gap.line >= logicalLineCount ? rowCount : firstRow(ofLine: gap.line), count: gap.rows)
-        })
+        func row(_ line: Int) -> Int { line >= logicalLineCount ? rowCount : firstRow(ofLine: line) }
+        let gaps = RowGaps(
+            lineGaps.map { (row: row($0.line), count: $0.rows) }
+                + hintLines.filter { $0 < logicalLineCount }.map { (row: row($0), count: 1) }
+        )
         gapCache = (rowsGeneration, editing.revision, gaps)
         return gaps
+    }
+
+    /// Hint rows directly above `row` (0 or 1): the part of its gap that is
+    /// not a blank filler row.
+    func hintRowCount(above row: Int) -> Int {
+        guard !hintLines.isEmpty, row < editing.layout.count, isLineStart(ofRow: row) else { return 0 }
+        let line = logicalLine(ofRow: row)
+        var low = 0, high = hintLines.count
+        while low < high {
+            let mid = (low + high) / 2
+            if hintLines[mid] < line { low = mid + 1 } else { high = mid }
+        }
+        return low < hintLines.count && hintLines[low] == line ? 1 : 0
     }
 
     /// `EditorView(scrollLink:)`: editors sharing one scroll together.
@@ -1023,10 +1055,16 @@ final class LeafNode: YogaBoxNode {
     /// The row under a point `localY` below the top of the text area.
     /// On a blank row (`lineGaps`), the row below it.
     func row(atScreenY localY: Float, lineHeight: Float) -> Int {
+        row(atDocumentY: scrollY + Double(localY), lineHeight: lineHeight)
+    }
+
+    /// The row at a document y. A blank or hint row answers with the row
+    /// below it — the line it belongs to.
+    func row(atDocumentY y: Double, lineHeight: Float) -> Int {
         guard lineHeight > 0 else { return 0 }
-        let slot = Int(((scrollY + Double(localY)) / Double(lineHeight)).rounded(.down))
+        let slot = Int((y / Double(lineHeight)).rounded(.down))
         let gaps = rowGaps
-        return gaps.isEmpty ? slot : gaps.row(atSlot: slot).row
+        return gaps.isEmpty ? slot : gaps.row(atSlot: max(0, slot)).row
     }
 
     /// Largest legal scroll offset for the current content.
@@ -1474,7 +1512,7 @@ final class LeafNode: YogaBoxNode {
                 // and its contents cannot disagree. Deriving it from
                 // Font::measure instead let the two drift, which is what made
                 // the editor's last line spill past its own box.
-                let shown = min(max(editing.layout.count, 1), max(1, maxLines))
+                let shown = min(max(editing.layout.count + rowGaps.total, 1), max(1, maxLines))
                 let height = Float(shown) * font.lineHeight + textInset * 2
                 // Seed the viewport; the emitter corrects it from the box Yoga
                 // actually granted, which can be smaller.

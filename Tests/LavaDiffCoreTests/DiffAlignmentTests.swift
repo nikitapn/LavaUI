@@ -33,4 +33,11 @@ final class DiffAlignmentTests: XCTestCase {
         let a = text.index(text.startIndex, offsetBy: range.lowerBound)
         return String(text[a..<text.index(a, offsetBy: range.count)])
     }
+
+    func testNewLineFollowsInsertionsAndDropsDeletions() {
+        let diff = TextDiff(old: "a\nb\nc\nd\ne\n", new: "a\nNEW\nb\nc\ne\n")
+        XCTAssertEqual((0...4).map(diff.newLine(forOld:)), [0, 2, 3, nil, 4])
+        let edited = TextDiff(old: "x\n@Test func t() {}\ny\n", new: "x\n@Test func t2() {}\ny\n")
+        XCTAssertEqual(edited.newLine(forOld: 1), 1, "a line edited in place stays")
+    }
 }

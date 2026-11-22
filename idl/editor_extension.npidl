@@ -1,0 +1,52 @@
+module lava.editor;
+
+message SelectionSnapshot {
+  documentId: u64;
+  revision: u64;
+  startByte: u64;
+  endByte: u64;
+  text: string;
+}
+
+message SelectionEdit {
+  startByte: u64;
+  endByte: u64;
+  text: string;
+}
+
+enum EditStatus: u32 { accepted, invalid, alreadySubmitted };
+
+exception ExpiredInvocation { }
+
+/// Scoped to one invocation. The editor commits the entire proposal after
+/// the host returns successfully and the snapshot is still current.
+interface SelectionCommand {
+  SelectionSnapshot ReadSelection(invocation: in u64) raises(ExpiredInvocation);
+  /// Ordered, nonoverlapping UTF-8 byte ranges within the selection, measured
+  /// from the start of the document. Equal endpoints insert before that byte.
+  EditStatus ProposeEdits(invocation: in u64, documentId: in u64, revision: in u64, edits: in vector<SelectionEdit>);
+}
+
+message ActionDocument {
+  path: string;
+  text: string;
+  /// Empty during discovery, otherwise the action the user clicked.
+  actionId: string;
+}
+
+message DocumentLineAction {
+  /// Zero-based logical line in this invocation's document snapshot.
+  line: u32;
+  id: string;
+  /// Show a play button beside the line number.
+  gutterPlay: boolean;
+  /// Clickable text above the line. Empty for a gutter-only action.
+  hint: string;
+}
+
+interface DocumentActionProvider {
+  ActionDocument ReadDocument(invocation: in u64) raises(ExpiredInvocation);
+  /// Replaces this provider's gutter buttons and inline hints for the snapshot.
+  boolean SetLineActions(invocation: in u64, actions: in vector<DocumentLineAction>);
+  boolean ReportResult(invocation: in u64, message: in string);
+}

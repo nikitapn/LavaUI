@@ -98,6 +98,23 @@ public enum ControlPlane {
     }
 }
 
+public enum ClientRpcRuntime {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var shared: Rpc?
+
+    public static func start(configure: (RpcBuilder) -> Void = { _ in }) throws -> Rpc {
+        try lock.withLock {
+            if let shared { return shared }
+            let builder = RpcBuilder().setLogLevel(.warn)
+            configure(builder)
+            let rpc = try builder.build()
+            try rpc.startThreadPool(2)
+            shared = rpc
+            return rpc
+        }
+    }
+}
+
 /// Connects to the compositor. Returns the proxy plus the `Rpc` that owns its
 /// transport, which the caller must keep alive.
 public func connectToCompositor() throws -> (Compositor, Rpc) {
@@ -111,8 +128,7 @@ public func connectToCompositor() throws -> (Compositor, Rpc) {
         )
     }
     let ior = published.trimmingCharacters(in: .whitespacesAndNewlines)
-    let rpc = try RpcBuilder().setLogLevel(.warn).build()
-    try rpc.startThreadPool(2)
+    let rpc = try ClientRpcRuntime.start()
 
     guard let object = NPRPCObject.fromString(ior) else {
         throw ControlPlaneError.badReference(ior)
