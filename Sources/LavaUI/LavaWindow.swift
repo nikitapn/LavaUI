@@ -807,6 +807,8 @@ public final class LavaWindow {
             }
             if onRawKey?(ev) == true { break }
             if isPress, ev.button == KeyCode.escape, host.dismissOverlays() { break }
+            // A terminal's Ctrl+C is the program's, not Edit ▸ Copy.
+            if isPress, FocusManager.takesKeysBeforeShortcuts, FocusManager.handle(key) { break }
             if isPress, let menuHost,
                menuHost.activate(matchingKey: ev.button, mods: Int32(ev.y))
             {

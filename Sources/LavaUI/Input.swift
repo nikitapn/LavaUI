@@ -21,8 +21,18 @@ public enum KeyCode {
     public static let key0: Int32 = 48
     /// The `1` key on the main row.
     public static let key1: Int32 = 49
+    /// The `;` key.
+    public static let semicolon: Int32 = 59
     /// The `=` key.
     public static let equal: Int32 = 61
+    /// The `[` key.
+    public static let leftBracket: Int32 = 91
+    /// The `\` key.
+    public static let backslash: Int32 = 92
+    /// The `]` key.
+    public static let rightBracket: Int32 = 93
+    /// The `` ` `` key (`~` with Shift), left of 1 on a US layout.
+    public static let graveAccent: Int32 = 96
     /// The A key. Letter keys are their uppercase ASCII codes, so `a + n` is the nth letter.
     public static let a: Int32 = 65
     /// The B key.

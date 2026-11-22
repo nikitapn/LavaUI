@@ -22,8 +22,15 @@ public enum FocusManager {
     /// Gives `id` keyboard focus in the current window, routing key events to
     /// `onKey` and typed characters to `onChar`. Each handler returns whether it
     /// consumed the input.
+    ///
+    /// Menu shortcuts normally come first, so Ctrl+S saves whatever is
+    /// focused. `keysBeforeShortcuts` turns that round for a target that
+    /// gives most keys a meaning of its own — a terminal, where Ctrl+C and
+    /// Ctrl+W belong to the program running in it: `onKey` sees every key
+    /// first, and only what it declines (returns false for) reaches the menu.
     public static func focus(
         _ id: NodeID,
+        keysBeforeShortcuts: Bool = false,
         onKey: @escaping (KeyEvent) -> Bool,
         onChar: @escaping (Character) -> Bool
     ) {
@@ -33,6 +40,7 @@ public enum FocusManager {
         scope.focused = id
         scope.keyHandler = onKey
         scope.charHandler = onChar
+        scope.keysBeforeShortcuts = keysBeforeShortcuts
         if moved { FocusBindings.focusChanged(in: scope) }
     }
 
@@ -50,7 +58,14 @@ public enum FocusManager {
         scope.focused = nil
         scope.keyHandler = nil
         scope.charHandler = nil
+        scope.keysBeforeShortcuts = false
         if moved { FocusBindings.focusChanged(in: scope) }
+    }
+
+    /// Whether what holds focus asked to see keys before menu shortcuts.
+    static var takesKeysBeforeShortcuts: Bool {
+        let scope = WindowScope.currentOrMain
+        return scope.focused != nil && scope.keysBeforeShortcuts
     }
 
     /// Whether what holds focus is something typed into — a field or an

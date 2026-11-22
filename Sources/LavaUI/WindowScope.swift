@@ -132,6 +132,8 @@ public final class WindowScope {
     var focused: NodeID?
     var keyHandler: ((KeyEvent) -> Bool)?
     var charHandler: ((Character) -> Bool)?
+    /// `FocusManager.focus(keysBeforeShortcuts:)`.
+    var keysBeforeShortcuts = false
 
     /// Where keys go when nothing is focused. See `FocusManager.setDefault`.
     var defaultFocus: NodeID?

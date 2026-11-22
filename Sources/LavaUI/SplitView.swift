@@ -47,6 +47,14 @@ public struct VSplitView<Top: View, Bottom: View>: PrimitiveView {
     public var top: Top
     /// The lower pane.
     public var bottom: Bottom
+    /// Takes the lower pane and the divider out of the layout and gives the
+    /// upper one the whole height — while keeping both mounted.
+    ///
+    /// For a panel that comes and goes (a terminal under an editor). Putting
+    /// the split in an `if` instead makes the upper pane a different view
+    /// either side of the change, and it is rebuilt: an editor there comes
+    /// back scrolled to the top for a frame before anything can restore it.
+    public var collapsesBottom: Bool = false
 
     /// Split driven by app state, so it can be persisted or set from elsewhere.
     public init(
@@ -54,9 +62,11 @@ public struct VSplitView<Top: View, Bottom: View>: PrimitiveView {
         minTop: Float = 60,
         minBottom: Float = 60,
         style: SplitStyle = SplitStyle(),
+        collapsesBottom: Bool = false,
         @ViewBuilder top: () -> Top,
         @ViewBuilder bottom: () -> Bottom
     ) {
+        self.collapsesBottom = collapsesBottom
         self.fraction = fraction
         self.initialFraction = fraction.wrappedValue
         self.minTop = minTop
@@ -103,6 +113,7 @@ public struct VSplitView<Top: View, Bottom: View>: PrimitiveView {
         SplitNode.mount(
             axis: .vertical, fraction: fraction, initialFraction: initialFraction,
             minFirst: minTop, minSecond: minBottom, style: style,
+            collapsesSecond: collapsesBottom,
             first: top, second: bottom
         )
     }
@@ -112,6 +123,7 @@ public struct VSplitView<Top: View, Bottom: View>: PrimitiveView {
             node, axis: .vertical, fraction: fraction,
             initialFraction: initialFraction,
             minFirst: minTop, minSecond: minBottom, style: style,
+            collapsesSecond: collapsesBottom,
             first: top, second: bottom
         )
     }
@@ -288,6 +300,16 @@ final class SplitNode: YogaBoxNode {
     }
     /// Writes the fraction back to the app's binding, on release only.
     var onCommit: ((Float) -> Void)?
+    /// The second pane and the divider are out of the layout; the first takes
+    /// everything. See `VSplitView.collapsesBottom`.
+    var collapsesSecond = false {
+        didSet {
+            guard collapsesSecond != oldValue else { return }
+            applyHandleStyle()
+            applyPaneFlex()
+            ViewInvalidation.markNeedsLayout()
+        }
+    }
 
     private(set) var isDragging = false
     private var insertedLeaves: [any AnyViewNode] = []
@@ -408,7 +430,8 @@ final class SplitNode: YogaBoxNode {
         let names = axis == .vertical
             ? ("SplitTop", "SplitBottom")
             : ("SplitLeading", "SplitTrailing")
-        apply(grow: fraction, to: boxes[0], label: names.0)
+        boxes[1].isHidden = collapsesSecond
+        apply(grow: collapsesSecond ? 1 : fraction, to: boxes[0], label: names.0)
         apply(grow: 1 - fraction, to: boxes[1], label: names.1)
     }
 
@@ -445,6 +468,7 @@ final class SplitNode: YogaBoxNode {
         handle.fillColor = isDragging ? style.active : style.background
         handle.hoverFill = style.hover
         handle.cursor = axis == .vertical ? .resizeUpDown : .resizeLeftRight
+        handle.isHidden = collapsesSecond
         handle.applyStyle()
     }
 
@@ -527,6 +551,7 @@ extension SplitNode {
         minFirst: Float,
         minSecond: Float,
         style: SplitStyle,
+        collapsesSecond: Bool = false,
         first: First,
         second: Second
     ) -> any AnyViewNode {
@@ -540,6 +565,7 @@ extension SplitNode {
             second: ViewGraph.mount(pane(second, grow: 1 - initialFraction))
         )
         node.onCommit = commit(fraction)
+        node.collapsesSecond = collapsesSecond
         return node
     }
 
@@ -551,6 +577,7 @@ extension SplitNode {
         minFirst: Float,
         minSecond: Float,
         style: SplitStyle,
+        collapsesSecond: Bool = false,
         first: First,
         second: Second
     ) -> any AnyViewNode {
@@ -559,6 +586,7 @@ extension SplitNode {
             return mount(
                 axis: axis, fraction: fraction, initialFraction: initialFraction,
                 minFirst: minFirst, minSecond: minSecond, style: style,
+                collapsesSecond: collapsesSecond,
                 first: first, second: second
             )
         }
@@ -578,6 +606,7 @@ extension SplitNode {
                 split.secondNode, with: pane(second, grow: 1 - f)
             )
         )
+        split.collapsesSecond = collapsesSecond
         return split
     }
 

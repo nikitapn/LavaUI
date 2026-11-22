@@ -649,6 +649,8 @@ final class LeafNode: YogaBoxNode {
     var keyInterceptor: ((KeyEvent) -> Bool)?
     /// Whole-line marks, sorted by first line. See `EditorLineMark`.
     var lineMarks: [EditorLineMark] = []
+    /// `Canvas(focusID:)`: the focus id this node stands for.
+    var focusAlias: NodeID?
     /// `EditorView(rangeFills:)`: backgrounds behind character ranges.
     var rangeFills: [EditorRangeFill] = []
     /// `EditorView(lineGaps:)`, as given: blank rows above logical lines.
@@ -2666,6 +2668,7 @@ public final class LayoutHost {
         guard let root else { return false }
         func walk(_ node: any AnyViewNode) -> Bool {
             if node.id == id { return true }
+            if let leaf = node as? LeafNode, leaf.focusAlias == id { return true }
             if let box = node as? OverlayBoxNode, box.attachment.presented,
                let inner = box.attachment.root, walk(inner)
             { return true }

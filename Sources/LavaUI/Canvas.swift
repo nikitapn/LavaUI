@@ -125,6 +125,12 @@ public struct Canvas: PrimitiveView {
     /// question that comes back to the app, and only for canvases that ask.
     /// Runs on every coalesced move, so keep it to a lookup.
     public var onPointerMove: ((_ localX: Float, _ localY: Float) -> CursorShape?)?
+    /// The focus id this canvas takes keys for, when it is a keyboard target
+    /// through `FocusManager` with an id of its own — a `NodeID` the app made,
+    /// since a canvas does not hand its node's id to the body. Saying so is
+    /// what keeps that focus alive: the window drops focus held by an id
+    /// that is nowhere in the tree, before every key.
+    public var focusID: NodeID?
     /// Draws the canvas. Called on every emit with the canvas's window-space frame.
     /// Emit commands into the `DrawList`; anything drawn outside the frame is not clipped.
     public var paint: (DrawList, CanvasFrame) -> Void
@@ -143,8 +149,10 @@ public struct Canvas: PrimitiveView {
         onWheel: ((_ dx: Float, _ dy: Float, _ localX: Float, _ localY: Float) -> Void)? = nil,
         onHover: ((Bool) -> Void)? = nil,
         onPointerMove: ((_ localX: Float, _ localY: Float) -> CursorShape?)? = nil,
+        focusID: NodeID? = nil,
         paint: @escaping (DrawList, CanvasFrame) -> Void
     ) {
+        self.focusID = focusID
         self.label = label
         self.width = width
         self.height = height
@@ -198,6 +206,7 @@ public struct Canvas: PrimitiveView {
     }
 
     private func configure(_ leaf: LeafNode) {
+        leaf.focusAlias = focusID
         leaf.canvasPaint = paint
         leaf.continuousRedraw = continuousRedraw
 
