@@ -268,17 +268,18 @@ enum DragChipCapture {
 }
 
 extension DrawList {
-    /// Lays out a fresh LavaUI view in the supplied viewport. Surface input
-    /// and retained interaction state belong to the provider.
+    /// Lays out a fresh LavaUI view using the worker's loaded viewport face.
+    /// Surface input and scroll positions belong to the provider.
     public static func captureEmbedded(editor: Editor, width: Float, height: Float, scale: Float,
-                                       view: some View) -> (commands: [UInt8], glyphs: [UInt8]) {
-        let root = ViewGraph.mount(view)
+                                       font: UIFont, view: some View) -> (commands: [UInt8], glyphs: [UInt8]) {
+        guard width.isFinite, height.isFinite, width > 0, height > 0 else { return ([], []) }
+        let host = LayoutHost()
+        host.setRoot(view.font(font))
+        guard let root = host.rootNode else { return ([], []) }
         defer { DragChipCapture.release(root) }
-        guard width.isFinite, height.isFinite, width > 0, height > 0,
-              let yoga = root.flattenedLayoutNodes().first?.yoga else { return ([], []) }
-        YGNodeCalculateLayout(yoga, width, height, YGDirectionLTR)
+        host.calculateLayout(width: width, height: height)
         return captureEmbedded(editor: editor, scale: scale) {
-            $0.emitDetached(root, width: width, height: height)
+            $0.emitDetached(root, width: width, height: height, flattenScene: true)
         }
     }
 }

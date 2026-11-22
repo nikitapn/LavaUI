@@ -31,4 +31,18 @@ Choose **Open Preview · JSON Overview** to open the example drawn by the extens
 
 A command advertising `embeddedSurface` uses `runEmbeddedSurfaceProvider` to read a viewport and a batch of input events. It can request the source buffer separately. Each invocation returns one complete frame and up to 64 KiB of state for its next call. The editor keeps one request in flight per preview, coalesces pointer motion, and gives editor shortcuts priority over focused surface keys. Event coordinates are local logical pixels. Each event names the viewport and painted frame it targeted. A provider should use those IDs if its hit regions change between frames. Resizing or changing the font replaces the viewport. A late reply can advance interaction state, while only frames matching the new viewport can be displayed. A changed document starts a fresh preview state.
 
-Use a headless `Editor.openClient()` and `DrawList.captureEmbedded` with a paint closure or a LavaUI view. V1 accepts rectangles, rounded rectangles, balanced clips, shaped text and image quads in the native little-endian draw-list layout. The editor validates command and glyph ranges and draws inside the tab clip. Font slot zero maps to the viewport face. The descriptor includes its SHA-256, local path, face index, raster flags and 26.6 pixel size. The example verifies the digest of the loaded face before shaping. Focus events carry 1 on entry and 0 on exit. Cancel ends gestures when a tab is hidden or its viewport is replaced. Image quads refer to frame-local IDs declared with tightly packed RGBA8 pixels. Each frame allows up to 32,768 commands, 65,536 glyphs and 4 MiB of image bytes. Local transport uses the existing supervised NPRPC shared-memory worker. A remote transport would also need a font resolver for the advertised digest.
+Use a headless `Editor.openClient()` and `DrawList.captureEmbedded` with a paint closure or a LavaUI view. For a view, pass the verified viewport face as `font:` so plain `Text` can measure and shape in the worker. For example:
+
+```swift
+let frame = DrawList.captureEmbedded(
+    editor: editor, width: viewport.width, height: viewport.height,
+    scale: viewport.scale, font: font,
+    view: ScrollView(.vertical, position: position) {
+        Text("Build results").padding(8).border(.blue)
+    }
+)
+```
+
+Capture produces a visual snapshot. A clickable label paints its resting appearance. The provider handles clicks from surface events, and can use wheel events to update its `ScrollPosition` before the next capture. The worker applies the scroll offset and viewport clip while emitting the children. The example uses declarative text rows and a custom-painted order control.
+
+V1 accepts filled and stroked rectangles, rounded rectangles, balanced clips, shaped text and image quads in the native little-endian draw-list layout. The editor validates command and glyph ranges and draws inside the tab clip. Font slot zero maps to the viewport face. The descriptor includes its SHA-256, local path, face index, raster flags and 26.6 pixel size. The example verifies the digest of the loaded face before shaping. Focus events carry 1 on entry and 0 on exit. Cancel ends gestures when a tab is hidden or its viewport is replaced. Image quads refer to frame-local IDs declared with tightly packed RGBA8 pixels. Each frame allows up to 32,768 commands, 65,536 glyphs and 4 MiB of image bytes. Local transport uses the existing supervised NPRPC shared-memory worker. A remote transport would also need a font resolver for the advertised digest.

@@ -168,6 +168,7 @@ public final class DrawList {
     /// each `ScrollView` intersects it with its scissor so off-screen scroll
     /// content is skipped before any draw commands are issued.
     private var cullStack: [CullRect] = []
+    private var flattensSceneNodes = false
 
     /// What the renderer will add to the subtree currently being emitted,
     /// accumulated from the scroll containers around it.
@@ -1442,7 +1443,9 @@ public final class DrawList {
     /// and doing any of that between two of the window's own frames would
     /// have the next one misjudge what it last drew. Overlays are left out: a
     /// chip is a picture, and nothing on it can be opened.
-    func emitDetached(_ root: any AnyViewNode, width: Float, height: Float) {
+    func emitDetached(_ root: any AnyViewNode, width: Float, height: Float, flattenScene: Bool = false) {
+        flattensSceneNodes = flattenScene
+        defer { flattensSceneNodes = false }
         pendingOverlays.removeAll(keepingCapacity: true)
         cullStack.removeAll(keepingCapacity: true)
         cullStack.append(CullRect(x0: 0, y0: 0, x1: width, y1: height))
@@ -1587,6 +1590,21 @@ public final class DrawList {
                     viewport: scroll.axis == .vertical ? h : w,
                     content: scroll.measureContentLength()
                 )
+                if flattensSceneNodes {
+                    // The receiving renderer owns no scene node for this snapshot.
+                    // Bake the producer's offset into the children and clip in surface space.
+                    guard w > 0, h > 0 else { return }
+                    let shift = scroll.childOffset
+                    withContentClip(true, x: x, y: y, w: w, h: h) {
+                        for child in scroll.childNodes {
+                            emitNode(child, ox: x - shift.x, oy: y - shift.y)
+                        }
+                    }
+                    if scroll.showsIndicator, scroll.maxOffset > 0 {
+                        emitScrollIndicator(scroll, x: x, y: y, w: w, h: h)
+                    }
+                    return
+                }
                 // The renderer owns the transform and clip. Swift keeps only
                 // its last reported offset so virtualization/culling can emit
                 // the right content; applying it to commands here as well
@@ -1852,6 +1870,7 @@ public final class DrawList {
     private func nodeFlags(
         for id: NodeID, interactive: Bool, hoverSnap: Bool = false
     ) -> SceneNodeFlags? {
+        guard !flattensSceneNodes else { return nil }
         let claimsWheel = ScrollRouter.claimsWheel(id)
         guard interactive || claimsWheel else { return nil }
         var flags: SceneNodeFlags = [.absoluteCoordinates]

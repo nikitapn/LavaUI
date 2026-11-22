@@ -35,6 +35,8 @@ public struct EmbeddedDrawFrame {
                 clipDepth -= 1
             case .rect, .roundedRect:
                 guard c.w >= 0, c.h >= 0, c.aux >= 0 else { return nil }
+            case .strokedRect:
+                guard c.w > 0, c.h > 0, c.aux >= 0, (1...0x00ff_ffff).contains(c.param) else { return nil }
             case .image:
                 guard imageIDs.contains(c.param), c.w >= 0, c.h >= 0 else { return nil }
             case .text:

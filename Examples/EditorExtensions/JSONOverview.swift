@@ -52,25 +52,28 @@ private final class OverviewRenderer: @unchecked Sendable {
             (depth: row.depth, text: try row.text())
         }
         state.headerBottom = 8 + pitch
-        let captured = DrawList.captureEmbedded(editor: editor, scale: viewport.scale) { list in
-            let ink = Color(r: 0.14, g: 0.18, b: 0.20)
-            list.rect(x: 0, y: 0, w: viewport.width, h: viewport.height, color: Color(r: 0.97, g: 0.97, b: 0.95))
-            list.roundedRect(x: 12, y: 8, w: 184, h: pitch, color: Color(r: 0.80, g: 0.88, b: 0.84))
-            list.text(state.reversed ? "Order: descending" : "Order: ascending", x: 17, y: 12, w: 176, h: pitch,
-                      color: ink, font: font)
-            list.image(textureId: 1, x: 173, y: 8 + (pitch - 9) / 2, w: 9, h: 9)
-            var y = top
-            // Bound shaping to the visible line; a JSON string can itself be megabytes.
-            let columns = max(1, Int(viewport.width / max(1, font.pixelSize / 4)))
-            for row in visible {
-                let x = 12 + Float(row.depth) * 18
-                if x < viewport.width {
-                    let label = String(row.text.unicodeScalars.prefix(columns))
-                    list.text(label, x: x, y: y, w: viewport.width - x, h: pitch, color: ink, font: font)
-                }
-                y += pitch
+        let ink = Color(r: 0.14, g: 0.18, b: 0.20)
+        let order = state.reversed ? "Order: descending" : "Order: ascending"
+        let columns = max(1, Int(viewport.width / max(1, font.pixelSize / 4)))
+        let view = VStack(spacing: 0) {
+            Canvas(width: .pct(100), height: .pt(top)) { list, box in
+                list.roundedRect(x: box.x + 12, y: box.y + 8, w: 184, h: pitch,
+                                 color: Color(r: 0.80, g: 0.88, b: 0.84))
+                list.text(order, x: box.x + 17, y: box.y + 12, w: 176, h: pitch, color: ink, font: font)
+                list.image(textureId: 1, x: box.x + 173, y: box.y + 8 + (pitch - 9) / 2, w: 9, h: 9)
+            }
+            .flexShrink(0)
+            ForEach(visible.indices, id: \.self) { index in
+                let row = visible[index]
+                Text(String(row.text.unicodeScalars.prefix(columns)), color: ink, lineLimit: 1)
+                    .padding(.leading, 16 + Float(row.depth) * 18)
+                    .frame(height: .pt(pitch))
+                    .flexShrink(0)
             }
         }
+        .background(Color(r: 0.97, g: 0.97, b: 0.95))
+        let captured = DrawList.captureEmbedded(editor: editor, width: viewport.width, height: viewport.height,
+                                                scale: viewport.scale, font: font, view: view)
         var frame = SurfaceFrame()
         frame.viewportId = viewport.id
         frame.frameId = input.frameId

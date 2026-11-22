@@ -97,14 +97,20 @@ final class EmbeddedPreview: @unchecked Sendable {
     private var viewport = SurfaceViewport()
     private var nextFrame: UInt64 = 0
     private var presented: UInt64 = 0
-    private var accepted: UInt64 = 0
+    private var viewportFont: UIFont?
     private var visible = false
     private var focused = false
     private var busy = false
     private var needsFrame = false
     private var events: [SurfaceInput] = []
     private var state: [UInt8] = []
-    private var frame: EmbeddedDrawFrame?
+    private struct Frame {
+        let drawing: EmbeddedDrawFrame
+        let viewport: SurfaceViewport
+        let id: UInt64
+        let font: UIFont
+    }
+    private var frame: Frame?
     private var images: [UInt32: UIImage] = [:]
     private var imageData: [UInt32: SurfaceImage] = [:]
     private var resources: (any GPUResourceHost)?
@@ -144,7 +150,7 @@ final class EmbeddedPreview: @unchecked Sendable {
                                        fontPath: font.path, fontSha256: font.contentDigest, face: font.faceIndex, size26_6: font.pixelSize26_6,
                                        rasterFlags: font.raster.raw)
             presented = 0
-            frame = nil
+            viewportFont = font
             needsFrame = true
         }
         let hasFocus = FocusManager.isFocused(focusID)
@@ -154,8 +160,11 @@ final class EmbeddedPreview: @unchecked Sendable {
         }
         schedule()
         if let frame, error == nil {
-            list.drawEmbedded(frame, in: box, font: font, images: images)
-            presented = accepted
+            // Keep the last complete drawing visible while the worker lays out the new size.
+            let clip = CanvasFrame(x: box.x, y: box.y, w: min(box.w, frame.viewport.width),
+                                   h: min(box.h, frame.viewport.height))
+            list.drawEmbedded(frame.drawing, in: clip, font: frame.font, images: images)
+            presented = frame.viewport.id == viewport.id ? frame.id : 0
         } else {
             list.pushClip(x: box.x, y: box.y, w: box.w, h: box.h)
             list.text(error ?? "Loading preview…", x: box.x + 12, y: box.y + 12, w: box.w, h: font.lineHeight,
@@ -211,7 +220,7 @@ final class EmbeddedPreview: @unchecked Sendable {
             fail(failure.localizedDescription)
         case .success(let reply):
             state = reply.state
-            if request.viewport.id == viewport.id, let resources {
+            if request.viewport.id == viewport.id, let resources, let viewportFont {
                 var mapped: [UInt32: UIImage] = [:]
                 var uploaded: [UIImage] = []
                 for image in reply.images {
@@ -237,8 +246,7 @@ final class EmbeddedPreview: @unchecked Sendable {
                 }
                 imageData = Dictionary(uniqueKeysWithValues: reply.images.map { ($0.id, $0) })
                 images = mapped
-                accepted = request.frameId
-                frame = reply.frame
+                frame = Frame(drawing: reply.frame, viewport: request.viewport, id: request.frameId, font: viewportFont)
                 ViewInvalidation.markDirty()
             }
             schedule()
