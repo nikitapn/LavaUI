@@ -80,6 +80,8 @@ struct BranchPickerView: View {
             }
         }
         .frame(width: .pct(100))
+        // Pass the overlay's height constraint down to the scroll viewport.
+        .flexShrink(1)
         .agentId("branch-picker")
     }
 
