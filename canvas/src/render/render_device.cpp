@@ -30,11 +30,6 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
-#ifdef INCLUDE_IMGUI
-# include "imgui_impl_vulkan.h"
-# include "imgui_impl_glfw.h"
-#endif
-
 #include "util/util.hpp"
 #include "render/shaders.hpp"
 #include "render/render_device.hpp"
@@ -1837,22 +1832,6 @@ void RenderDevice::cleanUp()
   }
   trash_.clear();
 
-#ifdef INCLUDE_IMGUI
-  if (imguiInitialized_) {
-    if (presentCapable_) {
-      ImGui_ImplGlfw_Shutdown();
-    }
-    ImGui_ImplVulkan_Shutdown();
-    ImGui::DestroyContext();
-    imguiInitialized_ = false;
-  }
-
-  if (imguiDescriptorPool_ != VK_NULL_HANDLE) {
-    vkDestroyDescriptorPool(device_, imguiDescriptorPool_, nullptr);
-    imguiDescriptorPool_ = VK_NULL_HANDLE;
-  }
-#endif
-
   if (text_) {
     text_->cleanUp();
     text_.reset();
@@ -2036,91 +2015,6 @@ void RenderDevice::dispatchCompute(VkCommandBuffer commandBuffer, VkPipeline pip
   vkCmdDispatch(commandBuffer, groupCountX, groupCountY, groupCountZ);
 }
 
-#ifdef INCLUDE_IMGUI
-void RenderDevice::initImGui()
-{
-  // Setup ImGui context
-  IMGUI_CHECKVERSION();
-  ImGui::CreateContext();
-  ImGuiIO &io = ImGui::GetIO();
-  io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
-  // io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad; // Enable Gamepad Controls
-
-  // Setup ImGui style
-  ImGui::StyleColorsDark();
-
-  // No platform backend (imgui_impl_glfw) — this is headless. io.DisplaySize
-  // and io.DeltaTime are set manually each frame instead (see
-  // Application::renderDebugUI). Only the Vulkan render backend is needed.
-
-  // Create Descriptor Pool for ImGui
-  VkDescriptorPoolSize pool_sizes[] = {
-    {VK_DESCRIPTOR_TYPE_SAMPLER, 1000},
-    {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000},
-    {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000},
-    {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000},
-    {VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1000},
-    {VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1000},
-    {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1000},
-    {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1000},
-    {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1000},
-    {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1000},
-    {VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1000}
-  };
-  VkDescriptorPoolCreateInfo pool_info = {
-    .sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-    .flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
-    .maxSets       = 1000 * IM_ARRAYSIZE(pool_sizes),
-    .poolSizeCount = static_cast<uint32_t>(IM_ARRAYSIZE(pool_sizes)),
-    .pPoolSizes    = pool_sizes,
-  };
-  VR(vkCreateDescriptorPool(device_, &pool_info, nullptr, &imguiDescriptorPool_),
-     "failed to create ImGui descriptor pool!");
-
-  ImGui_ImplVulkan_InitInfo initInfo = {
-    .ApiVersion      = VK_API_VERSION_1_0,
-    .Instance        = instance_,
-    .PhysicalDevice  = physicalDevice_,
-    .Device          = device_,
-    .QueueFamily     = graphicsAndPresentationQueueFamilyIdx_,
-    .Queue           = graphicsQueue_,
-    .DescriptorPool  = imguiDescriptorPool_,
-    .RenderPass      = renderPass_,
-    // ImGui's Vulkan backend asserts MinImageCount >= 2 (it manages its own
-    // double-buffered internal vertex/index buffers regardless of how many
-    // real framebuffers we have) — we only have one real framebuffer, but
-    // that's an implementation detail ImGui doesn't need to know about.
-    .MinImageCount   = 2,
-    .ImageCount      = 2,
-    .MSAASamples     = getMSAASamples(),
-    // Optional
-    .PipelineCache   = VK_NULL_HANDLE,
-    .Subpass         = 0,
-    // (Optional) Allocation, Debugging
-    .Allocator       = nullptr,
-    .CheckVkResultFn = [](VkResult err) {
-        if (err != VK_SUCCESS) {
-          throw std::runtime_error("ImGui Vulkan error: " + std::to_string(err));
-        }
-      }
-  };
-
-  // Initialize ImGui for Vulkan
-  ImGui_ImplVulkan_Init(&initInfo);
-
-  // Upload Fonts
-  // Command buffer is not needed, backend creates its own
-  // to upload fonts
-  ImGui_ImplVulkan_CreateFontsTexture();
-  ImGui_ImplVulkan_DestroyFontsTexture();
-
-  // GLFW platform backend is installed by Application after it registers
-  // its own input callbacks (ImGui will chain onto those when
-  // install_callbacks=true). See Application::initWithWindow.
-  imguiInitialized_ = true;
-}
-#endif
-
 /// Brings up everything shared: instance, GPU, logical device, allocator,
 /// command pool, render passes.
 ///
@@ -2200,9 +2094,6 @@ void RenderDevice::init(const char *applicationName, bool presentCapable)
   createCommandPool();
   createRenderPass();
   text_ = std::make_unique<TextRenderer>(*this);
-#ifdef INCLUDE_IMGUI
-  initImGui();
-#endif
 }
 
 TextRenderer &RenderDevice::textRenderer()

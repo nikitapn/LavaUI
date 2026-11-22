@@ -270,13 +270,6 @@ class RenderDevice
   /// from window render workers as well as the main thread.
   canvas::GpuLedger gpuLedger_;
 
-
-#ifdef INCLUDE_IMGUI
-  // ImGui
-  VkDescriptorPool imguiDescriptorPool_ = VK_NULL_HANDLE;
-  bool             imguiInitialized_ = false;
-#endif
-
   // Step 0: Enable validation layers
   static VKAPI_ATTR VkBool32 VKAPI_CALL
   debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT      messageSeverity,
@@ -332,9 +325,6 @@ class RenderDevice
   void createCommandPool();
   void createDescriptorPool();
   void createDescriptorSet();
-#ifdef INCLUDE_IMGUI
-  void initImGui();
-#endif
 
  public:
   /// Creates instance, picks a GPU, and brings up the device and everything
@@ -493,10 +483,6 @@ class RenderDevice
   uint64_t collectGarbage();
 
   void cleanUp();
-
-#ifdef INCLUDE_IMGUI
-  bool imguiInitialized() const { return imguiInitialized_; }
-#endif
 
   VkShaderModule createShaderModule(const std::vector<char> &code);
 

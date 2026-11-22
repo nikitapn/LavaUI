@@ -1281,7 +1281,7 @@ public final class DrawList {
     // MARK: - Tree emission (pre-order DFS = paint order)
 
     /// Emit chrome from a laid-out retained tree.
-    /// `originX/Y` shift the tree (e.g. below ImGui menu). Viewport seeds the
+    /// `originX/Y` shift the tree. Viewport seeds the
     /// cull stack; `ScrollView` further intersects so long lists skip off-screen
     /// subtrees entirely (not only leaves).
     public func emitTree(

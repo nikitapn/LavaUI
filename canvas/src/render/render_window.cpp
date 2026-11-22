@@ -18,11 +18,6 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
-#ifdef INCLUDE_IMGUI
-# include "imgui_impl_vulkan.h"
-# include "imgui_impl_glfw.h"
-#endif
-
 #include "render/render_window.hpp"
 #include "render/dmabuf_image.hpp"
 #include "render/png_encode.hpp"
@@ -1295,15 +1290,6 @@ void RenderWindow::requestClose()
 {
   if (window_) glfwSetWindowShouldClose(window_, GLFW_TRUE);
 }
-
-#ifdef INCLUDE_IMGUI
-void RenderWindow::initImGuiGlfwBackend()
-{
-  if (windowed_ && window_ && dev_.imguiInitialized()) {
-    ImGui_ImplGlfw_InitForVulkan(window_, true);
-  }
-}
-#endif
 
 void RenderWindow::setWindowFrame(int x, int y, int width, int height)
 {

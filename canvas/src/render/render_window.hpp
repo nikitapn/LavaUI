@@ -280,11 +280,6 @@ class RenderWindow {
     cornerBottom_ = bottom;
   }
 
-#ifdef INCLUDE_IMGUI
-  /// Call after installing app-level GLFW callbacks so ImGui can chain.
-  void initImGuiGlfwBackend();
-#endif
-
   // ─── Readback ────────────────────────────────────────────────────────────
 
   /// Copies the last-rendered frame (RGBA8) into `dst`, which must hold at
