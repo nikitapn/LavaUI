@@ -18,6 +18,7 @@ wget
 boost
 cairo
 fontconfig
+libgit2
 freetype2
 glfw
 glib2

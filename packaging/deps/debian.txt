@@ -29,6 +29,7 @@ libcairo2-dev
 libdbusmenu-glib-dev
 libdrm-dev
 libfontconfig-dev
+libgit2-dev
 libfreetype-dev
 libglfw3-dev
 libglib2.0-dev

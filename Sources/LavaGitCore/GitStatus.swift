@@ -1,8 +1,10 @@
+import CGit2
 import Foundation
 
-/// One path from `git status --porcelain=v2 -z`.
+/// One path in the working tree's status.
 public struct GitStatusEntry: Equatable, Sendable {
-    /// What happened to a path on one side (staged, or in the working tree).
+    /// What happened to a path on one side (staged, or in the working tree),
+    /// by the letter `git status --short` gives it.
     public enum Change: Character, Equatable, Sendable {
         case unmodified = "."
         case modified = "M"
@@ -47,43 +49,54 @@ public struct GitStatusEntry: Equatable, Sendable {
         self.unstaged = unstaged
     }
 
-    /// Parses the NUL-separated output. Lines it does not understand — a newer
-    /// git's additions, branch headers — are skipped rather than failing the
-    /// whole status.
-    public static func parse(_ data: Data) -> [GitStatusEntry] {
-        var fields = data.split(separator: 0, omittingEmptySubsequences: false)
-            .map { String(decoding: $0, as: UTF8.self) }[...]
-        var out: [GitStatusEntry] = []
-        while let record = fields.popFirst() {
-            guard let tag = record.first else { continue }
-            switch tag {
-            case "1", "2", "u":
-                // Fixed fields, then the path, which may itself hold spaces:
-                // split only as far as the field count says.
-                let fixed = tag == "1" ? 8 : tag == "2" ? 9 : 10
-                let parts = record.split(separator: " ", maxSplits: fixed, omittingEmptySubsequences: false)
-                guard parts.count == fixed + 1 else { continue }
-                let xy = Array(parts[1])
-                guard xy.count == 2 else { continue }
-                var entry = GitStatusEntry(
-                    path: String(parts[fixed]),
-                    kind: tag == "u" ? .conflicted : .tracked,
-                    staged: Change(rawValue: xy[0]) ?? .modified,
-                    unstaged: Change(rawValue: xy[1]) ?? .modified
-                )
-                // A rename's original path is the next NUL-separated field.
-                if tag == "2" { entry.originalPath = fields.popFirst() }
-                out.append(entry)
-            case "?":
-                out.append(GitStatusEntry(
-                    path: String(record.dropFirst(2)), kind: .untracked, unstaged: .added
-                ))
-            case "!":
-                out.append(GitStatusEntry(path: String(record.dropFirst(2)), kind: .ignored))
-            default:
-                continue
-            }
+    /// libgit2's record for a path, or nil for one that says nothing changed.
+    init?(_ entry: git_status_entry) {
+        let flags = entry.status.rawValue
+        func has(_ flag: git_status_t) -> Bool { flags & flag.rawValue != 0 }
+        // The staged side names the path as it is in the index, the
+        // unstaged side as it is on disk; either is the path for a row.
+        let staged = entry.head_to_index?.pointee
+        let unstaged = entry.index_to_workdir?.pointee
+        guard let delta = unstaged ?? staged,
+              let newPath = delta.new_file.path ?? delta.old_file.path else { return nil }
+        let path = String(cString: newPath)
+
+        if has(GIT_STATUS_CONFLICTED) {
+            self.init(path: path, kind: .conflicted, staged: .updatedUnmerged, unstaged: .updatedUnmerged)
+            return
         }
-        return out
+        if has(GIT_STATUS_IGNORED) {
+            self.init(path: path, kind: .ignored)
+            return
+        }
+        if has(GIT_STATUS_WT_NEW), flags & Self.indexFlags == 0 {
+            self.init(path: path, kind: .untracked, unstaged: .added)
+            return
+        }
+
+        var stagedChange = Change.unmodified
+        if has(GIT_STATUS_INDEX_NEW) { stagedChange = .added }
+        else if has(GIT_STATUS_INDEX_MODIFIED) { stagedChange = .modified }
+        else if has(GIT_STATUS_INDEX_DELETED) { stagedChange = .deleted }
+        else if has(GIT_STATUS_INDEX_RENAMED) { stagedChange = .renamed }
+        else if has(GIT_STATUS_INDEX_TYPECHANGE) { stagedChange = .typeChanged }
+
+        var unstagedChange = Change.unmodified
+        if has(GIT_STATUS_WT_MODIFIED) { unstagedChange = .modified }
+        else if has(GIT_STATUS_WT_DELETED) { unstagedChange = .deleted }
+        else if has(GIT_STATUS_WT_RENAMED) { unstagedChange = .renamed }
+        else if has(GIT_STATUS_WT_TYPECHANGE) { unstagedChange = .typeChanged }
+
+        guard stagedChange != .unmodified || unstagedChange != .unmodified else { return nil }
+        var original: String?
+        if stagedChange == .renamed, let staged, let old = staged.old_file.path {
+            original = String(cString: old)
+        }
+        self.init(path: path, originalPath: original, kind: .tracked,
+                  staged: stagedChange, unstaged: unstagedChange)
     }
+
+    private static let indexFlags = GIT_STATUS_INDEX_NEW.rawValue | GIT_STATUS_INDEX_MODIFIED.rawValue
+        | GIT_STATUS_INDEX_DELETED.rawValue | GIT_STATUS_INDEX_RENAMED.rawValue
+        | GIT_STATUS_INDEX_TYPECHANGE.rawValue
 }

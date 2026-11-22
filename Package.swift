@@ -140,8 +140,15 @@ var targets: [Target] = [
     // Line diff, word-level highlights, side-by-side rows. No engine — see
     // Sources/LavaDiffCore.
     .target(name: "LavaDiffCore"),
-    // The `git` command, wrapped: a file at HEAD, status. No engine.
-    .target(name: "LavaGitCore"),
+    // libgit2, for LavaGitCore. Header-only on our side, like CArchive.
+    .systemLibrary(
+        name: "CGit2",
+        pkgConfig: "libgit2",
+        providers: [.apt(["libgit2-dev"])]
+    ),
+    // A git working tree through libgit2: a file at HEAD, status, staging,
+    // commits. No engine.
+    .target(name: "LavaGitCore", dependencies: ["CGit2"]),
     // An editor's project folder: the lazily listed tree and what git says
     // about each row of it. No engine.
     .target(name: "LavaProjectCore", dependencies: ["LavaExplorerCore", "LavaGitCore"]),
