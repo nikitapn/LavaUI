@@ -62,7 +62,7 @@ struct LavaEditorView: View {
     private func editor(_ appearance: EditorAppearance) -> some View {
         VStack(flexGrow: 1, spacing: 0) {
             if let diff = session.visibleDiff {
-                DiffPane(session: session, model: diff, appearance: appearance)
+                DiffPane(session: session, model: diff, appearance: appearance, style: documentStyle(appearance))
                     .flexGrow(1)
                     .theme(appearance.documentTheme)
             } else if let error = session.active.loadError {

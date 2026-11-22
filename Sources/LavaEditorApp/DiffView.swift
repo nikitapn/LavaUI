@@ -7,12 +7,14 @@ import LavaUI
 struct DiffColors {
     let added: Color
     let addedWord: Color
+    let addedBar = Color(rgb24: 0x4c_9a_2a)
     let removed: Color
     let removedWord: Color
-    /// Behind the side of a row that has no line — the room the other side's
-    /// extra lines take.
+    let removedBar = Color(rgb24: 0xc4_3d_2f)
+    /// Behind the blank rows that keep a line beside its counterpart.
     let filler: Color
-    let fold: Color
+    /// The hatching over them.
+    let stripe: Color
     let divider: Color
 
     init(_ appearance: EditorAppearance) {
@@ -23,54 +25,123 @@ struct DiffColors {
             removed = Color(rgb24: 0xfb_e2_dc)
             removedWord = Color(rgb24: 0xf2_b8_ab)
             filler = Color(rgb24: 0xf1_ea_df)
-            fold = Color(rgb24: 0xf1_e8_da)
+            stripe = Color(rgb24: 0xe2_d8_c8)
         } else {
             added = Color(rgb24: 0x1d_33_26)
             addedWord = Color(rgb24: 0x2d_57_3b)
             removed = Color(rgb24: 0x3a_1f_23)
             removedWord = Color(rgb24: 0x66_2c_33)
-            filler = theme.canvas
-            fold = theme.panel
+            filler = theme.inset
+            stripe = Color(rgb24: 0x34_37_3f)
         }
         divider = theme.border
     }
 }
 
-/// Two columns, old on the left and new on the right, scrolling as one.
+/// Two editors, old on the left and new on the right, scrolling as one.
 ///
-/// A list of rows rather than two editors pinned together: the blank rows
-/// that keep a line beside its replacement are not text in either file, and
-/// two editors would each need to be taught to draw lines they do not have and
-/// to scroll in step. Here a row *is* the pair, so alignment and scrolling
-/// come with the list. The cost is that this side cannot be edited — that is
-/// the editor's job, one keystroke away.
+/// The left one is read-only. The right one is the document itself when the
+/// comparison is against its own text — edits there re-diff as you type —
+/// and read-only otherwise (what is staged, a deleted file). Blank hatched
+/// rows on either side keep a line beside its replacement; they are not text
+/// in either file, so they take no number and no caret.
 struct DiffPane: View {
     @Bindable var session: EditorSession
     let model: DiffModel
     let appearance: EditorAppearance
+    /// The document editor's style, so both sides look like the editor.
+    let style: CodeStyle
 
     var body: some View {
         let theme = appearance.theme
-        let font = session.documentFont ?? FontStore.default
-        let lineH = font?.lineHeight ?? 20
         let colors = DiffColors(appearance)
+        let alignment = model.alignment
+        var sideStyle = style
+        sideStyle.gapFill = colors.filler
+        sideStyle.gapStripe = colors.stripe
+        sideStyle.placeholder = nil
+        let newText = model.isEditable ? session.text : .constant(model.newText)
         return VStack(flexGrow: 1, spacing: 0) {
-            toolbar(theme: theme)
-            titles(theme: theme, colors: colors)
-            ScrollView(.vertical, position: session.diffScroll) {
-                LazyVStack(model.rows.indices, rowHeight: lineH) { index in
-                    row(index, font: font, lineH: lineH, colors: colors, theme: theme)
+            toolbar(theme: theme, colors: colors)
+            HStack(flexGrow: 1, spacing: 0) {
+                column(title: model.oldTitle, theme: theme) {
+                    EditorView(
+                        text: .constant(model.oldText),
+                        isReadOnly: true,
+                        highlighter: model.highlighter,
+                        style: sideStyle,
+                        font: session.documentFont,
+                        showLineNumbers: session.showLineNumbers,
+                        wraps: false,
+                        visibleLines: 24,
+                        lineMarks: Self.marks(alignment.old, fill: colors.removed, bar: colors.removedBar, sign: "−"),
+                        onZoom: { session.zoom(by: $0) },
+                        lineGaps: alignment.old.gaps.map { EditorLineGap(line: $0.line, rows: $0.rows) },
+                        rangeFills: alignment.old.words.map { EditorRangeFill(range: $0, color: colors.removedWord) },
+                        scrollLink: model.scrollLink
+                    )
+                    .flexGrow(1)
+                    .agentId("diff-old")
+                }
+                Divider(.vertical, style: DividerStyle(thickness: 1, spacing: 0, color: colors.divider)).agentId("diff-divider")
+                column(title: model.newTitle + (model.isEditable ? "" : " · read-only"), theme: theme) {
+                    EditorView(
+                        text: newText,
+                        isReadOnly: !model.isEditable || session.active.hasInvalidUTF8,
+                        highlighter: model.highlighter,
+                        style: sideStyle,
+                        font: session.documentFont,
+                        showLineNumbers: session.showLineNumbers,
+                        wraps: false,
+                        visibleLines: 24,
+                        decorations: model.isEditable ? session.languageDecorations() : [],
+                        lineMarks: Self.marks(alignment.new, fill: colors.added, bar: colors.addedBar, sign: "+"),
+                        controller: model.newController,
+                        onZoom: { session.zoom(by: $0) },
+                        semanticHighlights: model.isEditable ? session.languageHighlights() : nil,
+                        lineGaps: alignment.new.gaps.map { EditorLineGap(line: $0.line, rows: $0.rows) },
+                        rangeFills: alignment.new.words.map { EditorRangeFill(range: $0, color: colors.addedWord) },
+                        scrollLink: model.scrollLink
+                    )
+                    .flexGrow(1)
+                    .agentId("diff-new")
                 }
             }
-            .flexGrow(1)
-            .agentId("diff-rows")
         }
         .background(theme.inset)
     }
 
-    // MARK: - Bars
+    private static func marks(
+        _ side: DiffAlignment.Side, fill: Color, bar: Color, sign: String
+    ) -> [EditorLineMark] {
+        side.changed.filter { !$0.isEmpty }.map {
+            EditorLineMark(lines: $0, bar: bar, fill: fill, sign: sign)
+        }
+    }
 
-    private func toolbar(theme: Theme) -> some View {
+    /// Half the width, a title over an editor. Halves by percentage, not by
+    /// growing: an editor's natural width is its widest line, and two growing
+    /// editors would split the room by how long their lines are.
+    private func column<Content: View>(
+        title: String, theme: Theme, @ViewBuilder _ content: () -> Content
+    ) -> some View {
+        VStack(spacing: 0) {
+            HStack(padding: 6, alignment: .center, spacing: 0) {
+                Text(title, color: .secondary, font: session.fonts.status)
+                    .padding(.leading, 6)
+                    .flexShrink(1)
+                Spacer()
+            }
+            .background(theme.panel)
+            content()
+        }
+        .frame(width: .pct(50))
+        .flexShrink(1)
+    }
+
+    // MARK: - Bar
+
+    private func toolbar(theme: Theme, colors: DiffColors) -> some View {
         let diff = model.diff
         let summary: String
         if diff.isEmpty {
@@ -84,9 +155,9 @@ struct DiffPane: View {
                 .padding(.leading, 10)
                 .agentId("diff-summary")
             if !diff.isEmpty {
-                Text("+\(diff.added)", color: Color(rgb24: 0x4c_9a_2a), font: session.fonts.status)
+                Text("+\(diff.added)", color: colors.addedBar, font: session.fonts.status)
                     .agentId("diff-added")
-                Text("−\(diff.removed)", color: Color(rgb24: 0xc4_3d_2f), font: session.fonts.status)
+                Text("−\(diff.removed)", color: colors.removedBar, font: session.fonts.status)
                     .agentId("diff-removed")
             }
             Spacer()
@@ -94,149 +165,9 @@ struct DiffPane: View {
                 .agentId("diff-previous")
             Button("Next ›") { session.stepDiff(forward: true) }
                 .agentId("diff-next")
-            Button(model.showsWholeFile ? "Fold Unchanged" : "Whole File") {
-                model.showsWholeFile.toggle()
-                session.diffScroll.scrollToTop()
-            }
-            .agentId("diff-whole-file")
             Button("Done") { session.closeDiff() }
                 .agentId("diff-done")
         }
         .background(theme.panel)
-    }
-
-    /// What each column is, over its own half. Painted rather than laid out,
-    /// so the split is the same arithmetic as the rows' and the divider runs
-    /// on unbroken from the titles into them.
-    private func titles(theme: Theme, colors: DiffColors) -> some View {
-        let font = session.fonts.status ?? FontStore.default
-        let height = (font?.lineHeight ?? 16) + 12
-        let oldTitle = model.oldTitle
-        let newTitle = model.newTitle
-        return Canvas(label: "diff-titles", width: .pct(100), height: .pt(height)) { list, frame in
-            guard let font else { return }
-            list.rect(x: frame.x, y: frame.y, w: frame.w, h: frame.h, color: theme.panel)
-            let half = ((frame.w - 1) / 2).rounded(.down)
-            let textY = frame.y + (frame.h - font.lineHeight) / 2
-            for (title, x, w) in [(oldTitle, frame.x, half),
-                                  (newTitle, frame.x + half + 1, frame.w - half - 1)] {
-                list.pushClip(x: x, y: frame.y, w: w - 10, h: frame.h)
-                list.text(title, x: x + 10, y: textY, w: w, h: font.lineHeight,
-                          color: theme.textSecondary, font: font)
-                list.popClip()
-            }
-            list.rect(x: frame.x + half, y: frame.y, w: 1, h: frame.h, color: colors.divider)
-        }
-        .agentId("diff-titles")
-    }
-
-    // MARK: - Rows
-
-    private func row(
-        _ index: Int, font: UIFont?, lineH: Float, colors: DiffColors, theme: Theme
-    ) -> some View {
-        let row = model.rows[index]
-        let model = self.model
-        let style = Language.codeStyle(theme: theme)
-        let isFold: Bool
-        if case .folded = row.kind { isFold = true } else { isFold = false }
-        return Canvas(
-            label: "diff-row",
-            width: .pct(100), height: .pt(lineH),
-            onTap: isFold ? { model.unfold(index) } : nil
-        ) { list, frame in
-            guard let font else { return }
-            DiffRowPainter(
-                model: model, row: row, font: font, colors: colors, style: style, theme: theme
-            ).paint(list, frame)
-        }
-        .cursor(isFold ? .pointer : .text)
-    }
-}
-
-/// Draws one row: each half is a gutter with the line number, the line's
-/// fill, the word-level highlights, then the coloured text.
-struct DiffRowPainter {
-    let model: DiffModel
-    let row: DiffRow
-    let font: UIFont
-    let colors: DiffColors
-    let style: CodeStyle
-    let theme: Theme
-
-    func paint(_ list: DrawList, _ frame: CanvasFrame) {
-        if case .folded(let count) = row.kind {
-            list.rect(x: frame.x, y: frame.y, w: frame.w, h: frame.h, color: colors.fold)
-            let label = "⋯  \(count) unchanged line\(count == 1 ? "" : "s")"
-            let width = font.shapedRun(label).width
-            list.text(
-                label, x: frame.x + (frame.w - width) / 2 - 4, y: frame.y,
-                w: width + 8, h: frame.h, color: theme.textSecondary, font: font
-            )
-            return
-        }
-        let half = ((frame.w - 1) / 2).rounded(.down)
-        let changes = model.changes(row)
-        side(
-            list, x: frame.x, y: frame.y, w: half, h: frame.h,
-            line: row.old, isNew: false, words: changes?.old
-        )
-        list.rect(x: frame.x + half, y: frame.y, w: 1, h: frame.h, color: colors.divider)
-        side(
-            list, x: frame.x + half + 1, y: frame.y, w: frame.w - half - 1, h: frame.h,
-            line: row.new, isNew: true, words: changes?.new
-        )
-    }
-
-    private func side(
-        _ list: DrawList, x: Float, y: Float, w: Float, h: Float,
-        line: Int?, isNew: Bool, words: [Range<Int>]?
-    ) {
-        list.pushClip(x: x, y: y, w: w, h: h)
-        defer { list.popClip() }
-
-        guard let line else {
-            list.rect(x: x, y: y, w: w, h: h, color: colors.filler)
-            return
-        }
-        let changed = row.kind != .context
-        if changed {
-            list.rect(x: x, y: y, w: w, h: h, color: isNew ? colors.added : colors.removed)
-            // A bar down the gutter's edge, so a change still reads at a
-            // glance where the fill is faint.
-            list.rect(
-                x: x, y: y, w: 3, h: h,
-                color: isNew ? Color(rgb24: 0x4c_9a_2a) : Color(rgb24: 0xc4_3d_2f)
-            )
-        }
-
-        let digit = font.shapedRun("0").width
-        let gutter = Float(model.lineNumberDigits) * digit + 28
-        let number = String(line + 1)
-        let numberW = font.shapedRun(number).width
-        list.text(
-            number, x: x + gutter - 14 - numberW - 4, y: y, w: numberW + 8, h: h,
-            color: theme.textDim, font: font
-        )
-
-        let text = isNew ? model.newLines[line] : model.oldLines[line]
-        let textX = x + gutter
-        if let words, !words.isEmpty {
-            let run = font.shapedRun(text)
-            func columnX(_ column: Int) -> Float {
-                let c = max(0, min(column, text.count))
-                return run.caretX(for: text.index(text.startIndex, offsetBy: c))
-            }
-            for range in words {
-                let a = columnX(range.lowerBound)
-                let b = columnX(range.upperBound)
-                list.rect(
-                    x: textX + a, y: y + 2, w: max(2, b - a), h: h - 4,
-                    color: isNew ? colors.addedWord : colors.removedWord
-                )
-            }
-        }
-        let spans = isNew ? model.spans(new: line) : model.spans(old: line)
-        list.codeLine(text, spans: spans, style: style, font: font, x: textX, y: y, h: h)
     }
 }

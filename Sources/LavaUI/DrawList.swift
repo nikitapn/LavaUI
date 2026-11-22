@@ -2686,9 +2686,15 @@ extension DrawList {
         // row rounded on its own and the gaps came out 22, 23, 22 px. The one
         // large difference is taken in Double; what is added to it per row is
         // a screenful at most.
+        // Blank rows (`lineGaps`) put a row at its slot rather than its
+        // index; with none the two are the same and this is the old sum.
+        let gaps = leaf.rowGaps
         let firstTop = y + inset + leaf.screenY(ofRow: firstRow, lineHeight: lineH)
+        let firstSlot = gaps.slot(ofRow: firstRow)
         @inline(__always) func rowTopOf(_ row: Int) -> Float {
-            firstTop + Float(row - firstRow) * lineH
+            gaps.isEmpty
+                ? firstTop + Float(row - firstRow) * lineH
+                : firstTop + Float(gaps.slot(ofRow: row) - firstSlot) * lineH
         }
 
         // Pass 1 — chrome that must not scroll horizontally. The gutter stays
@@ -2698,7 +2704,16 @@ extension DrawList {
         if leaf.showsGutter, leaf.gutterWidth > 0 {
             rect(x: x, y: y, w: leaf.gutterWidth, h: h, color: style.gutterBackground)
         }
+        if !gaps.isEmpty {
+            emitRowGaps(
+                gaps, rows: firstRow...(lastRow + 1), rowTop: rowTopOf, lineH: lineH,
+                style: style, x: x + leaf.gutterWidth, y: y, w: max(0, w - leaf.gutterWidth), h: h
+            )
+        }
         let marks = leaf.lineMarks
+        // A column for the marks' signs (a diff's `+`), between the numbers
+        // and the bar, so every number moves over by the same amount.
+        let signW: Float = marks.contains { $0.sign != nil } ? font.shapedRun("+").width + 2 : 0
         // Where the bar and the notch sit: the gutter's inner edge, clear of
         // the right-aligned numbers, or the box's own edge with no gutter.
         let barX = leaf.showsGutter && leaf.gutterWidth > 0 ? x + leaf.gutterWidth - 6 : x
@@ -2753,12 +2768,21 @@ extension DrawList {
                     let labelFont = isActive ? style.activeGutterFont ?? font : font
                     let labelW = labelFont.shapedRun(label).width
                     text(
-                        label, x: x + leaf.gutterWidth - inset - labelW - 4,
+                        label, x: x + leaf.gutterWidth - inset - labelW - 4 - signW,
                         y: rowTop + (lineH - labelFont.lineHeight) / 2,
                         w: leaf.gutterWidth, h: lineH,
                         color: isActive ? style.activeGutterText ?? style.gutterText : style.gutterText,
                         font: labelFont
                     )
+                    if !marks.isEmpty, let mark = Self.lineMark(covering: logicalLine, in: marks),
+                       let sign = mark.sign
+                    {
+                        text(
+                            sign, x: x + leaf.gutterWidth - inset - 3 - signW,
+                            y: rowTop + (lineH - font.lineHeight) / 2, w: signW + 4, h: lineH,
+                            color: mark.bar ?? style.gutterText, font: font
+                        )
+                    }
                 }
                 if !leaf.decorations.isEmpty {
                     let rowRange = rows[row]
@@ -2838,6 +2862,14 @@ extension DrawList {
             func columnX(_ column: Int) -> Float {
                 let clamped = max(0, min(column, lineText.count))
                 return run.caretX(for: lineText.index(lineText.startIndex, offsetBy: clamped))
+            }
+
+            if !leaf.rangeFills.isEmpty {
+                for fill in Self.rangeFills(overlapping: range, in: leaf.rangeFills) {
+                    let a = columnX(max(fill.range.lowerBound, range.lowerBound) - range.lowerBound)
+                    let b = columnX(min(fill.range.upperBound, range.upperBound) - range.lowerBound)
+                    rect(x: textX + a, y: rowTop, w: max(2, b - a), h: lineH, color: fill.color)
+                }
             }
 
             for (i, match) in leaf.search.matches.enumerated() {
@@ -3079,6 +3111,51 @@ extension DrawList {
     /// The non-empty mark containing logical line `line`, if any. `marks` is
     /// sorted by first line; marks do not overlap in any use this has, and
     /// where they do the later-starting one wins.
+    /// The fills that reach into `row`, from fills sorted by start and not
+    /// overlapping each other (a diff's words): back from the first fill
+    /// that starts past the row, while they still end inside it.
+    static func rangeFills(overlapping row: Range<Int>, in fills: [EditorRangeFill]) -> ArraySlice<EditorRangeFill> {
+        var low = 0, high = fills.count
+        while low < high {
+            let mid = (low + high) / 2
+            if fills[mid].range.lowerBound < row.upperBound { low = mid + 1 } else { high = mid }
+        }
+        var start = low
+        while start > 0, fills[start - 1].range.upperBound > row.lowerBound { start -= 1 }
+        return fills[start..<low]
+    }
+
+    /// Blank rows (`EditorView(lineGaps:)`): a fill and, with
+    /// `CodeStyle.gapStripe`, diagonal hatching, over the text area only —
+    /// the gutter carries on as it was, unnumbered.
+    private func emitRowGaps(
+        _ gaps: RowGaps, rows: ClosedRange<Int>, rowTop: (Int) -> Float, lineH: Float,
+        style: CodeStyle, x: Float, y: Float, w: Float, h: Float
+    ) {
+        for entry in gaps.entries(above: rows) {
+            let bottom = rowTop(entry.row)
+            let top = bottom - Float(entry.count) * lineH
+            let y0 = max(top, y), y1 = min(bottom, y + h)
+            guard y1 > y0, w > 0 else { continue }
+            rect(x: x, y: y0, w: w, h: y1 - y0, color: style.gapFill ?? style.gutterBackground)
+            guard let stripe = style.gapStripe else { continue }
+            pushClip(x: x, y: y0, w: w, h: y1 - y0)
+            // Stripes are `x + (y - top) = k * spacing`: anchored to the
+            // gap's own top, so the hatching scrolls with it instead of
+            // crawling under a fixed pattern. Only the part on screen is
+            // drawn, so a gap of a thousand rows costs a screenful.
+            let spacing: Float = 8
+            var k = ((y0 - top) / spacing).rounded(.down)
+            while k * spacing <= w + (y1 - top) {
+                let c = k * spacing
+                line(x1: x + c - (y1 - top), y1: y1, x2: x + c - (y0 - top), y2: y0,
+                     color: stripe, width: 1.2)
+                k += 1
+            }
+            popClip()
+        }
+    }
+
     static func lineMark(covering line: Int, in marks: [EditorLineMark]) -> EditorLineMark? {
         var lo = 0, hi = marks.count
         while lo < hi {

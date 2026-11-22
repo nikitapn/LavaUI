@@ -450,7 +450,7 @@ extension LeafNode {
         guard let anchor = pendingFontAnchor else { return }
         pendingFontAnchor = nil
         let row = editing.layout.rowIndex(ofOffset: anchor.offset)
-        scrollY = max(0, (Double(row) + Double(anchor.fraction)) * Double(font.lineHeight))
+        scrollY = max(0, documentY(ofRow: row, lineHeight: font.lineHeight) + Double(anchor.fraction) * Double(font.lineHeight))
     }
 
     // MARK: Soft wrap, one window at a time
@@ -973,10 +973,10 @@ extension LeafNode {
         guard let f = font ?? FontStore.default else { return nil }
         let inset = textInset
         let rows = editing.layout.rows
-        let row = max(0, min(
-            rows.count - 1,
-            Int(((y - Double(inset)) / Double(f.lineHeight)).rounded(.down))
-        ))
+        // A blank row (`lineGaps`) answers with the row below it.
+        let slot = Int(((y - Double(inset)) / Double(f.lineHeight)).rounded(.down))
+        let gaps = rowGaps
+        let row = max(0, min(rows.count - 1, gaps.isEmpty ? slot : gaps.row(atSlot: max(0, slot)).row))
         let line = rowText(row)
         let local = EditorProbe.measure("text.shapeRow") {
             f.shapedRun(line).index(atX: x - inset)
@@ -1002,8 +1002,11 @@ extension LeafNode {
         let inset = textInset
         let rows = editing.layout.rows
         let position = ((y - Double(inset)) / Double(f.lineHeight)).rounded(.down)
-        guard position >= 0, position < Double(rows.count) else { return nil }
-        let row = Int(position)
+        guard position >= 0 else { return nil }
+        let hit = rowGaps.row(atSlot: Int(min(position, Double(Int.max / 2))))
+        // Nothing is under a blank row.
+        guard !hit.isGap, hit.row < rows.count else { return nil }
+        let row = hit.row
         let line = rowText(row)
         let run = f.shapedRun(line)
         let local = run.index(atX: x - inset)

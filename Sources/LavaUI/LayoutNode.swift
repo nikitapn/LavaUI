@@ -635,6 +635,38 @@ final class LeafNode: YogaBoxNode {
     var keyInterceptor: ((KeyEvent) -> Bool)?
     /// Whole-line marks, sorted by first line. See `EditorLineMark`.
     var lineMarks: [EditorLineMark] = []
+    /// `EditorView(rangeFills:)`: backgrounds behind character ranges.
+    var rangeFills: [EditorRangeFill] = []
+    /// `EditorView(lineGaps:)`, as given: blank rows above logical lines.
+    var lineGaps: [EditorLineGap] = [] {
+        didSet { if lineGaps != oldValue { gapCache = nil } }
+    }
+    private var gapCache: (generation: Int, revision: UInt64, gaps: RowGaps)?
+
+    /// `lineGaps` in visual rows. The same thing while not wrapping; while
+    /// wrapping a gap sits above the first row of its line. Rebuilt when the
+    /// row table is.
+    var rowGaps: RowGaps {
+        // On the text's revision as well as the rows': a line's row moves
+        // with every edit above it, wrapped or not.
+        if let cached = gapCache, cached.generation == rowsGeneration,
+           cached.revision == editing.revision { return cached.gaps }
+        let rowCount = editing.layout.count
+        let gaps = RowGaps(lineGaps.map { gap in
+            (row: gap.line >= logicalLineCount ? rowCount : firstRow(ofLine: gap.line), count: gap.rows)
+        })
+        gapCache = (rowsGeneration, editing.revision, gaps)
+        return gaps
+    }
+
+    /// `EditorView(scrollLink:)`: editors sharing one scroll together.
+    weak var scrollLink: EditorScrollLink? {
+        didSet {
+            guard scrollLink !== oldValue else { return }
+            oldValue?.leave(self)
+            scrollLink?.join(self)
+        }
+    }
     /// Vertical scroll offset in pixels. Positive scrolls content up.
     ///
     /// A `Double`, unlike every other coordinate here, because it is the one
@@ -645,9 +677,13 @@ final class LeafNode: YogaBoxNode {
     /// refinement ran the text stepped up and down by half a line each frame.
     /// Anything derived from it that is on screen is small again, and a
     /// `Float`.
-    var scrollY: Double = 0
+    var scrollY: Double = 0 {
+        didSet { if scrollY != oldValue { scrollLink?.moved(self) } }
+    }
     /// Horizontal offset in pixels. The gutter does not move with it.
-    var scrollX: Float = 0
+    var scrollX: Float = 0 {
+        didSet { if scrollX != oldValue { scrollLink?.moved(self) } }
+    }
     /// Width of the text area (box minus gutter and padding), from the last
     /// emit. Needed to clamp horizontal scrolling against something real.
     var textViewportWidth: Float = 0
@@ -864,7 +900,10 @@ final class LeafNode: YogaBoxNode {
         // to wrapping while scrolled right is pulled back to the margin by the
         // clamp on its next emit, instead of drawing a blank column.
         guard !wraps else { return 0 }
-        return max(0, widestRowWidth(font: font) - textViewportWidth)
+        // Linked editors scroll as far as the widest of them, or the narrower
+        // one would pull its partner back from a line it does not have.
+        let widest = scrollLink?.widestRow(font: font) ?? widestRowWidth(font: font)
+        return max(0, widest - textViewportWidth)
     }
 
     func scrollByX(_ delta: Float, font: UIFont) {
@@ -927,7 +966,7 @@ final class LeafNode: YogaBoxNode {
     /// same numbers the paint does, and a drag that computed its own would be
     /// a second definition of where the thumb is.
     func verticalScrollbar(font: UIFont) -> Scrollbar.Metrics? {
-        let content = Float(editing.layout.count) * font.lineHeight + textInset * 2
+        let content = Float(editing.layout.count + rowGaps.total) * font.lineHeight + textInset * 2
         return Scrollbar.metrics(
             track: viewportHeight, content: content,
             offset: Float(scrollY), maxOffset: Float(maxScrollY(lineHeight: font.lineHeight))
@@ -953,8 +992,10 @@ final class LeafNode: YogaBoxNode {
 
     /// Where a row starts in the document, in pixels — in `Double`, like
     /// `scrollY`, since it is the same kind of number. See `scrollY`.
+    ///
+    /// Blank rows above it count (`lineGaps`).
     func documentY(ofRow row: Int, lineHeight: Float) -> Double {
-        Double(row) * Double(lineHeight)
+        Double(rowGaps.slot(ofRow: row)) * Double(lineHeight)
     }
 
     /// Where a row starts below the top of the text area. Small whenever the
@@ -964,14 +1005,17 @@ final class LeafNode: YogaBoxNode {
     }
 
     /// The row under a point `localY` below the top of the text area.
+    /// On a blank row (`lineGaps`), the row below it.
     func row(atScreenY localY: Float, lineHeight: Float) -> Int {
         guard lineHeight > 0 else { return 0 }
-        return Int(((scrollY + Double(localY)) / Double(lineHeight)).rounded(.down))
+        let slot = Int(((scrollY + Double(localY)) / Double(lineHeight)).rounded(.down))
+        let gaps = rowGaps
+        return gaps.isEmpty ? slot : gaps.row(atSlot: slot).row
     }
 
     /// Largest legal scroll offset for the current content.
     func maxScrollY(lineHeight: Float) -> Double {
-        let content = Double(editing.layout.count) * Double(lineHeight)
+        let content = Double(editing.layout.count + rowGaps.total) * Double(lineHeight)
         let visible = Double(viewportHeight - textInset * 2)
         return max(0, content - visible)
     }
@@ -981,6 +1025,12 @@ final class LeafNode: YogaBoxNode {
     /// Only ever shrinks them: an offset that is still legal is left exactly
     /// where it is, so this cannot fight a scroll in progress.
     func clampScroll(font: UIFont) {
+        // A clamp is this editor fitting its own content, not a scroll: it
+        // does not travel to a linked partner.
+        scrollLink?.quietly { clampScrollUnlinked(font: font) } ?? clampScrollUnlinked(font: font)
+    }
+
+    private func clampScrollUnlinked(font: UIFont) {
         if scrollY > 0 {
             scrollY = max(0, min(scrollY, maxScrollY(lineHeight: font.lineHeight)))
         }
@@ -1148,7 +1198,7 @@ final class LeafNode: YogaBoxNode {
         let row = editing.layout.rowIndex(
             ofOffset: editing.offset(of: editing.focus), affinity: editing.affinity
         )
-        let rowTop = Double(row) * Double(lineHeight)
+        let rowTop = documentY(ofRow: row, lineHeight: lineHeight)
         let visible = Double(viewportHeight - textInset * 2)
         if rowTop < scrollY {
             scrollY = rowTop

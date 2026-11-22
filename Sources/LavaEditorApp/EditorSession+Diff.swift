@@ -1,4 +1,5 @@
 import Foundation
+import LavaDiffCore
 import LavaGitCore
 import LavaProjectCore
 import LavaUI
@@ -59,7 +60,7 @@ extension EditorSession {
         let newTitle = document.isModified ? "Editor · \(path) (unsaved)" : "Working tree · \(path)"
         show(DiffModel(
             old: headText, new: document.text, oldTitle: oldTitle, newTitle: newTitle,
-            highlighter: document.language.highlighter, documentID: document.id
+            highlighter: document.language.highlighter, documentID: document.id, isEditable: true
         ))
     }
 
@@ -79,7 +80,7 @@ extension EditorSession {
         }
         show(DiffModel(
             old: oldText, new: document.text, oldTitle: Self.title(old), newTitle: Self.title(new),
-            highlighter: document.language.highlighter, documentID: document.id
+            highlighter: document.language.highlighter, documentID: document.id, isEditable: true
         ))
     }
 
@@ -148,7 +149,9 @@ extension EditorSession {
         }
         show(DiffModel(
             old: old, new: new, oldTitle: oldTitle, newTitle: newTitle,
-            highlighter: language.highlighter, documentID: documentID
+            highlighter: language.highlighter, documentID: documentID,
+            // Staged is the index, not the buffer; a deleted file has none.
+            isEditable: item.group != .staged && documentID != nil
         ))
     }
 
@@ -156,18 +159,55 @@ extension EditorSession {
         diff = nil
     }
 
-    /// Scrolls to the next or previous change, leaving a few lines above it so
-    /// it reads in context rather than pinned to the top edge.
+    /// Brings the next or previous change to the middle of the new side;
+    /// the old side follows through the shared scroll.
     func stepDiff(forward: Bool) {
-        guard let diff = visibleDiff, let row = diff.step(forward: forward) else { return }
-        let lineH = (documentFont ?? FontStore.default)?.lineHeight ?? 20
-        diffScroll.scroll(to: Float(max(0, row - 3)) * lineH)
+        guard let diff = visibleDiff, let hunk = diff.step(forward: forward) else { return }
+        // The caret at the change's first character, nothing selected. A
+        // deletion has no line of its own on the new side, so it is the line
+        // that now follows it — or the end, after the last.
+        let lines = diff.diff.new
+        let starts = DiffAlignment.lineStarts(lines)
+        let offset = hunk.new.lowerBound < starts.count
+            ? starts[hunk.new.lowerBound]
+            : (starts.last ?? 0) + (lines.lines.last?.count ?? 0)
+        let controller = diff.newController
+        // Not mounted yet when the comparison has only just opened.
+        if !controller.reveal(range: offset..<offset) {
+            FrameTasks.after { controller.reveal(range: offset..<offset) }
+        }
+    }
+
+    /// After an edit to the document a comparison is showing: re-diff.
+    ///
+    /// In the same frame as the edit whenever the last diff was quick, which
+    /// is nearly always. The blank rows are stated in lines, so between an
+    /// edit and its re-diff every gap below the edit sits a line out of place
+    /// on the edited side, and the text around it jumped by a line and back.
+    /// A file big enough that a diff costs a noticeable part of a frame waits
+    /// for typing to pause instead, and takes the jump.
+    func scheduleDiffRefresh() {
+        guard let diff, diff.isEditable, diff.documentID == active.id,
+              diff.newText != active.text else { return }
+        diffGeneration &+= 1
+        if diff.lastUpdateSeconds < 0.004 {
+            diff.update(new: active.text)
+            return
+        }
+        let generation = diffGeneration
+        let owner = LanguageSessionRef(self)
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.12) {
+            MainQueue.async {
+                guard let session = owner.session, session.diffGeneration == generation,
+                      let diff = session.diff, diff.documentID == session.active.id else { return }
+                diff.update(new: session.active.text)
+            }
+        }
     }
 
     private func show(_ model: DiffModel) {
         notice = nil
         diff = model
-        diffScroll.scrollToTop()
         // Straight to the first change: that is what a comparison is opened
         // to look at, and a file with one edit in its last screen would
         // otherwise open on a page of context.

@@ -41,6 +41,7 @@ final class EditorSession {
         didSet {
             projectSearch.buffersChanged()
             scheduleLanguageSync()
+            if diff != nil { scheduleDiffRefresh() }
         }
     }
     var activeIndex = 0 {
@@ -134,7 +135,8 @@ final class EditorSession {
     /// The comparison on screen instead of the editor, when there is one. It
     /// belongs to a document, and shows only while that document is in front.
     var diff: DiffModel?
-    @ObservationIgnored let diffScroll = ScrollPosition()
+    /// Bumped per edit while a comparison is up; see `scheduleDiffRefresh`.
+    @ObservationIgnored var diffGeneration = 0
 
     /// The open folder, if any. See `EditorSession+Project`.
     var project: ProjectSession? {

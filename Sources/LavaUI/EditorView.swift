@@ -30,6 +30,11 @@ public struct CodeStyle {
     public var scrollbarSpansGutter = false
     /// Hint painted over an empty buffer.
     public var placeholder: String?
+    /// Behind blank rows (`EditorView(lineGaps:)`), or the gutter's colour
+    /// when nil.
+    public var gapFill: Color?
+    /// Diagonal hatching over blank rows, or none when nil.
+    public var gapStripe: Color?
 
     /// Creates a palette. Colours left `nil` come from the current theme, apart
     /// from the two search fills, which have fixed amber defaults.
@@ -384,12 +389,106 @@ public struct EditorLineMark: Sendable, Equatable {
     /// Colour behind the marked lines' text, or `nil` for none. Wins over the
     /// current-line highlight; the caret's line number still shows which it is.
     public var fill: Color?
+    /// A character drawn after the line number — a diff's `+` or `−` — in
+    /// `bar`'s colour, or the gutter's when there is no bar.
+    public var sign: String?
 
     /// Creates a mark. Every parameter matches the property of the same name.
-    public init(lines: Range<Int>, bar: Color? = nil, fill: Color? = nil) {
+    public init(lines: Range<Int>, bar: Color? = nil, fill: Color? = nil, sign: String? = nil) {
         self.lines = lines
         self.bar = bar
         self.fill = fill
+        self.sign = sign
+    }
+}
+
+/// Blank rows above a line: room an editor leaves for lines it does not have,
+/// so a line stays beside its counterpart in another editor — a side-by-side
+/// diff's filler. Not text: no number, no caret, and a click on one lands on
+/// the line below.
+public struct EditorLineGap: Sendable, Equatable {
+    /// The logical line the rows go above, from 0. The line count puts them
+    /// below the last line.
+    public var line: Int
+    /// How many rows.
+    public var rows: Int
+
+    public init(line: Int, rows: Int) {
+        self.line = line
+        self.rows = rows
+    }
+}
+
+/// A background behind a run of characters — a diff's changed words.
+/// Drawn under the selection and search matches.
+public struct EditorRangeFill: Sendable, Equatable {
+    /// Character offsets into the editor's text.
+    public var range: Range<Int>
+    public var color: Color
+
+    public init(range: Range<Int>, color: Color) {
+        self.range = range
+        self.color = color
+    }
+}
+
+/// Editors that scroll together: give two `EditorView`s the same link and a
+/// scroll of either — wheel, scrollbar, caret, `reveal` — moves both, on
+/// both axes. Their content should be the same height, which is what
+/// `lineGaps` are for; each still clamps to its own.
+///
+/// A reference the app keeps for as long as the editors are shown; it holds
+/// the editors weakly.
+public final class EditorScrollLink {
+    private var members: [Weak] = []
+    private var applying = false
+
+    private struct Weak { weak var leaf: LeafNode? }
+
+    public init() {}
+
+    func join(_ leaf: LeafNode) {
+        members.removeAll { $0.leaf == nil || $0.leaf === leaf }
+        // A newcomer takes the offset the others already have, so a pane
+        // that is rebuilt does not jump its partner back to the top.
+        if let other = members.first?.leaf {
+            applying = true
+            leaf.scrollY = other.scrollY
+            leaf.scrollX = other.scrollX
+            applying = false
+        }
+        members.append(Weak(leaf: leaf))
+    }
+
+    func leave(_ leaf: LeafNode) {
+        members.removeAll { $0.leaf == nil || $0.leaf === leaf }
+    }
+
+    /// Runs `body` without passing on what it does to the offsets.
+    func quietly(_ body: () -> Void) {
+        let was = applying
+        applying = true
+        body()
+        applying = was
+    }
+
+    /// The widest row of any member, for a horizontal range they share.
+    func widestRow(font: UIFont) -> Float {
+        members.compactMap { $0.leaf?.widestRowWidth(font: font) }.max() ?? 0
+    }
+
+    func moved(_ source: LeafNode) {
+        guard !applying else { return }
+        applying = true
+        defer { applying = false }
+        for member in members {
+            guard let leaf = member.leaf, leaf !== source else { continue }
+            leaf.scrollY = source.scrollY
+            leaf.scrollX = source.scrollX
+        }
+        // The partner is paint state like the source's own offset: a redraw,
+        // never a body.
+        ViewInvalidation.markNeedsRedraw()
     }
 }
 
@@ -480,6 +579,12 @@ public struct EditorView: PrimitiveView {
     public var onFollow: ((Int) -> Void)?
     /// Handle for revealing lines, restoring positions and replacing matches.
     public var controller: EditorController?
+    /// Blank rows between lines. See `EditorLineGap`.
+    public var lineGaps: [EditorLineGap]
+    /// Backgrounds behind character ranges. See `EditorRangeFill`.
+    public var rangeFills: [EditorRangeFill]
+    /// Shared with another editor to scroll in step. See `EditorScrollLink`.
+    public var scrollLink: EditorScrollLink?
 
     /// Creates an editor bound to `text`. Every parameter matches the property of the same name.
     public init(
@@ -504,8 +609,14 @@ public struct EditorView: PrimitiveView {
         onCompletionPick: ((Int?) -> Void)? = nil,
         onPointerOffset: ((Int?) -> Void)? = nil,
         onKey: ((KeyEvent) -> Bool)? = nil,
-        onFollow: ((Int) -> Void)? = nil
+        onFollow: ((Int) -> Void)? = nil,
+        lineGaps: [EditorLineGap] = [],
+        rangeFills: [EditorRangeFill] = [],
+        scrollLink: EditorScrollLink? = nil
     ) {
+        self.lineGaps = lineGaps
+        self.rangeFills = rangeFills
+        self.scrollLink = scrollLink
         self._text = text
         self.isReadOnly = isReadOnly
         self.rules = rules
@@ -664,6 +775,9 @@ public struct EditorView: PrimitiveView {
         // Sorted once here so the paint can binary-search a screenful of rows.
         leaf.lineMarks = lineMarks.sorted { $0.lines.lowerBound < $1.lines.lowerBound }
         leaf.onDecorationTap = onDecorationTap
+        leaf.lineGaps = lineGaps
+        leaf.rangeFills = rangeFills.sorted { $0.range.lowerBound < $1.range.lowerBound }
+        leaf.scrollLink = scrollLink
         leaf.semanticHighlights = semanticHighlights?.isEmpty == false ? semanticHighlights : nil
         leaf.hoverCard = hoverCard
         leaf.completion = completion
