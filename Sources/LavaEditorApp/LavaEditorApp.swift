@@ -167,6 +167,17 @@ struct LavaEditorApp {
                             isEnabled: session.active.preview == nil
                         ) { session.openGoto() }
                     }
+                    Menu("Assistant", id: "assistant") {
+                        MenuItem(
+                            "Ask Claude about These Lines", id: "assistant.inline-chat",
+                            shortcut: KeyShortcut(KeyCode.i, .primary),
+                            isEnabled: session.active.preview == nil && session.active.isLoaded
+                        ) { session.openInlineChat() }
+                        MenuItem(
+                            "Close Inline Chat", id: "assistant.close",
+                            isEnabled: session.inlineChat != nil
+                        ) { session.closeInlineChat() }
+                    }
                     Menu("Git", id: "git") {
                         MenuItem(
                             "Switch Branch or Worktree…", id: "git.switch",
@@ -236,6 +247,13 @@ struct LavaEditorApp {
                 }
             },
             onRawKey: { event in
+                // Escape in the chat's field closes the chat, wherever the
+                // field's own handling would have sent it.
+                if let chat = session.inlineChat, chat.inputFocused, session.pendingWorkspace == nil,
+                   event.button == KeyCode.escape {
+                    if event.x > 0 { session.closeInlineChat() }
+                    return true
+                }
                 guard session.pendingWorkspace != nil else { return false }
                 if event.x > 0, event.button == KeyCode.escape {
                     session.pendingWorkspace = nil

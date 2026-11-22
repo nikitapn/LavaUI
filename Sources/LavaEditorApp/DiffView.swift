@@ -169,8 +169,15 @@ struct DiffPane: View {
                 .agentId("diff-previous")
             Button("Next ›") { session.stepDiff(forward: true) }
                 .agentId("diff-next")
-            Button("Done") { session.closeDiff() }
-                .agentId("diff-done")
+            if let accept = model.proposalAccept {
+                Button("Reject") { session.closeDiff() }
+                    .agentId("diff-reject")
+                Button("Accept") { accept() }
+                    .agentId("diff-accept")
+            } else {
+                Button("Done") { session.closeDiff() }
+                    .agentId("diff-done")
+            }
         }
         .background(theme.panel)
     }

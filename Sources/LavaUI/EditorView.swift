@@ -648,6 +648,9 @@ public struct EditorView: PrimitiveView {
     /// See `EditorStateStore`.
     public var stateStore: EditorStateStore?
     public var stateKey: AnyHashable?
+    /// Told where the gap above its line was drawn, for `.editorZone`. See
+    /// `EditorZoneAnchor`.
+    public var zone: EditorZoneAnchor?
 
     /// Creates an editor bound to `text`. Every parameter matches the property of the same name.
     public init(
@@ -678,8 +681,10 @@ public struct EditorView: PrimitiveView {
         rangeFills: [EditorRangeFill] = [],
         scrollLink: EditorScrollLink? = nil,
         stateStore: EditorStateStore? = nil,
-        stateKey: AnyHashable? = nil
+        stateKey: AnyHashable? = nil,
+        zone: EditorZoneAnchor? = nil
     ) {
+        self.zone = zone
         self.stateStore = stateStore
         self.stateKey = stateKey
         self.lineGaps = lineGaps
@@ -864,6 +869,7 @@ public struct EditorView: PrimitiveView {
         leaf.lineMarks = lineMarks.sorted { $0.lines.lowerBound < $1.lines.lowerBound }
         leaf.onDecorationTap = onDecorationTap
         leaf.lineGaps = lineGaps
+        leaf.zoneAnchor = zone
         leaf.rangeFills = rangeFills.sorted { $0.range.lowerBound < $1.range.lowerBound }
         leaf.scrollLink = scrollLink
         leaf.semanticHighlights = semanticHighlights?.isEmpty == false ? semanticHighlights : nil

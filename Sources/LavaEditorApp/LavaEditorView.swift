@@ -81,7 +81,8 @@ struct LavaEditorView: View {
     }
 
     private func editor(_ appearance: EditorAppearance) -> some View {
-        VStack(flexGrow: 1, spacing: 0) {
+        let chat = session.inlineChat.flatMap { $0.documentID == session.active.id ? $0 : nil }
+        return VStack(flexGrow: 1, spacing: 0) {
             if let preview = session.active.preview {
                 switch preview.content {
                 #if canImport(LavaEditorExtensionAPI)
@@ -136,12 +137,19 @@ struct LavaEditorView: View {
                     onPointerOffset: { session.pointerMoved(to: $0) },
                     onKey: { session.editorKey($0) },
                     onFollow: { session.follow(at: $0) },
+                    lineGaps: chat.map { [EditorLineGap(line: session.chatAnchor.line, rows: $0.rows)] } ?? [],
                     stateStore: session.editorStates,
-                    stateKey: session.active.id
+                    stateKey: session.active.id,
+                    zone: session.chatAnchor
                 )
                 .flexGrow(1)
                 .theme(appearance.documentTheme)
                 .agentId("editor")
+                .editorZone(session.chatAnchor, isPresented: chat != nil) {
+                    if let chat {
+                        InlineChatView(session: session, chat: chat, appearance: appearance)
+                    }
+                }
             }
         }
         .padding(.top, 6)

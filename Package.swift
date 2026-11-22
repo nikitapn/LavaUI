@@ -84,6 +84,7 @@ var products: [Product] = [
     .library(name: "WeatherCore", targets: ["WeatherCore"]),
     .library(name: "LavaViewCore", targets: ["LavaViewCore"]),
     .library(name: "LavaDiffCore", targets: ["LavaDiffCore"]),
+    .library(name: "LavaAgentCore", targets: ["LavaAgentCore"]),
     .library(name: "LavaGitCore", targets: ["LavaGitCore"]),
     .library(name: "LavaProjectCore", targets: ["LavaProjectCore"]),
     .library(name: "LavaLSPCore", targets: ["LavaLSPCore"]),
@@ -142,6 +143,10 @@ var targets: [Target] = [
     // Line diff, word-level highlights, side-by-side rows. No engine — see
     // Sources/LavaDiffCore.
     .target(name: "LavaDiffCore"),
+    // A coding agent's sessions and its stream, as LavaEditor's inline chat
+    // drives them: listing, the CLI's JSON lines, the edit it proposes. No
+    // UI, no process — Sources/LavaAgentCore.
+    .target(name: "LavaAgentCore"),
     // libgit2, for LavaGitCore. Header-only on our side, like CArchive.
     .systemLibrary(
         name: "CGit2",
@@ -522,7 +527,7 @@ var targets: [Target] = [
         name: "LavaEditorApp",
         dependencies: [
             "CExtensionHost",
-            "LavaUI", "LavaHost", "LavaText", "LavaDiffCore", "LavaGitCore", "LavaProjectCore",
+            "LavaUI", "LavaHost", "LavaText", "LavaDiffCore", "LavaGitCore", "LavaProjectCore", "LavaAgentCore",
             "LavaExplorerCore", "LavaLSPCore", "LavaEditorSettings", "LavaTerminal",
         ] + (haveNprpc ? [Target.Dependency("LavaClient"), "LavaEditorExtensionAPI",
                            .product(name: "NPRPC", package: "nprpc_swift")] : []),
@@ -605,6 +610,7 @@ var targets: [Target] = [
     .testTarget(name: "WeatherCoreTests", dependencies: ["WeatherCore"]),
     .testTarget(name: "LavaViewCoreTests", dependencies: ["LavaViewCore"]),
     .testTarget(name: "LavaDiffCoreTests", dependencies: ["LavaDiffCore"]),
+    .testTarget(name: "LavaAgentCoreTests", dependencies: ["LavaAgentCore"]),
     .testTarget(name: "LavaGitCoreTests", dependencies: ["LavaGitCore"]),
     .testTarget(name: "LavaProjectCoreTests", dependencies: ["LavaProjectCore", "LavaGitCore"]),
     .testTarget(name: "LavaLSPCoreTests", dependencies: ["LavaLSPCore"]),

@@ -653,6 +653,8 @@ final class LeafNode: YogaBoxNode {
     var focusAlias: NodeID?
     /// `EditorView(rangeFills:)`: backgrounds behind character ranges.
     var rangeFills: [EditorRangeFill] = []
+    /// `EditorView(zone:)`: told where the gap at its line was drawn.
+    var zoneAnchor: EditorZoneAnchor?
     /// `EditorView(lineGaps:)`, as given: blank rows above logical lines.
     var lineGaps: [EditorLineGap] = [] {
         didSet { if lineGaps != oldValue { gapCache = nil } }

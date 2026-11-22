@@ -29,6 +29,9 @@ final class DiffModel {
     private(set) var diff: TextDiff
     private(set) var alignment: DiffAlignment
 
+    /// Set when the new side is an inline chat's proposal rather than a
+    /// file: the toolbar offers Accept and Reject instead of Done.
+    @ObservationIgnored let proposalAccept: (() -> Void)?
     @ObservationIgnored let highlighter: SyntaxHighlighter
     /// Both editors scroll as one.
     @ObservationIgnored let scrollLink = EditorScrollLink()
@@ -39,8 +42,10 @@ final class DiffModel {
 
     init(
         old: String, new: String, oldTitle: String, newTitle: String,
-        highlighter: SyntaxHighlighter, documentID: Int?, isEditable: Bool
+        highlighter: SyntaxHighlighter, documentID: Int?, isEditable: Bool,
+        proposalAccept: (() -> Void)? = nil
     ) {
+        self.proposalAccept = proposalAccept
         self.oldTitle = oldTitle
         self.newTitle = newTitle
         self.documentID = documentID

@@ -42,6 +42,11 @@ public struct RowGaps: Equatable, Sendable {
         return low == 0 ? 0 : through[low - 1]
     }
 
+    /// Blank rows directly above `row` — its own gap alone.
+    public func count(aboveRow row: Int) -> Int {
+        before(row: row) - (row > 0 ? before(row: row - 1) : 0)
+    }
+
     /// Where `row` is drawn, counting blank rows.
     public func slot(ofRow row: Int) -> Int { row + before(row: row) }
 

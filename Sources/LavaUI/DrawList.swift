@@ -1684,6 +1684,11 @@ public final class DrawList {
             }
             NodeVisibility.mark(box.id)
 
+            if let zone = node as? EditorZoneNode {
+                emitEditorZone(zone, x: x, y: y, w: w, h: h)
+                return
+            }
+
             if let styled = node as? StyleBoxNode {
                 withBlurScope(
                     content: styled.contentBlurRadius,
@@ -2717,6 +2722,26 @@ extension DrawList {
                 : firstTop + Float(gaps.slot(ofRow: row) - firstSlot) * lineH
         }
 
+        // Where the zone's gap is, for `.editorZone` to put its view: the
+        // gap's rows above the anchor line, less the hint row that sits
+        // nearest the line. Every frame, scrolled out of view or not — the
+        // zone node clips, and a stale answer is a box left behind.
+        if let anchor = leaf.zoneAnchor {
+            let line = anchor.line
+            let row = line >= leaf.logicalLineCount ? rows.count : leaf.firstRow(ofLine: line)
+            let count = gaps.count(aboveRow: row)
+            let hint = row < rows.count ? leaf.hintRowCount(above: row) : 0
+            if count > hint {
+                let bottom = rowTopOf(row) - Float(hint) * lineH
+                let height = Float(count - hint) * lineH
+                let left = leaf.gutterWidth
+                anchor.frame = CGRect(x: CGFloat(left), y: CGFloat(bottom - height - y),
+                                      width: CGFloat(max(0, w - left)), height: CGFloat(height))
+            } else {
+                anchor.frame = nil
+            }
+        }
+
         // Pass 1 — chrome that must not scroll horizontally. The gutter stays
         // pinned while text moves under it, which is the whole reason this is
         // two clip regions instead of one.
@@ -3383,6 +3408,30 @@ extension DrawList {
             let alpha = Float(command.color >> 24) * alphaMultiplier
             command.color = command.color & 0x00ff_ffff | (UInt32(clamping: Int(alpha.rounded())) << 24)
             appendCommand(command)
+        }
+    }
+}
+
+extension DrawList {
+    /// An editor and the view at its zone (`.editorZone`). The editor first:
+    /// drawing it is what says where its gap is now. The zone is then drawn
+    /// there, whatever the last layout said — in the same frame the text
+    /// moved — and laid out there on the next, so its clicks catch up.
+    fileprivate func emitEditorZone(_ zone: EditorZoneNode, x: Float, y: Float, w: Float, h: Float) {
+        emitNode(zone.contentNode, ox: x, oy: y)
+        guard zone.isPresented else { return }
+        // A level raised during emit is cleared when the frame ends, so the
+        // layout is asked for after it.
+        defer { if zone.place() { FrameTasks.after { ViewInvalidation.markNeedsLayout() } } }
+        guard let frame = zone.anchor.frame, let laid = zone.laidOutFrame else { return }
+        // Only a move is drawn ahead of layout. A box laid out at another
+        // width — the first frame, a resized window — would be drawn with its
+        // contents wrapped for that width; it waits the frame instead.
+        guard abs(laid.w - Float(frame.width)) < 0.5, abs(laid.h - Float(frame.height)) < 0.5,
+              abs(laid.x - Float(frame.minX)) < 0.5 else { return }
+        let shift = Float(frame.minY) - laid.y
+        withContentClip(true, x: x, y: y, w: w, h: h) {
+            emitNode(zone.zoneBox, ox: x, oy: y + shift)
         }
     }
 }

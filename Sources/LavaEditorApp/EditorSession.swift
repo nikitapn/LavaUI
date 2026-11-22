@@ -91,6 +91,11 @@ final class EditorSession {
     @ObservationIgnored weak var visibleSurface: EmbeddedPreview?
     #endif
     var extensionRunning = false
+    /// Ctrl+I's box between lines, while it is open. See `InlineChat`.
+    var inlineChat: InlineChat?
+    /// Where the editor drew the box's gap. Always the same object: the
+    /// editor's zone wrapper stays in the tree whether a chat is open or not.
+    @ObservationIgnored let chatAnchor = EditorZoneAnchor(line: 0)
     /// Git → Switch Branch or Worktree…, while it is up. See `BranchPicker`.
     var branchPicker: BranchPicker?
     @ObservationIgnored var switchingBranch = false

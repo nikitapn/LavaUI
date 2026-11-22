@@ -41,4 +41,9 @@ final class RowGapsTests: XCTestCase {
         XCTAssertEqual(gaps.entries(above: 3...5).map(\.row), [4, 5])
         XCTAssertEqual(gaps.entries(above: 0...2).map(\.row), [2])
     }
+
+    func testCountAboveOneRow() {
+        let gaps = RowGaps([(row: 0, count: 2), (row: 3, count: 4), (row: 6, count: 1)])
+        XCTAssertEqual((0...7).map { gaps.count(aboveRow: $0) }, [2, 0, 0, 4, 0, 0, 1, 0])
+    }
 }
