@@ -97,6 +97,7 @@ var products: [Product] = [
 ]
 
 var targets: [Target] = [
+    .target(name: "CExtensionHost", linkerSettings: [.linkedLibrary("dl")]),
     // Pure text-editing logic: no C++ interop, no Vulkan.
     .target(name: "LavaText"),
     // Application menu IR + DSL. Headless-testable.
@@ -520,6 +521,7 @@ var targets: [Target] = [
     .executableTarget(
         name: "LavaEditorApp",
         dependencies: [
+            "CExtensionHost",
             "LavaUI", "LavaHost", "LavaText", "LavaDiffCore", "LavaGitCore", "LavaProjectCore",
             "LavaExplorerCore", "LavaLSPCore", "LavaEditorSettings", "LavaTerminal",
         ] + (haveNprpc ? [Target.Dependency("LavaClient"), "LavaEditorExtensionAPI",

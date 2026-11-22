@@ -34,29 +34,6 @@ enum SelectionExtension {
         #endif
     }
 
-    static func host(_ arguments: [String]) -> Int32 {
-        guard arguments.count == 4, let invocation = UInt64(arguments[2]),
-              let library = dlopen(arguments[0], RTLD_NOW | RTLD_LOCAL),
-              let entry = dlsym(library, "lava_editor_activate_v1") else { return 2 }
-        typealias Invoke = @convention(c) (UnsafePointer<CChar>, UnsafePointer<CChar>, UInt64) -> Int32
-        let activate = unsafeBitCast(entry, to: Invoke.self)
-        return arguments[3].withCString { command in
-            arguments[1].withCString { activate(command, $0, invocation) }
-        }
-    }
-
-    static func launch(_ installed: InstalledCommand, reference: String, invocation: UInt64, deadline: String) throws {
-        let executable = try FileManager.default.destinationOfSymbolicLink(atPath: "/proc/self/exe")
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/timeout")
-        process.arguments = ["--signal=KILL", deadline, executable, "--extension-host", installed.library.path, reference, String(invocation), installed.command.id]
-        try process.run()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            throw Failure(message: "Extension command failed or timed out (status \(process.terminationStatus)).")
-        }
-    }
-
     static func run(_ installed: InstalledCommand, text: String, document: Int, revision: Int,
                     startByte: Int) throws -> String {
         #if canImport(LavaEditorExtensionAPI)
@@ -67,7 +44,7 @@ enum SelectionExtension {
                                          text: text)
         let invocation = service.begin(snapshot)
         defer { service.finish(invocation) }
-        try launch(installed, reference: reference, invocation: invocation, deadline: "5s")
+        try ExtensionHost.invoke(installed, reference: reference, invocation: invocation, timeoutMS: 5_000)
         guard let edit = service.result(for: invocation) else { throw Failure(message: "Formatter submitted no edit.") }
         return edit
         #else
@@ -85,13 +62,12 @@ private final class FormatterCommands: SelectionCommandServant, @unchecked Senda
 
     private let lock = NSLock()
     private var active: [UInt64: Invocation] = [:]
-    private var nextID: UInt64 = 0
 
     func begin(_ snapshot: SelectionSnapshot) -> UInt64 {
         lock.withLock {
-            nextID += 1
-            active[nextID] = Invocation(selection: snapshot)
-            return nextID
+            let token = invocationToken(excluding: active)
+            active[token] = Invocation(selection: snapshot)
+            return token
         }
     }
 

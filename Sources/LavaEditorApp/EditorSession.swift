@@ -894,6 +894,7 @@ final class EditorSession {
     }
 
     func reloadExtensions() {
+        ExtensionHost.reload()
         extensions = ExtensionCatalog.discover()
         actionSnapshot = nil
         refreshLineActions()

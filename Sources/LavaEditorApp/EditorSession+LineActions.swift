@@ -135,7 +135,6 @@ private final class LineActionService: DocumentActionProviderServant, @unchecked
     }
     private let lock = NSLock()
     private var requests: [UInt64: Request] = [:]
-    private var sequence: UInt64 = 0
 
     private static let endpoint = Result<(LineActionService, String), Error> {
         let poa = try ClientRpcRuntime.start().createPoa(maxObjects: 1)
@@ -148,13 +147,13 @@ private final class LineActionService: DocumentActionProviderServant, @unchecked
     static func invoke(_ provider: InstalledCommand, path: String, text: String, action: String) throws -> Reply {
         let (service, reference) = try endpoint.get()
         let invocation = service.lock.withLock {
-            service.sequence &+= 1
-            service.requests[service.sequence] = Request(document: ActionDocument(path: path, text: text, actionId: action))
-            return service.sequence
+            let token = invocationToken(excluding: service.requests)
+            service.requests[token] = Request(document: ActionDocument(path: path, text: text, actionId: action))
+            return token
         }
         defer { service.lock.withLock { service.requests[invocation] = nil } }
-        try SelectionExtension.launch(provider, reference: reference, invocation: invocation,
-                                      deadline: action.isEmpty ? "10s" : "10m")
+        try ExtensionHost.invoke(provider, reference: reference, invocation: invocation,
+                                 timeoutMS: action.isEmpty ? 10_000 : 600_000, reuse: action.isEmpty)
         guard let reply = service.lock.withLock({ service.requests[invocation]?.reply }) else {
             throw SelectionExtension.Failure(message: "Extension returned without a result.")
         }

@@ -11,8 +11,8 @@ import LavaUI
 @main
 struct LavaEditorApp {
     static func main() {
-        if CommandLine.arguments.dropFirst().first == "--extension-host" {
-            exit(SelectionExtension.host(Array(CommandLine.arguments.dropFirst(2))))
+        if let status = ExtensionHost.entryPoint(Array(CommandLine.arguments.dropFirst())) {
+            exit(status)
         }
         SelectionExtension.start()
         // Before the session, which reads the wrap and line-number settings
