@@ -1,8 +1,8 @@
 import Foundation
 
-/// What one line of `claude -p --output-format stream-json
-/// --include-partial-messages` means to a chat view.
-public enum ClaudeEvent: Equatable, Sendable {
+/// What a line of an agent CLI's JSON output means to a chat view —
+/// Claude Code's `stream-json` and Codex's `exec --json` alike.
+public enum AgentEvent: Equatable, Sendable {
     /// The process is up; `session` is the id this conversation is saved
     /// under — a new one when the session was forked.
     case started(session: String, model: String)
@@ -19,10 +19,11 @@ public enum ClaudeEvent: Equatable, Sendable {
     /// that the partial events already delivered.
     case ignored
 
-    /// Parses one line. A line that is not JSON is `.ignored`, not an error:
-    /// the CLI is another program, and a chat that died on its first
-    /// unexpected line would be worse than one that skips it.
-    public static func parse(_ line: Data) -> ClaudeEvent {
+    /// Parses one line of `claude -p --output-format stream-json
+    /// --include-partial-messages`. A line that is not JSON is `.ignored`,
+    /// not an error: the CLI is another program, and a chat that died on its
+    /// first unexpected line would be worse than one that skips it.
+    public static func claude(_ line: Data) -> AgentEvent {
         guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
               let type = object["type"] as? String else { return .ignored }
         switch type {

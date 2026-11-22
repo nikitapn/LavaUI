@@ -36,9 +36,9 @@ struct InlineChatView: View {
         let place = chat.lines.count == 1
             ? "line \(chat.lines.lowerBound + 1)"
             : "lines \(chat.lines.lowerBound + 1)–\(chat.lines.upperBound + 1)"
-        let sessionTitle = chat.choice.map { "Fork of " + $0.title } ?? "New Claude session"
+        let sessionTitle = chat.choice.map { "Fork of " + $0.title } ?? "New session"
         return HStack(alignment: .center, spacing: 8) {
-            Text("Claude", color: theme.accent, font: session.fonts.statusEmphasis)
+            Text(Self.name(chat.agent), color: theme.accent, font: session.fonts.statusEmphasis)
             pill(sessionTitle, theme: theme, enabled: !chat.started) {
                 chat.pickingSession.toggle()
             }
@@ -83,17 +83,21 @@ struct InlineChatView: View {
         let chat = self.chat
         return ScrollView(.vertical) {
             VStack(spacing: 2) {
-                sessionRow(title: "New Claude session", detail: "Starts with no history", theme: theme,
-                           isChosen: chat.choice == nil, id: "inline-chat-new") {
-                    chat.choice = nil
-                    chat.pickingSession = false
-                    chat.inputFocused = true
+                ForEach([AgentSession.Agent.claude, .codex], id: \.rawValue) { agent in
+                    sessionRow(title: "New \(Self.name(agent)) session", detail: "Starts with no history",
+                               agent: agent, theme: theme,
+                               isChosen: chat.choice == nil && chat.newAgent == agent, id: "inline-chat-new-\(agent.rawValue)") {
+                        chat.choice = nil
+                        chat.newAgent = agent
+                        chat.pickingSession = false
+                        chat.inputFocused = true
+                    }
                 }
                 if !chat.sessionsLoaded {
                     Text("Reading sessions…", color: .muted, font: session.fonts.status).padding(6)
                 }
                 ForEach(Array(chat.sessions.prefix(60).enumerated()), id: \.offset) { index, agent in
-                    sessionRow(title: agent.title, detail: Self.detail(agent, chat: chat), theme: theme,
+                    sessionRow(title: agent.title, detail: Self.detail(agent, chat: chat), agent: agent.agent, theme: theme,
                                isChosen: chat.choice?.id == agent.id, id: "inline-chat-session-\(index)") {
                         chat.choice = agent
                         chat.pickingSession = false
@@ -106,9 +110,12 @@ struct InlineChatView: View {
         .agentId("inline-chat-sessions")
     }
 
-    private func sessionRow(title: String, detail: String, theme: Theme, isChosen: Bool, id: String,
-                            action: @escaping () -> Void) -> some View {
+    private func sessionRow(title: String, detail: String, agent: AgentSession.Agent, theme: Theme,
+                            isChosen: Bool, id: String, action: @escaping () -> Void) -> some View {
         HStack(alignment: .center, spacing: 8, onClick: action) {
+            Text(Self.name(agent), color: agent == .claude ? theme.accent : appearance.languageText,
+                 font: session.fonts.status, lineLimit: 1)
+                .frame(width: .pt(48))
             Text(title, color: .primary, font: session.fonts.tab, lineLimit: 1)
                 .flexShrink(1)
             Spacer()
@@ -120,6 +127,13 @@ struct InlineChatView: View {
         .cornerRadius(6)
         .cursor(.pointer)
         .agentId(id)
+    }
+
+    static func name(_ agent: AgentSession.Agent) -> String {
+        switch agent {
+        case .claude: "Claude"
+        case .codex: "Codex"
+        }
     }
 
     /// When, where if not here, and how much history comes along.

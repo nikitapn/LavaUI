@@ -2,7 +2,7 @@ import Foundation
 
 /// One saved conversation a coding agent can resume.
 public struct AgentSession: Sendable, Equatable, Identifiable {
-    public enum Agent: String, Sendable { case claude }
+    public enum Agent: String, Sendable { case claude, codex }
 
     public let agent: Agent
     public let id: String
@@ -112,7 +112,7 @@ public enum ClaudeSessions {
             }
         }
         guard conversed || prompt != nil else { return nil }
-        let title = [custom, named, generated, prompt.map(oneLine)].compactMap { $0 }
+        let title = [custom, named, generated, prompt.map(InlineChatPrompt.title)].compactMap { $0 }
             .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? "Untitled session"
         return Summary(title: title, directory: directory)
     }

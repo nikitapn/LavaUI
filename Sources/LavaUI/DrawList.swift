@@ -2727,6 +2727,7 @@ extension DrawList {
         // nearest the line. Every frame, scrolled out of view or not — the
         // zone node clips, and a stale answer is a box left behind.
         if let anchor = leaf.zoneAnchor {
+            anchor.lineHeight = lineH
             let line = anchor.line
             let row = line >= leaf.logicalLineCount ? rows.count : leaf.firstRow(ofLine: line)
             let count = gaps.count(aboveRow: row)
@@ -3426,9 +3427,9 @@ extension DrawList {
         guard let frame = zone.anchor.frame, let laid = zone.laidOutFrame else { return }
         // Only a move is drawn ahead of layout. A box laid out at another
         // width — the first frame, a resized window — would be drawn with its
-        // contents wrapped for that width; it waits the frame instead.
-        guard abs(laid.w - Float(frame.width)) < 0.5, abs(laid.h - Float(frame.height)) < 0.5,
-              abs(laid.x - Float(frame.minX)) < 0.5 else { return }
+        // contents wrapped for that width; it waits the frame instead. The
+        // height is the app's (`rows`), so a growing box is already right.
+        guard abs(laid.w - Float(frame.width)) < 0.5, abs(laid.x - Float(frame.minX)) < 0.5 else { return }
         let shift = Float(frame.minY) - laid.y
         withContentClip(true, x: x, y: y, w: w, h: h) {
             emitNode(zone.zoneBox, ox: x, oy: y + shift)

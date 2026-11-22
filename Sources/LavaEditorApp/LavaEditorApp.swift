@@ -169,7 +169,7 @@ struct LavaEditorApp {
                     }
                     Menu("Assistant", id: "assistant") {
                         MenuItem(
-                            "Ask Claude about These Lines", id: "assistant.inline-chat",
+                            "Ask about These Lines", id: "assistant.inline-chat",
                             shortcut: KeyShortcut(KeyCode.i, .primary),
                             isEnabled: session.active.preview == nil && session.active.isLoaded
                         ) { session.openInlineChat() }

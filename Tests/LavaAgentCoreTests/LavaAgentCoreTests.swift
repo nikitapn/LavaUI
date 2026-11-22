@@ -3,7 +3,7 @@ import XCTest
 @testable import LavaAgentCore
 
 final class ClaudeStreamTests: XCTestCase {
-    private func event(_ json: String) -> ClaudeEvent { ClaudeEvent.parse(Data(json.utf8)) }
+    private func event(_ json: String) -> AgentEvent { AgentEvent.claude(Data(json.utf8)) }
 
     /// Shapes as `claude` 2.1 printed them (see the session that wrote this).
     func testEventsFromTheCLI() {
@@ -144,5 +144,74 @@ final class TextLinesTests: XCTestCase {
         XCTAssertEqual(TextLines.replacing(1...2, in: text, with: "ONE"), "zero\nONE\nthree")
         XCTAssertEqual(TextLines.text(of: 1...1, in: "a\r\nb\r\nc"), "b", "CRLF is one character")
         XCTAssertEqual(TextLines.text(of: 1...1, in: "a\n"), "")
+    }
+}
+
+final class CodexTests: XCTestCase {
+    private func events(_ json: String) -> [AgentEvent] { AgentEvent.codex(Data(json.utf8)) }
+
+    /// Shapes as `codex exec --json` 0.171 printed them.
+    func testEventsFromTheCLI() {
+        XCTAssertEqual(events(#"{"type":"thread.started","thread_id":"t1"}"#), [.started(session: "t1", model: "")])
+        XCTAssertEqual(events(#"{"type":"turn.started"}"#), [])
+        XCTAssertEqual(events(#"{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"/usr/bin/zsh -lc \"rg -n foo a.swift\"","status":"in_progress"}}"#),
+                       [.tool(name: "Ran", detail: "rg -n foo a.swift")])
+        XCTAssertEqual(events(#"{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"x"}}"#), [])
+        XCTAssertEqual(events(#"{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"func"}}"#),
+                       [.textBlock, .text("func")])
+        XCTAssertEqual(events(#"{"type":"turn.completed","usage":{}}"#), [.finished(isError: false, message: nil, costUSD: nil)])
+        XCTAssertEqual(events(#"{"type":"turn.failed","error":{"message":"quota"}}"#), [.finished(isError: true, message: "quota", costUSD: nil)])
+        XCTAssertEqual(events("nope"), [])
+    }
+
+    func testListsUserSessionsHereWithNames() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("lava-codex-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let day = home.appendingPathComponent("sessions/2026/11/22")
+        try FileManager.default.createDirectory(at: day, withIntermediateDirectories: true)
+        func rollout(_ id: String, cwd: String, source: String, age: TimeInterval) throws {
+            let meta = #"{"type":"session_meta","payload":{"id":"\#(id)","cwd":"\#(cwd)","thread_source":"\#(source)","base_instructions":{"text":"\#(String(repeating: "x", count: 40_000))"}}}"#
+            let file = day.appendingPathComponent("rollout-2026-11-22T00-00-00-\(id).jsonl")
+            try (meta + "\n" + #"{"type":"event_msg","payload":{}}"# + "\n").write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-age)], ofItemAtPath: file.path)
+        }
+        try rollout("a", cwd: "/work/repo", source: "user", age: 50)
+        try rollout("b", cwd: "/work/repo", source: "user", age: 5)
+        try rollout("c", cwd: "/work/repo", source: "guardian_review", age: 1)
+        try rollout("d", cwd: "/elsewhere", source: "user", age: 1)
+        try """
+            {"id":"a","thread_name":"Old name","updated_at":"1"}
+            {"id":"a","thread_name":"Fonts","updated_at":"2"}
+            """.write(to: home.appendingPathComponent("session_index.jsonl"), atomically: true, encoding: .utf8)
+        try """
+            {"session_id":"b","ts":1,"text":"first"}
+            {"session_id":"b","ts":2,"text":"commit please"}
+            """.write(to: home.appendingPathComponent("history.jsonl"), atomically: true, encoding: .utf8)
+
+        let sessions = CodexSessions.list(in: [URL(fileURLWithPath: "/work/repo")], home: home)
+        XCTAssertEqual(sessions.map(\.id), ["b", "a"])
+        XCTAssertEqual(sessions.map(\.title), ["commit please", "Fonts"])
+        XCTAssertEqual(sessions.first?.agent, .codex)
+    }
+}
+
+final class SessionTitleTests: XCTestCase {
+    func testAPromptThisChatWroteIsShortened() {
+        let prompt = InlineChatPrompt.question("Why the +?\nAnd the label?", path: "Sources/a.swift", lines: 3...5,
+                                               language: "swift", text: "let a = 1\n```inner```")
+        XCTAssertEqual(InlineChatPrompt.title(prompt), "Sources/a.swift:3-5 · Why the +? And the label?")
+        XCTAssertEqual(InlineChatPrompt.title(InlineChatPrompt.instructions + "\n\n" + prompt),
+                       "Sources/a.swift:3-5 · Why the +? And the label?", "Codex's first message leads with them")
+        XCTAssertEqual(InlineChatPrompt.title("fix the\nbuild"), "fix the build")
+    }
+
+    func testCodexFirstPromptSkipsInjectedContext() {
+        let head = [
+            #"{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"x"}]}}"#,
+            #"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>cwd</environment_context>"}]}}"#,
+            ##"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions"}]}}"##,
+            #"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Read a.swift please"}]}}"#,
+        ].joined(separator: "\n")
+        XCTAssertEqual(CodexSessions.firstPrompt(in: Data(head.utf8)), "Read a.swift please")
     }
 }

@@ -37,6 +37,9 @@ final class InlineChat {
     /// The session to fork; nil for a new one. Fixed once the first
     /// question is sent — the process is that session's from then on.
     var choice: AgentSession?
+    /// Which agent a new session is started with.
+    var newAgent: AgentSession.Agent = .claude
+    var agent: AgentSession.Agent { choice?.agent ?? newAgent }
     var pickingSession = false
     var draft = ""
     var inputFocused = true
@@ -47,7 +50,7 @@ final class InlineChat {
     private(set) var forkedSession: String?
     private(set) var model = ""
 
-    @ObservationIgnored private var process: ClaudeChatProcess?
+    @ObservationIgnored private var process: (any AgentChatProcess)?
     /// The transcript follows the reply as it streams in.
     @ObservationIgnored let scroll = ScrollPosition()
 
@@ -88,25 +91,32 @@ final class InlineChat {
         draft = ""
         pickingSession = false
         if process == nil {
+            let onEvent: (AgentEvent) -> Void = { [weak self] event in self?.handle(event) }
+            let onEnd: (Int32, String) -> Void = { [weak self] status, stderr in
+                self?.exited(status: status, stderr: stderr)
+                onExit()
+            }
+            let folder = choice?.directory ?? directory
             do {
-                process = try ClaudeChatProcess(
-                    resuming: choice, in: choice?.directory ?? directory,
-                    onEvent: { [weak self] event in self?.handle(event) },
-                    onExit: { [weak self] status, stderr in
-                        self?.exited(status: status, stderr: stderr)
-                        onExit()
-                    }
-                )
+                switch agent {
+                case .claude:
+                    process = try ClaudeChatProcess(resuming: choice, in: folder, onEvent: onEvent, onExit: onEnd)
+                case .codex:
+                    process = try CodexChatProcess(resuming: choice, in: folder, onEvent: onEvent, onExit: onEnd)
+                }
             } catch {
                 turns.append(Turn(question: question, finished: true, failure: "\(error)"))
                 return
             }
         }
         // The first question carries the lines; follow-ups are about them.
-        let message = turns.isEmpty
+        var message = turns.isEmpty
             ? InlineChatPrompt.question(question, path: path, lines: (lines.lowerBound + 1)...(lines.upperBound + 1),
                                         language: language, text: original)
             : InlineChatPrompt.followUp(question)
+        // Codex has no flag for adding to its instructions; they lead the
+        // first message instead, which its history keeps for the rest.
+        if turns.isEmpty, agent == .codex { message = InlineChatPrompt.instructions + "\n\n" + message }
         turns.append(Turn(question: question))
         process?.send(message)
     }
@@ -116,12 +126,12 @@ final class InlineChat {
         process = nil
     }
 
-    private func handle(_ event: ClaudeEvent) {
+    private func handle(_ event: AgentEvent) {
         defer { if event != .ignored { scroll.scroll(to: 1e9) } }
         switch event {
         case .started(let session, let model):
-            forkedSession = session
-            self.model = model
+            if forkedSession == nil { forkedSession = session }
+            if !model.isEmpty { self.model = model }
         case .textBlock:
             guard var turn = turns.last, !turn.reply.isEmpty, !turn.reply.hasSuffix("\n\n") else { return }
             turn.reply += "\n\n"
@@ -147,7 +157,7 @@ final class InlineChat {
     }
 
     private func exited(status: Int32, stderr: String) {
-        process = nil
+        if process?.endsWithProcess ?? true { process = nil }
         guard var turn = turns.last, !turn.finished else { return }
         turn.finished = true
         let reason = stderr.split(whereSeparator: \.isNewline).last.map(String.init)
@@ -232,7 +242,8 @@ extension EditorSession {
                 folders.append(repository.root)
                 folders += (try? repository.worktrees().map(\.root)) ?? []
             }
-            let sessions = ClaudeSessions.list(in: folders)
+            let sessions = (ClaudeSessions.list(in: folders) + CodexSessions.list(in: folders))
+                .sorted { $0.date > $1.date }
             MainQueue.async { ref.chat?.adopt(sessions: sessions) }
         }
     }

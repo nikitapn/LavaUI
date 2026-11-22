@@ -21,6 +21,9 @@ public final class EditorZoneAnchor {
     /// left out — as last drawn. Nil before the first draw, and while the
     /// editor has no gap at `line`.
     public internal(set) var frame: CGRect?
+    /// The editor's row height when it last drew, which turns the zone's
+    /// rows into points before the editor has drawn the gap at its new size.
+    public internal(set) var lineHeight: Float?
 
     public init(line: Int) {
         self.line = line
@@ -38,12 +41,15 @@ public struct EditorZoneView<Content: View, Zone: View>: PrimitiveView {
     public var content: Content
     public var zone: Zone
     public var anchor: EditorZoneAnchor
+    /// The gap's height in rows, as the app reserved it.
+    public var rows: Int
     public var isPresented: Bool
 
-    public init(content: Content, zone: Zone, anchor: EditorZoneAnchor, isPresented: Bool) {
+    public init(content: Content, zone: Zone, anchor: EditorZoneAnchor, rows: Int, isPresented: Bool) {
         self.content = content
         self.zone = zone
         self.anchor = anchor
+        self.rows = rows
         self.isPresented = isPresented
     }
 
@@ -62,13 +68,16 @@ public struct EditorZoneView<Content: View, Zone: View>: PrimitiveView {
             zone: StyleBoxNode(content: ViewGraph.mount(zone)),
             anchor: anchor
         )
+        node.rows = rows
         node.setPresented(isPresented)
+        node.place()
         return node
     }
 
     public func reconcilePrimitive(_ node: any AnyViewNode) -> any AnyViewNode {
         guard let box = node as? EditorZoneNode else { return mountPrimitive() }
         box.anchor = anchor
+        box.rows = rows
         box.updateContent(ViewGraph.reconcile(box.contentNode, with: content))
         box.zoneBox.updateContent(ViewGraph.reconcile(box.zoneBox.contentNode, with: zone))
         box.setPresented(isPresented)
@@ -82,6 +91,7 @@ final class EditorZoneNode: YogaBoxNode {
     /// Absolute, at the anchor's frame; hidden while not presented.
     let zoneBox: StyleBoxNode
     var anchor: EditorZoneAnchor
+    var rows = 0
     private var insertedLeaves: [any AnyViewNode] = []
     private var linked = false
     /// The frame the zone box was last given, to tell a move from no move.
@@ -139,7 +149,11 @@ final class EditorZoneNode: YogaBoxNode {
         guard let box = zoneBox.yoga else { return false }
         // Off in the distance until the editor has said where: a zone drawn
         // at the top for one frame would be a flicker.
-        let frame = anchor.frame ?? CGRect(x: 0, y: -100_000, width: 1, height: 1)
+        var frame = anchor.frame ?? CGRect(x: 0, y: -100_000, width: 1, height: 1)
+        // The height the app is asking for now, not the gap's as last drawn:
+        // a box that grows (a reply arriving) is then laid out at its new
+        // size in the frame the editor makes room, rather than one later.
+        if let lineHeight = anchor.lineHeight, rows > 0 { frame.size.height = CGFloat(Float(rows) * lineHeight) }
         YGNodeStyleSetPositionType(box, YGPositionTypeAbsolute)
         YGNodeStyleSetPosition(box, YGEdgeLeft, Float(frame.minX))
         YGNodeStyleSetPosition(box, YGEdgeTop, Float(frame.minY))
@@ -182,12 +196,12 @@ final class EditorZoneNode: YogaBoxNode {
 
 extension View {
     /// Lays `zone` over this editor at `anchor`'s gap while `isPresented`.
-    /// The gap itself is the app's to reserve, as an `EditorLineGap` at
-    /// `anchor.line` tall enough for the view; pass the same anchor to the
-    /// editor's `zone:`. See `EditorZoneAnchor`.
+    /// The gap itself is the app's to reserve, as an `EditorLineGap` of
+    /// `rows` at `anchor.line`; pass the same anchor to the editor's
+    /// `zone:`. See `EditorZoneAnchor`.
     public func editorZone<Zone: View>(
-        _ anchor: EditorZoneAnchor, isPresented: Bool, @ViewBuilder _ zone: () -> Zone
+        _ anchor: EditorZoneAnchor, rows: Int, isPresented: Bool, @ViewBuilder _ zone: () -> Zone
     ) -> EditorZoneView<Self, Zone> {
-        EditorZoneView(content: self, zone: zone(), anchor: anchor, isPresented: isPresented)
+        EditorZoneView(content: self, zone: zone(), anchor: anchor, rows: rows, isPresented: isPresented)
     }
 }

@@ -145,7 +145,7 @@ struct LavaEditorView: View {
                 .flexGrow(1)
                 .theme(appearance.documentTheme)
                 .agentId("editor")
-                .editorZone(session.chatAnchor, isPresented: chat != nil) {
+                .editorZone(session.chatAnchor, rows: chat?.rows ?? 0, isPresented: chat != nil) {
                     if let chat {
                         InlineChatView(session: session, chat: chat, appearance: appearance)
                     }

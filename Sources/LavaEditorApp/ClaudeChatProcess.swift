@@ -28,7 +28,7 @@ final class ClaudeChatProcess: @unchecked Sendable {
     /// `onEvent` and `onExit` are called on the main queue.
     init(
         resuming session: AgentSession?, in directory: URL,
-        onEvent: @escaping (ClaudeEvent) -> Void,
+        onEvent: @escaping (AgentEvent) -> Void,
         onExit: @escaping (_ status: Int32, _ stderr: String) -> Void
     ) throws {
         let sink = Sink(onEvent: onEvent, onExit: onExit)
@@ -68,7 +68,7 @@ final class ClaudeChatProcess: @unchecked Sendable {
                 return
             }
             let complete = self.lock.withLock { self.lines.append(data) }
-            let events = complete.map(ClaudeEvent.parse).filter { $0 != .ignored }
+            let events = complete.map(AgentEvent.claude).filter { $0 != .ignored }
             guard !events.isEmpty else { return }
             MainQueue.async { for event in events { sink.onEvent(event) } }
         }
@@ -109,9 +109,9 @@ final class ClaudeChatProcess: @unchecked Sendable {
     /// The callbacks, carried to the reader threads and only called back on
     /// the main queue.
     private final class Sink: @unchecked Sendable {
-        let onEvent: (ClaudeEvent) -> Void
+        let onEvent: (AgentEvent) -> Void
         let onExit: (Int32, String) -> Void
-        init(onEvent: @escaping (ClaudeEvent) -> Void, onExit: @escaping (Int32, String) -> Void) {
+        init(onEvent: @escaping (AgentEvent) -> Void, onExit: @escaping (Int32, String) -> Void) {
             self.onEvent = onEvent
             self.onExit = onExit
         }

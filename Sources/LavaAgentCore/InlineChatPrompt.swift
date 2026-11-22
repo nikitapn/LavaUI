@@ -49,6 +49,33 @@ public enum InlineChatPrompt {
         question + "\n\n" + reminder
     }
 
+    /// A session's title from a prompt: one line, and for a prompt this
+    /// chat wrote — instructions, the lines quoted, a reminder — just
+    /// `path:lines · the question`, which is what the user typed.
+    public static func title(_ prompt: String) -> String {
+        var text = prompt
+        if text.hasPrefix(instructions) { text = String(text.dropFirst(instructions.count)) }
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let marker = ", as it is in my editor now (possibly unsaved):"
+        guard let header = text.range(of: marker), !text[..<header.lowerBound].contains("\n") else {
+            return ClaudeSessions.oneLine(text)
+        }
+        var place = String(text[..<header.lowerBound])
+        for (word, sep) in [(", lines ", ":"), (", line ", ":")] {
+            if let range = place.range(of: word) { place.replaceSubrange(range, with: sep); break }
+        }
+        // The question sits between the quoted block's closing fence and the
+        // reminder.
+        var body = String(text[header.upperBound...])
+        if let reminder = body.range(of: Self.reminder, options: .backwards) { body = String(body[..<reminder.lowerBound]) }
+        let lines = body.split(separator: "\n", omittingEmptySubsequences: false)
+        let fences = lines.indices.filter { lines[$0].hasPrefix("```") }
+        let question = fences.count >= 2
+            ? lines[(fences[fences.count - 1] + 1)...].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            : ""
+        return ClaudeSessions.oneLine(question.isEmpty ? place : place + " · " + question)
+    }
+
     /// The replacement in a reply: the last block fenced as `replace`
     /// (alone, or after a language — ` ```swift replace `). Nil when the
     /// reply proposes nothing.
