@@ -17,13 +17,13 @@ extension EditorSession {
             return
         }
         rememberProjectPath(root, kind: .folder)
+        showsSidebar = true
         if project?.tree.root.path == root.path {
-            showsSidebar = true
+            if sidebarView == .agents { startAgentsPolling() }
             return
         }
         restoreProject(root.path, expanded: [])
         followActive()
-        showsSidebar = true
     }
 
     func closeFolder() {
@@ -48,6 +48,7 @@ extension EditorSession {
             }
         }
         self.project = project
+        if showsSidebar, sidebarView == .agents { startAgentsPolling() }
     }
 
     /// Opens a file from the tree in a tab, or brings its tab forward.
@@ -74,10 +75,9 @@ extension EditorSession {
     /// Shows `view` in the sidebar, asking for a folder first if none is
     /// open — every view in it is about one.
     func showSidebar(_ view: SidebarView) {
-        guard project != nil else {
+        if project == nil {
             openFolderDialog()
-            if project != nil { sidebarView = view }
-            return
+            guard project != nil else { return }
         }
         sidebarView = view
         showsSidebar = true
@@ -89,6 +89,7 @@ extension EditorSession {
             openFolderDialog()
         } else {
             showsSidebar.toggle()
+            if showsSidebar, sidebarView == .agents { startAgentsPolling() }
         }
     }
 

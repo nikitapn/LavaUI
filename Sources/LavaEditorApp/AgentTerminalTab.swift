@@ -98,7 +98,7 @@ extension EditorSession {
     /// One running in some other terminal cannot be joined — two UIs on one
     /// session is two writers — so its transcript opens instead.
     func openAgent(_ row: AgentRow) {
-        guard let agent = row.session else { return }
+        let agent = row.session
         let name = agent.title.count > 40 ? String(agent.title.prefix(39)) + "…" : agent.title
         switch agent.agent {
         case .claude:
@@ -117,14 +117,11 @@ extension EditorSession {
                                   directory: agent.directory, command: "claude --resume \(agent.id)")
             }
         case .codex:
-            // No list of running Codex sessions: a turn in progress means
-            // something is running it, and a second UI would be a second writer.
-            if row.status == .working {
+            if row.isCurrent || row.status != .stopped {
                 openSessionChat(agent)
-                notice = "This Codex session is working somewhere else; its transcript is open instead."
             } else {
                 openAgentTerminal(key: "session:" + agent.id, title: "Codex", name: name,
-                                  directory: agent.directory, command: "codex resume \(agent.id)")
+                                  directory: agent.directory, command: "codex resume \(Self.shellQuoted(agent.id))")
             }
         }
     }

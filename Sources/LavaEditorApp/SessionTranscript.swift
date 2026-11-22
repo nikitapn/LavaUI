@@ -22,6 +22,7 @@ final class SessionTranscript {
     private(set) var entries: [TranscriptEntry] = []
     /// The start of a long file was skipped.
     private(set) var truncated = false
+    private(set) var historyUnavailable = false
     var draft = ""
     var inputFocused = false
     /// A turn this tab started is running.
@@ -49,7 +50,10 @@ final class SessionTranscript {
     /// Reads what was appended, about once a second, for as long as the tab
     /// exists. Cheap when nothing was: a seek and an empty read.
     private func follow() {
-        guard let reader else { return }
+        guard let reader else {
+            if session.agent == .codex { followCodexHistory() }
+            return
+        }
         let ref = TranscriptRef(self)
         reader.queue.async {
             let (new, truncated) = reader.read()
@@ -68,6 +72,32 @@ final class SessionTranscript {
                     transcript.scroll.scroll(to: 1e9)
                 }
                 DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1) {
+                    MainQueue.async { ref.transcript?.follow() }
+                }
+            }
+        }
+    }
+
+    private func followCodexHistory() {
+        guard let executable = CodexChatProcess.executable else {
+            historyUnavailable = true
+            return
+        }
+        let ref = TranscriptRef(self)
+        let threadID = session.id
+        DispatchQueue.global(qos: .utility).async {
+            let history = CodexAppServer(executable: executable).transcript(threadID: threadID, limit: 100)
+            MainQueue.async {
+                guard let transcript = ref.transcript else { return }
+                transcript.historyUnavailable = history == nil
+                if let history {
+                    transcript.truncated = history.truncated
+                    if history.entries != transcript.entries {
+                        transcript.entries = history.entries
+                        transcript.scroll.scroll(to: 1e9)
+                    }
+                }
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3) {
                     MainQueue.async { ref.transcript?.follow() }
                 }
             }
@@ -203,7 +233,7 @@ final class SessionTranscript {
     func terminalCommand(live: ClaudeLiveSession?) -> String? {
         switch session.agent {
         case .codex:
-            return "codex resume \(session.id)"
+            return "codex resume \(EditorSession.shellQuoted(session.id))"
         case .claude:
             guard let live else { return "claude --resume \(session.id)" }
             return live.kind == "background" ? "claude attach \(live.name.isEmpty ? session.id : live.name)" : nil
@@ -282,8 +312,10 @@ struct SessionTranscriptView: View {
                         Text("Earlier messages are not shown.", color: .muted, font: session.fonts.status)
                     }
                     if transcript.entries.isEmpty, !transcript.truncated {
-                        Text(agent.file == nil ? "This session's file was not found." : "Nothing said yet.",
-                             color: .muted, font: session.fonts.status)
+                        let message = transcript.historyUnavailable ? "Codex session history is unavailable."
+                            : agent.file == nil && agent.agent == .claude ? "This session's file was not found."
+                            : "Nothing said yet."
+                        Text(message, color: .muted, font: session.fonts.status)
                     }
                     ForEach(Array(transcript.entries.enumerated()), id: \.offset) { _, entry in
                         self.entry(entry, font: font, theme: theme)
