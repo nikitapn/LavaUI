@@ -37,10 +37,6 @@ public enum FileIndex {
         }
     }
 
-    /// The runtime this file started, for a process that had none. Held for
-    /// the process's lifetime: the `Rpc` owns the transport.
-    nonisolated(unsafe) private static var ownRuntime: Rpc?
-
     /// A proxy to the running daemon.
     public static func connect() throws -> Index {
         let path = referencePath
@@ -48,11 +44,7 @@ public enum FileIndex {
             throw Failure.notRunning(path: path)
         }
         let ior = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if LavaClient.runtime == nil && ownRuntime == nil {
-            let rpc = try RpcBuilder().setLogLevel(.warn).build()
-            try rpc.startThreadPool(1)
-            ownRuntime = rpc
-        }
+        _ = try ClientRpcRuntime.start()
         guard let object = NPRPCObject.fromString(ior), object.selectEndpoint() else {
             throw Failure.badReference
         }

@@ -11,6 +11,10 @@ import LavaUI
 @main
 struct LavaEditorApp {
     static func main() {
+        if CommandLine.arguments.dropFirst().first == "--extension-host" {
+            exit(SelectionExtension.host(Array(CommandLine.arguments.dropFirst(2))))
+        }
+        SelectionExtension.start()
         // Before the session, which reads the wrap and line-number settings
         // out of it in its initialiser.
         AppSettings.configure(appName: "LavaEditor")
@@ -121,6 +125,17 @@ struct LavaEditorApp {
                             "Close Tab", id: "file.close",
                             shortcut: KeyShortcut(KeyCode.w, .primary)
                         ) { session.requestClose() }
+                    }
+                    Menu("Extensions", id: "extensions") {
+                        for installed in session.matchingExtensionCommands {
+                            MenuItem(installed.command.title, id: installed.menuID,
+                                     isEnabled: !session.extensionRunning && session.active.saveUnavailable == nil) {
+                                session.formatSelection(using: installed)
+                            }
+                        }
+                        MenuItem("Reload Extensions", id: "extensions.reload") {
+                            session.reloadExtensions()
+                        }
                     }
                     Menu("Search", id: "search") {
                         MenuItem(

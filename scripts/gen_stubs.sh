@@ -30,6 +30,9 @@ mkdir -p "$ROOT/Sources/LavaIDL"
 echo "npidl --swift  →  Sources/LavaIDL"
 "$NPIDL" --swift --output-dir "$ROOT/Sources/LavaIDL" "$ROOT/idl/lava.npidl"
 
+mkdir -p "$ROOT/Sources/LavaEditorExtensionAPI/Generated"
+"$NPIDL" --swift --output-dir "$ROOT/Sources/LavaEditorExtensionAPI/Generated" "$ROOT/idl/editor_extension.npidl"
+
 # The compositor is C++ and serves the same interface the Swift clients call.
 # One IDL, two languages, generated from one command so they cannot drift.
 mkdir -p "$ROOT/compositor/src/gen"

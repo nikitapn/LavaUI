@@ -1,0 +1,28 @@
+module lava.editor;
+
+message SelectionSnapshot {
+  documentId: u64;
+  revision: u64;
+  startByte: u64;
+  endByte: u64;
+  text: string;
+}
+
+message SelectionEdit {
+  startByte: u64;
+  endByte: u64;
+  text: string;
+}
+
+enum EditStatus: u32 { accepted, invalid, alreadySubmitted };
+
+exception ExpiredInvocation { }
+
+/// Scoped to one invocation. The editor commits the entire proposal after
+/// the host returns successfully and the snapshot is still current.
+interface SelectionCommand {
+  SelectionSnapshot ReadSelection(invocation: in u64) raises(ExpiredInvocation);
+  /// Ordered, nonoverlapping UTF-8 byte ranges within the selection, measured
+  /// from the start of the document. Equal endpoints insert before that byte.
+  EditStatus ProposeEdits(invocation: in u64, documentId: in u64, revision: in u64, edits: in vector<SelectionEdit>);
+}

@@ -81,6 +81,8 @@ final class EditorSession {
 
     /// One line under the toolbar. Not a toast: a write that failed should
     /// still be readable a minute later.
+    var extensions = ExtensionCatalog.discover()
+    var extensionRunning = false
     var notice: String?
 
     /// A close the user has to confirm, because the document has unsaved
@@ -850,6 +852,69 @@ final class EditorSession {
         guard documents.indices.contains(activeIndex) else { return }
         keepTabOpen(activeIndex)
         documents[activeIndex].isModified = true
+    }
+
+    var matchingExtensionCommands: [InstalledCommand] {
+        extensions.commands.filter { $0.command.matches(language: active.language.rawValue, url: active.url) }
+    }
+
+    func reloadExtensions() {
+        extensions = ExtensionCatalog.discover()
+        notice = extensions.errors.isEmpty ? "Loaded \(extensions.commands.count) extension commands"
+            : extensions.errors.joined(separator: "\n")
+    }
+
+    func formatSelection(using installed: InstalledCommand) {
+        guard installed.command.matches(language: active.language.rawValue, url: active.url) else { return }
+        guard !extensionRunning, active.saveUnavailable == nil else { return }
+        guard let position = controller.position(), position.anchor != position.focus else {
+            notice = "Select text to format first"
+            return
+        }
+        let range = min(position.anchor, position.focus)..<max(position.anchor, position.focus)
+        let text = active.text
+        guard range.lowerBound >= 0,
+              let end = text.index(text.startIndex, offsetBy: range.upperBound, limitedBy: text.endIndex)
+        else { return }
+        let start = text.index(text.startIndex, offsetBy: range.lowerBound)
+        guard text.utf8.distance(from: start, to: end) <= SelectionExtension.limit else {
+            notice = "Selection exceeds 8 MiB."
+            return
+        }
+        let selection = String(text[start..<end])
+        let documentID = active.id
+        let originalRevision = revision
+        let startByte = text.utf8.distance(from: text.startIndex, to: start)
+        let owner = LanguageSessionRef(self)
+        extensionRunning = true
+        notice = "Running \(installed.command.title)…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = Result { try SelectionExtension.run(installed, text: selection, document: documentID,
+                                                           revision: originalRevision, startByte: startByte) }
+            MainQueue.async {
+                guard let session = owner.session else { return }
+                session.extensionRunning = false
+                switch result {
+                case .failure(let error):
+                    session.notice = "\(installed.command.title): \(error.localizedDescription)"
+                case .success(let replacement):
+                    session.notice = nil
+                    guard session.active.id == documentID, session.revision == originalRevision,
+                          session.active.saveUnavailable == nil,
+                          session.active.text.utf8.elementsEqual(text.utf8),
+                          let current = session.controller.position(),
+                          current.anchor == position.anchor, current.focus == position.focus else {
+                        session.notice = "Selection changed. Extension edit discarded."
+                        return
+                    }
+                    guard !selection.utf8.elementsEqual(replacement.utf8),
+                          session.controller.replace([range], with: replacement) == 1 else { return }
+                    session.revision &+= 1
+                    session.markModified()
+                    if session.find.isOpen { session.runSearch() }
+                }
+            }
+        }
     }
 
     // MARK: - Go to line
