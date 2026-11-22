@@ -60,7 +60,7 @@ public enum CodexSessions {
 
     /// Sessions the user started (not Codex's own reviewer threads) in any
     /// of `directories`, newest first.
-    public static func list(in directories: [URL], home: URL = defaultHome) -> [AgentSession] {
+    public static func list(in directories: [URL], home: URL = defaultHome, cache: MetaCache? = nil) -> [AgentSession] {
         let wanted = Set(directories.map { $0.standardizedFileURL.path })
         let names = latestByID(home.appendingPathComponent("session_index.jsonl"), key: "thread_name", idKey: "id")
         let prompts = latestByID(home.appendingPathComponent("history.jsonl"), key: "text", idKey: "session_id")
@@ -70,16 +70,33 @@ public enum CodexSessions {
         }
         var out: [AgentSession] = []
         for case let file as URL in walker where file.pathExtension == "jsonl" && file.lastPathComponent.hasPrefix("rollout-") {
-            guard let meta = meta(of: file), wanted.contains(meta.directory.standardizedFileURL.path),
-                  meta.isUser else { continue }
+            guard let meta = cache?.meta(of: file) ?? meta(of: file),
+                  wanted.contains(meta.directory.standardizedFileURL.path), meta.isUser else { continue }
             let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
             let title = [names[meta.id], (prompts[meta.id] ?? meta.firstPrompt).map(InlineChatPrompt.title)]
                 .compactMap { $0 }.first { !$0.isEmpty } ?? "Untitled session"
             out.append(AgentSession(agent: .codex, id: meta.id, title: title,
                                     date: values?.contentModificationDate ?? .distantPast,
-                                    directory: meta.directory, bytes: values?.fileSize ?? 0))
+                                    directory: meta.directory, bytes: values?.fileSize ?? 0, file: file))
         }
         return out.sorted { $0.date > $1.date }
+    }
+
+    /// What each rollout's first line said, kept: it never changes, and
+    /// reading it means reading tens of kilobytes of system prompt. For a
+    /// panel that looks again every few seconds.
+    public final class MetaCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var known: [String: Meta] = [:]
+
+        public init() {}
+
+        func meta(of file: URL) -> Meta? {
+            if let hit = lock.withLock({ known[file.path] }) { return hit }
+            guard let meta = CodexSessions.meta(of: file) else { return nil }
+            lock.withLock { known[file.path] = meta }
+            return meta
+        }
     }
 
     struct Meta {

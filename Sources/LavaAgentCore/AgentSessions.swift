@@ -16,14 +16,17 @@ public struct AgentSession: Sendable, Equatable, Identifiable {
     public let directory: URL
     /// The file, for how big a context resuming it brings along.
     public let bytes: Int
+    /// Where the conversation is written, for reading it as it grows.
+    public let file: URL?
 
-    public init(agent: Agent, id: String, title: String, date: Date, directory: URL, bytes: Int) {
+    public init(agent: Agent, id: String, title: String, date: Date, directory: URL, bytes: Int, file: URL? = nil) {
         self.agent = agent
         self.id = id
         self.title = title
         self.date = date
         self.directory = directory
         self.bytes = bytes
+        self.file = file
     }
 }
 
@@ -68,10 +71,32 @@ public enum ClaudeSessions {
                 let bytes = (attributes[.size] as? NSNumber)?.intValue ?? 0
                 guard let summary = summarize(file, size: bytes, tailBytes: tailBytes) else { continue }
                 out.append(AgentSession(agent: .claude, id: id, title: summary.title, date: date,
-                                        directory: summary.directory ?? directory, bytes: bytes))
+                                        directory: summary.directory ?? directory, bytes: bytes, file: file))
             }
         }
         return out.sorted { $0.date > $1.date }
+    }
+
+    /// The most recently written session in `directory` — the one an agent
+    /// working there is most likely in. Only that file's tail is read.
+    public static func latest(in directory: URL, home: URL = defaultHome, tailBytes: Int = 256 * 1024) -> AgentSession? {
+        let folder = home.appendingPathComponent("projects", isDirectory: true)
+            .appendingPathComponent(folderName(for: directory), isDirectory: true)
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else { return nil }
+        var candidates: [(URL, Date, Int)] = []
+        for name in names where name.hasSuffix(".jsonl") && UUID(uuidString: String(name.dropLast(6))) != nil {
+            let file = folder.appendingPathComponent(name)
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: file.path),
+                  let date = attributes[.modificationDate] as? Date else { continue }
+            candidates.append((file, date, (attributes[.size] as? NSNumber)?.intValue ?? 0))
+        }
+        // Newest first, skipping files with no conversation in them.
+        for (file, date, bytes) in candidates.sorted(by: { $0.1 > $1.1 }) {
+            guard let summary = summarize(file, size: bytes, tailBytes: tailBytes) else { continue }
+            return AgentSession(agent: .claude, id: String(file.lastPathComponent.dropLast(6)), title: summary.title,
+                                date: date, directory: summary.directory ?? directory, bytes: bytes, file: file)
+        }
+        return nil
     }
 
     struct Summary {

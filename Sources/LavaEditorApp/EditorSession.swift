@@ -91,6 +91,8 @@ final class EditorSession {
     @ObservationIgnored weak var visibleSurface: EmbeddedPreview?
     #endif
     var extensionRunning = false
+    /// The Agents view's rows. See `AgentsModel`.
+    let agents = AgentsModel()
     /// Ctrl+I's box between lines, while it is open. See `InlineChat`.
     var inlineChat: InlineChat?
     /// Where the editor drew the box's gap. Always the same object: the

@@ -38,13 +38,14 @@ struct GitMarkColors {
 /// What the sidebar is showing — VS Code's activity bar, as a row of icons
 /// under the window's buttons.
 enum SidebarView: String, CaseIterable {
-    case explorer, search, sourceControl
+    case explorer, search, sourceControl, agents
 
     var title: String {
         switch self {
         case .explorer: return "Explorer"
         case .search: return "Search"
         case .sourceControl: return "Source Control"
+        case .agents: return "Agents"
         }
     }
 }
@@ -68,6 +69,8 @@ struct ProjectSidebar: View {
                 SearchPanel(session: session, project: project, appearance: appearance)
             case .sourceControl:
                 SourceControlPanel(session: session, project: project, appearance: appearance)
+            case .agents:
+                AgentsPanel(session: session, project: project, appearance: appearance)
             }
         }
         .background(appearance.theme.panel)

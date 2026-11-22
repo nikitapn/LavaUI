@@ -92,6 +92,8 @@ struct LavaEditorView: View {
                                               foreground: appearance.documentTheme.textPrimary)
                     }
                 #endif
+                case .chat(let transcript):
+                    SessionTranscriptView(session: session, transcript: transcript, appearance: appearance)
                 case .markdown(let text):
                     ScrollView(.vertical) {
                         VStack(padding: 20, spacing: 0) { MarkdownView(text, font: session.documentFont) }

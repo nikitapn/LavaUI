@@ -30,6 +30,8 @@ enum PreviewOption {
 final class DocumentPreview {
     enum Content {
         case markdown(String), message(String)
+        /// An agent session's chat (the Agents view). Has no source tab.
+        case chat(SessionTranscript)
         #if canImport(LavaEditorExtensionAPI)
         case surface(EmbeddedPreview)
         #endif
@@ -51,6 +53,17 @@ final class DocumentPreview {
         if case .command(let provider) = option, provider.command.kind == .embeddedSurface {
             title = provider.command.title
         } else { title = "Preview" }
+    }
+
+    /// A chat tab: no source document, so nothing ever refreshes it from
+    /// one — `refreshActivePreview` finds no source and leaves it alone.
+    init(chat: SessionTranscript) {
+        sourceID = -1
+        optionID = "chat:" + chat.session.id
+        title = chat.session.agent == .claude ? "Claude" : "Codex"
+        let name = chat.session.title
+        sourceName = name.count > 40 ? String(name.prefix(39)) + "…" : name
+        content = .chat(chat)
     }
 
     func invalidate() {

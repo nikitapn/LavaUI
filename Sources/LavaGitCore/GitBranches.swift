@@ -29,6 +29,14 @@ public struct GitWorktree: Sendable, Equatable {
     public let branch: String?
     public let isMain: Bool
     public let isLocked: Bool
+
+    public init(name: String, root: URL, branch: String?, isMain: Bool, isLocked: Bool) {
+        self.name = name
+        self.root = root
+        self.branch = branch
+        self.isMain = isMain
+        self.isLocked = isLocked
+    }
 }
 
 public enum GitCheckoutError: Error, Equatable, CustomStringConvertible {

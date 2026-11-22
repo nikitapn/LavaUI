@@ -81,6 +81,7 @@ extension EditorSession {
         }
         sidebarView = view
         showsSidebar = true
+        if view == .agents { startAgentsPolling() }
     }
 
     func toggleSidebar() {

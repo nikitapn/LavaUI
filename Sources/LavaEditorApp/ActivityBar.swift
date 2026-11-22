@@ -29,6 +29,14 @@ struct ActivityBar: View {
                 .circle(cx: 6, cy: 18, r: 3),
                 .path("M18 9a9 9 0 0 1-9 9"),
             ]
+        case .agents:
+            // Lucide's `bot`.
+            return [
+                .path("M12 8V4H8"),
+                .rect(x: 4, y: 8, width: 16, height: 12, rx: 2),
+                .path("M2 14h2"), .path("M20 14h2"),
+                .path("M15 13v2"), .path("M9 13v2"),
+            ]
         }
     }
 

@@ -87,10 +87,17 @@ extension EditorSession {
 
     /// A new shell in the project's folder — or the file in front's, or home.
     func newTerminal() {
+        newTerminal(in: nil, typing: nil)
+    }
+
+    /// A new shell in `directory`, with `command` typed into it once it is
+    /// up — a command rather than the shell's argument, so that quitting the
+    /// program leaves you in a shell in that folder instead of closing the tab.
+    func newTerminal(in directory: URL?, typing command: String?) {
         if terminal.font == nil, let editor = imageEditor {
             terminal.font = TerminalFont.load(into: editor, pixelSize: documentFont?.pixelSize ?? 15)
         }
-        let session = TerminalSession(workingDirectory: terminalDirectory())
+        let session = TerminalSession(workingDirectory: directory ?? terminalDirectory())
         session.keysBeforeShortcuts = true
         session.declinesKey = TerminalPanel.editorKeeps
         terminal.append(session)
@@ -104,7 +111,10 @@ extension EditorSession {
                 guard let session, let editor = owner.session else { return }
                 editor.terminalExited(session)
             }
-            if let session { owner.session?.focusTerminal(session) }
+            if let session {
+                if let command { session.write(command + "\n") }
+                owner.session?.focusTerminal(session)
+            }
         }
     }
 

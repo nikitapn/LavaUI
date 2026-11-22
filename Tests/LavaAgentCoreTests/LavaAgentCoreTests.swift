@@ -215,3 +215,80 @@ final class SessionTitleTests: XCTestCase {
         XCTAssertEqual(CodexSessions.firstPrompt(in: Data(head.utf8)), "Read a.swift please")
     }
 }
+
+final class TranscriptTests: XCTestCase {
+    private func claude(_ json: String) -> [TranscriptEntry] { TranscriptParser.claude(Data(json.utf8)) }
+    private func codex(_ json: String) -> [TranscriptEntry] { TranscriptParser.codex(Data(json.utf8)) }
+
+    /// Shapes as Claude Code 2.1 writes them.
+    func testClaudeEntries() {
+        XCTAssertEqual(claude(#"{"type":"user","message":{"content":"yeah sure"}}"#), [TranscriptEntry(.user, "yeah sure")])
+        XCTAssertEqual(claude(#"{"type":"user","message":{"content":[{"type":"text","text":"fix it [Image #1]"},{"type":"image","source":{}}]}}"#),
+                       [TranscriptEntry(.user, "fix it [Image #1]")])
+        XCTAssertEqual(claude(#"{"type":"user","isMeta":true,"message":{"content":[{"type":"text","text":"[Image: source: /x.png]"}]}}"#), [])
+        XCTAssertEqual(claude(#"{"type":"user","message":{"content":"<local-command-caveat>x</local-command-caveat>"}}"#), [])
+        XCTAssertEqual(claude(#"{"type":"user","message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#), [])
+        XCTAssertEqual(claude(#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t","content":"ok"}]}}"#), [])
+        XCTAssertEqual(claude(#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":""}]}}"#), [])
+        XCTAssertEqual(claude(#"{"type":"assistant","message":{"content":[{"type":"text","text":"Done."}]}}"#), [TranscriptEntry(.assistant, "Done.")])
+        XCTAssertEqual(claude(#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"swift build\nswift test"}}]}}"#),
+                       [TranscriptEntry(.tool, "Bash swift build swift test")])
+        XCTAssertEqual(claude(#"{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"sub"}]}}"#), [])
+        let followUp = InlineChatPrompt.followUp("Also uppercase it")
+        let line = try! JSONSerialization.data(withJSONObject: ["type": "user", "message": ["content": followUp]])
+        XCTAssertEqual(TranscriptParser.claude(line), [TranscriptEntry(.user, "Also uppercase it")],
+                       "the inline chat's reminder is the agent's business")
+    }
+
+    /// Shapes as Codex 0.171 writes them.
+    func testCodexEntries() {
+        XCTAssertEqual(codex(#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>x</environment_context>"}]}}"#), [])
+        XCTAssertEqual(codex(#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"commit please"}]}}"#),
+                       [TranscriptEntry(.user, "commit please")])
+        XCTAssertEqual(codex(#"{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"rules"}]}}"#), [])
+        XCTAssertEqual(codex(#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Committed."}]}}"#),
+                       [TranscriptEntry(.assistant, "Committed.")])
+        XCTAssertEqual(codex(#"{"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","input":"text((await tools.exec_command({cmd:`rg -n Font canvas/src | head`})).output)"}}"#),
+                       [TranscriptEntry(.tool, "exec rg -n Font canvas/src | head")])
+        XCTAssertEqual(codex(#"{"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":[\"bash\",\"-lc\",\"ls\"]}"}}"#),
+                       [TranscriptEntry(.tool, "shell bash -lc ls")])
+        XCTAssertEqual(codex(#"{"type":"response_item","payload":{"type":"reasoning","summary":[]}}"#), [])
+    }
+
+    func testTailReadsOnlyWhatWasAppended() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("lava-tail-\(UUID().uuidString).jsonl")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let padding = String(repeating: #"{"type":"user","message":{"content":"old"}}"# + "\n", count: 40)
+        try (padding + #"{"type":"user","message":{"content":"recent"}}"# + "\n").write(to: file, atomically: true, encoding: .utf8)
+        var tail = TranscriptTail(file: file, agent: .claude, initialBytes: 100)
+        XCTAssertEqual(tail.read().map(\.text), ["old", "recent"], "the first read starts near the end, on a whole line")
+        XCTAssertTrue(tail.truncated)
+        XCTAssertEqual(tail.read(), [])
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(#"{"type":"assistant","message":{"content":[{"type":"text","text":"new"}]}}"#.utf8))
+        XCTAssertEqual(tail.read(), [], "half a line waits for the rest")
+        try handle.write(contentsOf: Data("\n".utf8))
+        try handle.close()
+        XCTAssertEqual(tail.read(), [TranscriptEntry(.assistant, "new")])
+    }
+
+    func testLiveClaudeSessions() {
+        let json = #"[{"pid":"13244","cwd":"/work/repo","kind":"interactive","startedAt":"1","sessionId":"s1","name":"repo-6d","status":"busy"},{"pid":"9","cwd":"/work/repo-wt","kind":"background","sessionId":"s2","status":"idle"}]"#
+        let live = ClaudeLiveSession.parse(Data(json.utf8))
+        XCTAssertEqual(live.map(\.session), ["s1", "s2"])
+        XCTAssertEqual(live.map(\.status), [.working, .waiting])
+        XCTAssertEqual(live.first?.pid, 13244)
+    }
+
+    func testCodexTurnState() {
+        func lines(_ kinds: [String]) -> [Data] {
+            kinds.map { Data(#"{"type":"event_msg","payload":{"type":"\#($0)"}}"#.utf8) }
+        }
+        XCTAssertFalse(CodexSessions.turnOpen(lines: []))
+        XCTAssertTrue(CodexSessions.turnOpen(lines: lines(["task_started", "token_count"])))
+        XCTAssertFalse(CodexSessions.turnOpen(lines: lines(["task_started", "task_complete"])))
+        XCTAssertFalse(CodexSessions.turnOpen(lines: lines(["task_started", "turn_aborted"])))
+        XCTAssertTrue(CodexSessions.turnOpen(lines: lines(["task_started", "task_complete", "task_started"])))
+    }
+}
