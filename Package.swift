@@ -611,6 +611,22 @@ var targets: [Target] = [
 
 if haveNprpc {
     products.append(.library(name: "LavaEditorExtensionAPI", targets: ["LavaEditorExtensionAPI"]))
+    // SwiftParser and SwiftSyntax ship together in the active Linux toolchain.
+    let search = (ProcessInfo.processInfo.environment["PATH"] ?? "").components(separatedBy: ":")
+    let compiler = ProcessInfo.processInfo.environment["SWIFT_EXEC"]
+        ?? search.map { $0 + "/swiftc" }.first(where: FileManager.default.isExecutableFile(atPath:))
+        ?? "/usr/bin/swiftc"
+    let host = URL(fileURLWithPath: compiler).resolvingSymlinksInPath().deletingLastPathComponent()
+        .appendingPathComponent("../lib/swift/host").standardizedFileURL.path
+    let syntaxSettings = interopCxx + [.unsafeFlags(["-I", host])]
+    let syntaxLinker: [LinkerSetting] = [.unsafeFlags(["-L", host, "-Xlinker", "-rpath", "-Xlinker", host])]
+    targets.append(.testTarget(name: "SwiftTestExtensionTests", dependencies: ["SwiftTestExtension"],
+                               swiftSettings: syntaxSettings, linkerSettings: syntaxLinker))
+    products.append(.library(name: "SwiftTestExtension", type: .dynamic, targets: ["SwiftTestExtension"]))
+    targets.append(.target(name: "SwiftTestExtension", dependencies: ["LavaEditorExtensionAPI"],
+                           path: "Examples/SwiftTestExtension", exclude: ["extension.json", "README.md"],
+                           swiftSettings: syntaxSettings + [.enableExperimentalFeature("CheckImplementationOnly")],
+                           linkerSettings: syntaxLinker))
     products.append(.library(name: "FormatJSON", type: .dynamic, targets: ["FormatJSON"]))
     targets.append(contentsOf: [
         Target.target(name: "LavaEditorExtensionAPI",

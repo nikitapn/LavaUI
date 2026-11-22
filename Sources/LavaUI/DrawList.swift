@@ -2592,6 +2592,7 @@ extension DrawList {
     fileprivate func emitEditor(
         _ leaf: LeafNode, x: Float, y: Float, w: Float, h: Float
     ) {
+        leaf.lineActionHits.removeAll(keepingCapacity: true)
         guard let font = leaf.font ?? FontStore.default else { return }
         let style = leaf.codeStyle ?? CodeStyle()
         let inset = leaf.textInset
@@ -2688,7 +2689,8 @@ extension DrawList {
         // a screenful at most.
         let firstTop = y + inset + leaf.screenY(ofRow: firstRow, lineHeight: lineH)
         @inline(__always) func rowTopOf(_ row: Int) -> Float {
-            firstTop + Float(row - firstRow) * lineH
+            if leaf.lineActions.isEmpty { return firstTop + Float(row - firstRow) * lineH }
+            return y + inset + leaf.screenY(ofRow: row, lineHeight: lineH)
         }
 
         // Pass 1 — chrome that must not scroll horizontally. The gutter stays
@@ -2740,6 +2742,13 @@ extension DrawList {
                     w: w - gutter, h: lineH, color: style.currentLine
                 )
             }
+            if !leaf.lineActions.isEmpty, leaf.isLineStart(ofRow: row),
+               let action = leaf.lineActions[leaf.logicalLine(ofRow: row)]?.first(where: \.gutterPlay) {
+                let center = rowTop + lineH / 2
+                let tint = Color(r: 0.22, g: 0.68, b: 0.38)
+                polyline([(x + 5, center - 6), (x + 15, center), (x + 5, center + 6), (x + 5, center - 6)], color: tint)
+                leaf.lineActionHits.append((CGRect(x: 0, y: CGFloat(rowTop - y), width: CGFloat(leaf.actionGutterWidth), height: CGFloat(lineH)), action))
+            }
             if leaf.showsGutter, leaf.gutterWidth > 0 {
                 // Numbers count logical lines, and only the row a line starts
                 // on carries one. While wrapping, numbering every row would
@@ -2769,7 +2778,7 @@ extension DrawList {
                         .min(by: { $0.severity.rank < $1.severity.rank })
                     {
                         text(
-                            deco.resolvedGutterIcon, x: x + 2, y: rowTop,
+                            deco.resolvedGutterIcon, x: x + leaf.actionGutterWidth + 2, y: rowTop,
                             w: inset * 2, h: lineH,
                             color: deco.resolvedColor, font: font
                         )
@@ -2834,6 +2843,24 @@ extension DrawList {
 
             let lineText = String(state.text[lo..<hi])
             let run = font.shapedRun(lineText)
+            if !leaf.lineActions.isEmpty, leaf.isLineStart(ofRow: row),
+               let actions = leaf.lineActions[leaf.logicalLine(ofRow: row)] {
+                let indent = lineText.prefix { $0 == " " || $0 == "\t" }
+                var hintX = textX + font.shapedRun(String(indent)).width - 4
+                let hintY = rowTop - lineH
+                for action in actions where !action.hint.isEmpty {
+                    let width = font.shapedRun(action.hint).width + 8
+                    text(action.hint, x: hintX, y: hintY, w: width, h: lineH,
+                         color: style.gutterText, font: font)
+                    let left = max(x + leaf.gutterWidth, hintX)
+                    let right = min(x + w, hintX + width)
+                    if right > left {
+                        leaf.lineActionHits.append((CGRect(x: CGFloat(left - x), y: CGFloat(hintY - y),
+                                                         width: CGFloat(right - left), height: CGFloat(lineH)), action))
+                    }
+                    hintX += width + inset
+                }
+            }
 
             func columnX(_ column: Int) -> Float {
                 let clamped = max(0, min(column, lineText.count))

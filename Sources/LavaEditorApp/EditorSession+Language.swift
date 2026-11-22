@@ -13,6 +13,7 @@ extension EditorSession {
     /// Debounced: `documents` changes on every keystroke, and a server needs
     /// the text when the typing pauses, not each version of it.
     func scheduleLanguageSync() {
+        scheduleLineActionDiscovery()
         guard !languageSyncScheduled else { return }
         languageSyncScheduled = true
         let owner = LanguageSessionRef(self)

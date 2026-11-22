@@ -635,6 +635,17 @@ final class LeafNode: YogaBoxNode {
     var keyInterceptor: ((KeyEvent) -> Bool)?
     /// Whole-line marks, sorted by first line. See `EditorLineMark`.
     var lineMarks: [EditorLineMark] = []
+    var lineActions: [Int: [EditorLineAction]] = [:] {
+        didSet {
+            actionLines = lineActions.compactMap { key, actions in
+                actions.contains { !$0.hint.isEmpty } ? key : nil
+            }.sorted()
+            actionGutterWidth = lineActions.values.contains { $0.contains(where: \.gutterPlay) } ? 20 : 0
+        }
+    }
+    private var actionLines: [Int] = []
+    private(set) var actionGutterWidth: Float = 0
+    var lineActionHits: [(rect: CGRect, action: EditorLineAction)] = []
     /// Vertical scroll offset in pixels. Positive scrolls content up.
     ///
     /// A `Double`, unlike every other coordinate here, because it is the one
@@ -927,7 +938,7 @@ final class LeafNode: YogaBoxNode {
     /// same numbers the paint does, and a drag that computed its own would be
     /// a second definition of where the thumb is.
     func verticalScrollbar(font: UIFont) -> Scrollbar.Metrics? {
-        let content = Float(editing.layout.count) * font.lineHeight + textInset * 2
+        let content = Float(documentY(ofRow: editing.layout.count, lineHeight: font.lineHeight)) + textInset * 2
         return Scrollbar.metrics(
             track: viewportHeight, content: content,
             offset: Float(scrollY), maxOffset: Float(maxScrollY(lineHeight: font.lineHeight))
@@ -954,7 +965,14 @@ final class LeafNode: YogaBoxNode {
     /// Where a row starts in the document, in pixels — in `Double`, like
     /// `scrollY`, since it is the same kind of number. See `scrollY`.
     func documentY(ofRow row: Int, lineHeight: Float) -> Double {
-        Double(row) * Double(lineHeight)
+        guard !actionLines.isEmpty else { return Double(row) * Double(lineHeight) }
+        let logical = row >= editing.layout.count ? logicalLineCount - 1 : logicalLine(ofRow: row)
+        var lo = 0, hi = actionLines.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if actionLines[mid] <= logical { lo = mid + 1 } else { hi = mid }
+        }
+        return Double(row + lo) * Double(lineHeight)
     }
 
     /// Where a row starts below the top of the text area. Small whenever the
@@ -965,13 +983,26 @@ final class LeafNode: YogaBoxNode {
 
     /// The row under a point `localY` below the top of the text area.
     func row(atScreenY localY: Float, lineHeight: Float) -> Int {
+        row(atDocumentY: scrollY + Double(localY), lineHeight: lineHeight)
+    }
+
+    func row(atDocumentY y: Double, lineHeight: Float) -> Int {
         guard lineHeight > 0 else { return 0 }
-        return Int(((scrollY + Double(localY)) / Double(lineHeight)).rounded(.down))
+        let slot = Int((y / Double(lineHeight)).rounded(.down))
+        guard !actionLines.isEmpty else { return slot }
+        // Each preceding hint occupies one display slot. A hit on the hint
+        // itself belongs to its declaration for selection and scroll anchoring.
+        var lo = 0, hi = actionLines.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if firstRow(ofLine: actionLines[mid]) + mid < slot { lo = mid + 1 } else { hi = mid }
+        }
+        return slot - lo
     }
 
     /// Largest legal scroll offset for the current content.
     func maxScrollY(lineHeight: Float) -> Double {
-        let content = Double(editing.layout.count) * Double(lineHeight)
+        let content = documentY(ofRow: editing.layout.count, lineHeight: lineHeight)
         let visible = Double(viewportHeight - textInset * 2)
         return max(0, content - visible)
     }
@@ -1148,7 +1179,7 @@ final class LeafNode: YogaBoxNode {
         let row = editing.layout.rowIndex(
             ofOffset: editing.offset(of: editing.focus), affinity: editing.affinity
         )
-        let rowTop = Double(row) * Double(lineHeight)
+        let rowTop = documentY(ofRow: row, lineHeight: lineHeight)
         let visible = Double(viewportHeight - textInset * 2)
         if rowTop < scrollY {
             scrollY = rowTop
@@ -1408,7 +1439,7 @@ final class LeafNode: YogaBoxNode {
                 // and its contents cannot disagree. Deriving it from
                 // Font::measure instead let the two drift, which is what made
                 // the editor's last line spill past its own box.
-                let shown = min(max(editing.layout.count, 1), max(1, maxLines))
+                let shown = min(max(editing.layout.count + actionLines.count, 1), max(1, maxLines))
                 let height = Float(shown) * font.lineHeight + textInset * 2
                 // Seed the viewport; the emitter corrects it from the box Yoga
                 // actually granted, which can be smaller.

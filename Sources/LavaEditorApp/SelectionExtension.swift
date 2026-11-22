@@ -45,6 +45,18 @@ enum SelectionExtension {
         }
     }
 
+    static func launch(_ installed: InstalledCommand, reference: String, invocation: UInt64, deadline: String) throws {
+        let executable = try FileManager.default.destinationOfSymbolicLink(atPath: "/proc/self/exe")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/timeout")
+        process.arguments = ["--signal=KILL", deadline, executable, "--extension-host", installed.library.path, reference, String(invocation), installed.command.id]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw Failure(message: "Extension command failed or timed out (status \(process.terminationStatus)).")
+        }
+    }
+
     static func run(_ installed: InstalledCommand, text: String, document: Int, revision: Int,
                     startByte: Int) throws -> String {
         #if canImport(LavaEditorExtensionAPI)
@@ -55,15 +67,7 @@ enum SelectionExtension {
                                          text: text)
         let invocation = service.begin(snapshot)
         defer { service.finish(invocation) }
-        let executable = try FileManager.default.destinationOfSymbolicLink(atPath: "/proc/self/exe")
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/timeout")
-        process.arguments = ["--signal=KILL", "5s", executable, "--extension-host", installed.library.path, reference, String(invocation), installed.command.id]
-        try process.run()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            throw Failure(message: "Formatter failed or timed out (status \(process.terminationStatus)).")
-        }
+        try launch(installed, reference: reference, invocation: invocation, deadline: "5s")
         guard let edit = service.result(for: invocation) else { throw Failure(message: "Formatter submitted no edit.") }
         return edit
         #else

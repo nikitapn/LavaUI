@@ -1,7 +1,7 @@
 import Foundation
 
 struct ExtensionCommand: Decodable, Sendable {
-    enum Kind: String, Decodable { case selectionEdit }
+    enum Kind: String, Decodable { case selectionEdit, documentActions }
 
     let id: String
     let title: String

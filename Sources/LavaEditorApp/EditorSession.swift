@@ -83,6 +83,12 @@ final class EditorSession {
     /// still be readable a minute later.
     var extensions = ExtensionCatalog.discover()
     var extensionRunning = false
+    var lineActions: [Int: [EditorLineAction]] = [:]
+    var actionSnapshot: (document: Int, revision: Int, path: String, text: String)?
+    var actionGeneration: UInt64 = 0
+    @ObservationIgnored var discoveryTimer: DispatchWorkItem?
+    var scanningActions = false
+    var runningLineAction = false
     var notice: String?
 
     /// A close the user has to confirm, because the document has unsaved
@@ -855,11 +861,13 @@ final class EditorSession {
     }
 
     var matchingExtensionCommands: [InstalledCommand] {
-        extensions.commands.filter { $0.command.matches(language: active.language.rawValue, url: active.url) }
+        extensions.commands.filter { $0.command.kind == .selectionEdit && $0.command.matches(language: active.language.rawValue, url: active.url) }
     }
 
     func reloadExtensions() {
         extensions = ExtensionCatalog.discover()
+        actionSnapshot = nil
+        refreshLineActions()
         notice = extensions.errors.isEmpty ? "Loaded \(extensions.commands.count) extension commands"
             : extensions.errors.joined(separator: "\n")
     }
