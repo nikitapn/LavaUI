@@ -183,27 +183,6 @@ extension EditorSession {
         }
     }
 
-    /// New Claude / New Codex: the CLI itself, interactively, in a new tab in
-    /// the repository's folder, with no prompt. Naming the worktree and the
-    /// branch is done in that window, where the CLI's own input — pasting a
-    /// screenshot, selecting text, its permission prompts — is all there.
-    /// Each click is its own tab, so several agents can run side by side.
-    func startNewAgent(_ agent: AgentSession.Agent) {
-        guard let repository = project?.repository else { return }
-        let key = "new:" + UUID().uuidString
-        switch agent {
-        case .claude:
-            var command = "claude --permission-mode auto"
-            if let chosen = ProcessInfo.processInfo.environment["LAVAEDITOR_CLAUDE_MODEL"], !chosen.isEmpty {
-                command += " --model " + Self.shellQuoted(chosen)
-            }
-            openAgentTerminal(key: key, title: "Claude", name: "new", directory: repository.root, command: command)
-        case .codex:
-            openAgentTerminal(key: key, title: "Codex", name: "new", directory: repository.root, command: "codex")
-        }
-        agents.notice = nil
-    }
-
     /// The session's chat in a tab — the one already open for it, if any.
     func openSessionChat(_ agent: AgentSession) {
         let optionID = "chat:" + agent.id
@@ -264,7 +243,7 @@ struct AgentsPanel: View {
              hoverFill: theme.hover, cornerRadius: 6, onClick: { session.startNewAgent(agent) })
             .padding(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8))
             .cursor(.pointer)
-            .tooltip("Open \(agent == .claude ? "Claude Code" : "Codex") in a new tab, in this repository")
+            .tooltip("Open \(agent == .claude ? "Claude Code" : "Codex") in a new tab")
             .agentId("agents-new-\(agent.rawValue)")
     }
 

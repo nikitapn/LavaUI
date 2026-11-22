@@ -356,6 +356,37 @@ final class GitRepositoryTests: XCTestCase {
         XCTAssertEqual(try read("u.txt"), "untracked here\n")
     }
 
+    func testAddsWorktreeFromCurrentCommitWithoutMovingSource() throws {
+        let repo = try XCTUnwrap(GitRepository.containing(directory))
+        try git_("switch", "-c", "feature")
+        try git_("branch", "-f", "main")
+        try write("committed in feature\n", to: "a.txt")
+        try git_("commit", "-am", "feature commit")
+        try write("dirty source\n", to: "a.txt")
+        let linked = directory.deletingLastPathComponent()
+            .appendingPathComponent(directory.lastPathComponent + " linked", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: linked) }
+
+        try repo.addWorktree(at: linked, branch: "agents/feature")
+
+        XCTAssertEqual(try GitRepository(root: linked).branch(), "agents/feature")
+        XCTAssertEqual(try String(contentsOf: linked.appendingPathComponent("a.txt"), encoding: .utf8),
+                       "committed in feature\n")
+        XCTAssertEqual(try repo.branch(), "feature")
+        XCTAssertEqual(try read("a.txt"), "dirty source\n")
+        XCTAssertThrowsError(try repo.addWorktree(at: linked, branch: "collision"))
+        XCTAssertFalse(try repo.branches().contains { $0.name == "collision" })
+
+        let main = linked.appendingPathExtension("main")
+        defer { try? FileManager.default.removeItem(at: main) }
+        XCTAssertTrue(try repo.hasLocalBranch("main"))
+        XCTAssertFalse(try repo.hasLocalBranch("missing-branch"))
+        try repo.addWorktree(at: main, branch: "main", createBranch: false)
+        XCTAssertEqual(try GitRepository(root: main).branch(), "main")
+        XCTAssertEqual(try String(contentsOf: main.appendingPathComponent("a.txt"), encoding: .utf8), "one\ntwo\n")
+        XCTAssertEqual(try repo.branch(), "feature")
+    }
+
     func testWorktreesAndABranchCheckedOutInAnother() throws {
         let repo = try XCTUnwrap(GitRepository.containing(directory))
         let base = try XCTUnwrap(repo.branch())

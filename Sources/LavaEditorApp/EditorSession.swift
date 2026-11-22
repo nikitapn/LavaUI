@@ -98,6 +98,7 @@ final class EditorSession {
     @ObservationIgnored var attachedTerminals: [String: TerminalSession] = [:]
     /// The Agents view's rows. See `AgentsModel`.
     let agents = AgentsModel()
+    var agentLaunch: AgentLaunch?
     /// Ctrl+I's box between lines, while it is open. See `InlineChat`.
     var inlineChat: InlineChat?
     /// Where the editor drew the box's gap. Always the same object: the

@@ -158,6 +158,28 @@ extension GitRepository {
         }
     }
 
+    public func hasLocalBranch(_ name: String) throws -> Bool {
+        try withRepository { repo in
+            var reference: OpaquePointer?
+            let result = git_branch_lookup(&reference, repo, name, GIT_BRANCH_LOCAL)
+            defer { git_reference_free(reference) }
+            if result == GIT_ENOTFOUND.rawValue { return false }
+            guard result == 0 else { throw LibGit.error("branch") }
+            return true
+        }
+    }
+
+    /// Creates a linked worktree on the given branch. New branches start at this worktree's HEAD.
+    public func addWorktree(at directory: URL, branch: String, createBranch: Bool = true) throws {
+        let path = directory.standardizedFileURL.path
+        let files = FileManager.default
+        guard !files.fileExists(atPath: path), (try? files.destinationOfSymbolicLink(atPath: path)) == nil else {
+            throw GitError.failed(command: "worktree add", message: "The destination already exists: \(path)")
+        }
+        let arguments = createBranch ? ["--no-track", "-b", branch, "--", path, "HEAD"] : ["--", path, branch]
+        try GitCommand.check("worktree add", executable, ["worktree", "add"] + arguments, in: root)
+    }
+
     /// Checks `name` out in this working tree, the way `git switch` does:
     /// changes that the switch does not touch come along, and nothing is
     /// written at all if any change would be overwritten — the files are in

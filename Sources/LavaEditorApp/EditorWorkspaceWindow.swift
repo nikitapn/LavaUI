@@ -63,5 +63,16 @@ struct EditorWorkspaceWindow: View {
                 BranchPickerView(session: session, picker: picker, appearance: appearance)
             }
         }
+        .overlay(
+            isPresented: Binding(get: { session.agentLaunch != nil }, set: { presented in
+                if !presented { session.cancelAgentLaunch() }
+            }),
+            placement: AgentLaunchView.placement,
+            style: AgentLaunchView.style(session: session, theme: appearance.theme)
+        ) {
+            if let launch = session.agentLaunch {
+                AgentLaunchView(session: session, launch: launch, appearance: appearance)
+            }
+        }
     }
 }

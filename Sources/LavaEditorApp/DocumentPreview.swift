@@ -1,4 +1,5 @@
 import Foundation
+import LavaGitCore
 import Observation
 import LavaUI
 #if canImport(LavaEditorExtensionAPI)
@@ -42,8 +43,9 @@ final class DocumentPreview {
     let sourceID: Int
     let optionID: String
     let title: String
+    private let agentBranch: String?
     var sourceName: String
-    var tabTitle: String { title + " · " + sourceName }
+    var tabTitle: String { [title, agentBranch, sourceName].compactMap { $0 }.joined(separator: " · ") }
     var content: Content = .message("Loading preview…")
     @ObservationIgnored private var snapshot: (URL?, String)?
     @ObservationIgnored private var generation = 0
@@ -52,6 +54,7 @@ final class DocumentPreview {
         sourceID = source.id
         sourceName = source.name
         optionID = option.id
+        agentBranch = nil
         if case .command(let provider) = option, provider.command.kind == .embeddedSurface {
             title = provider.command.title
         } else { title = "Preview" }
@@ -63,6 +66,7 @@ final class DocumentPreview {
         sourceID = -1
         optionID = "chat:" + chat.session.id
         title = chat.session.agent == .claude ? "Claude" : "Codex"
+        agentBranch = Self.branchLabel(in: chat.session.directory)
         let name = chat.session.title
         sourceName = name.count > 40 ? String(name.prefix(39)) + "…" : name
         content = .chat(chat)
@@ -74,7 +78,13 @@ final class DocumentPreview {
         optionID = "terminal:" + terminal.key
         self.title = title
         sourceName = name
+        agentBranch = terminal.session.workingDirectory.flatMap { Self.branchLabel(in: $0) }
         content = .terminal(terminal)
+    }
+
+    private static func branchLabel(in directory: URL) -> String? {
+        guard let repository = GitRepository.containing(directory) else { return nil }
+        return (try? repository.branch()) ?? "Detached HEAD"
     }
 
     func invalidate() {
