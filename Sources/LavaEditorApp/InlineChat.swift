@@ -34,9 +34,15 @@ final class InlineChat {
 
     private(set) var sessions: [AgentSession] = []
     private(set) var sessionsLoaded = false
-    /// The session to fork; nil for a new one. Fixed once the first
+    /// The session picked; nil for a new one. Fixed once the first
     /// question is sent — the process is that session's from then on.
     var choice: AgentSession?
+    /// Ask the picked session itself, so the question and its answer land in
+    /// that conversation (`InPlaceChannel`), rather than a read-only fork.
+    var inPlace = true
+    var asksInPlace: Bool { choice != nil && inPlace }
+    /// Files the session wrote while answering, as it named them.
+    private(set) var edited: [String] = []
     /// Which agent a new session is started with.
     var newAgent: AgentSession.Agent = .claude
     var agent: AgentSession.Agent { choice?.agent ?? newAgent }
@@ -85,7 +91,7 @@ final class InlineChat {
 
     // MARK: - Talking
 
-    func send(onExit: @escaping () -> Void) {
+    func send(editor: EditorSession, onExit: @escaping () -> Void) {
         let question = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty, !busy else { return }
         draft = ""
@@ -98,11 +104,20 @@ final class InlineChat {
             }
             let folder = choice?.directory ?? directory
             do {
+                if asksInPlace, let choice {
+                    let session = ChatRef(self)
+                    process = InPlaceChannel(session: choice, editor: editor, onEvent: onEvent, onEdited: { [weak editor] paths in
+                        guard let chat = session.chat else { return }
+                        for path in paths where !chat.edited.contains(path) { chat.edited.append(path) }
+                        editor?.rereadChangedDocuments()
+                    })
+                } else {
                 switch agent {
                 case .claude:
                     process = try ClaudeChatProcess(resuming: choice, in: folder, onEvent: onEvent, onExit: onEnd)
                 case .codex:
                     process = try CodexChatProcess(resuming: choice, in: folder, onEvent: onEvent, onExit: onEnd)
+                }
                 }
             } catch {
                 turns.append(Turn(question: question, finished: true, failure: "\(error)"))
@@ -110,13 +125,16 @@ final class InlineChat {
             }
         }
         // The first question carries the lines; follow-ups are about them.
+        // Asked in place, the session is the user's own agent with its own
+        // tools: no read-only instructions, no request for a block.
+        let place = asksInPlace
         var message = turns.isEmpty
             ? InlineChatPrompt.question(question, path: path, lines: (lines.lowerBound + 1)...(lines.upperBound + 1),
-                                        language: language, text: original)
-            : InlineChatPrompt.followUp(question)
+                                        language: language, text: original, reminder: !place)
+            : (place ? question : InlineChatPrompt.followUp(question))
         // Codex has no flag for adding to its instructions; they lead the
         // first message instead, which its history keeps for the rest.
-        if turns.isEmpty, agent == .codex { message = InlineChatPrompt.instructions + "\n\n" + message }
+        if turns.isEmpty, agent == .codex, !place { message = InlineChatPrompt.instructions + "\n\n" + message }
         turns.append(Turn(question: question))
         process?.send(message)
     }
@@ -250,7 +268,7 @@ extension EditorSession {
 
     func sendInlineChat() {
         guard let chat = inlineChat else { return }
-        chat.send(onExit: {})
+        chat.send(editor: self, onExit: {})
     }
 
     /// The proposal as a diff: the document as it is against the document

@@ -22,8 +22,11 @@ public enum InlineChatPrompt {
 
     /// The first message: the question, with where it is about and what is
     /// there now. `lines` are 1-based and inclusive, as people say them.
+    /// `reminder`: ask for the `replace` block. Off for a question put to a
+    /// session in place, which has its tools and edits the file itself.
     public static func question(
-        _ question: String, path: String, lines: ClosedRange<Int>, language: String, text: String
+        _ question: String, path: String, lines: ClosedRange<Int>, language: String, text: String,
+        reminder: Bool = true
     ) -> String {
         let place = lines.count == 1 ? "line \(lines.lowerBound)" : "lines \(lines.lowerBound)-\(lines.upperBound)"
         let fence = fenceFor(text)
@@ -34,9 +37,7 @@ public enum InlineChatPrompt {
             \(fence)
 
             \(question)
-
-            \(reminder)
-            """
+            """ + (reminder ? "\n\n" + Self.reminder : "")
     }
 
     /// Said with every message, not only in the system prompt: a resumed

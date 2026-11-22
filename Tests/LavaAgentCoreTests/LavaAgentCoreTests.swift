@@ -292,3 +292,35 @@ final class TranscriptTests: XCTestCase {
         XCTAssertTrue(CodexSessions.turnOpen(lines: lines(["task_started", "task_complete", "task_started"])))
     }
 }
+
+final class InPlaceTests: XCTestCase {
+    func testTailFromEndSeesOnlyWhatComesAfter() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("lava-end-\(UUID().uuidString).jsonl")
+        defer { try? FileManager.default.removeItem(at: file) }
+        try (#"{"type":"user","message":{"content":"before"}}"# + "\n").write(to: file, atomically: true, encoding: .utf8)
+        var tail = TranscriptTail(file: file, agent: .claude, fromEnd: true)
+        XCTAssertEqual(tail.read(), [])
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((#"{"type":"assistant","message":{"content":[{"type":"text","text":"after"}]}}"# + "\n").utf8))
+        try handle.close()
+        XCTAssertEqual(tail.read(), [TranscriptEntry(.assistant, "after")])
+    }
+
+    func testEntriesAsReplyEventsAndEdits() {
+        XCTAssertEqual(TranscriptEntry(.user, "q").event, [])
+        XCTAssertEqual(TranscriptEntry(.assistant, "hi").event, [.textBlock, .text("hi")])
+        XCTAssertEqual(TranscriptEntry(.tool, "Read /a/b.swift").event, [.tool(name: "Read", detail: "/a/b.swift")])
+        XCTAssertEqual(TranscriptEntry(.tool, "Edit /a/b c.swift").editedPaths, ["/a/b c.swift"])
+        XCTAssertEqual(TranscriptEntry(.tool, "Read /a/b.swift").editedPaths, [])
+        let patch = #"{"type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","input":"*** Begin Patch\n*** Update File: Sources/a.swift\n@@\n-x\n+y\n*** Add File: b.swift\n+z\n*** End Patch"}}"#
+        let entries = TranscriptParser.codex(Data(patch.utf8))
+        XCTAssertEqual(entries.flatMap(\.editedPaths), ["Sources/a.swift", "b.swift"])
+    }
+
+    func testQuestionWithoutReminder() {
+        let text = InlineChatPrompt.question("Why?", path: "a.swift", lines: 1...1, language: "swift", text: "x", reminder: false)
+        XCTAssertTrue(text.hasSuffix("Why?"))
+        XCTAssertFalse(text.contains(InlineChatPrompt.reminder))
+    }
+}

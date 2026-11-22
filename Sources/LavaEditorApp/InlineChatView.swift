@@ -36,14 +36,25 @@ struct InlineChatView: View {
         let place = chat.lines.count == 1
             ? "line \(chat.lines.lowerBound + 1)"
             : "lines \(chat.lines.lowerBound + 1)–\(chat.lines.upperBound + 1)"
-        let sessionTitle = chat.choice.map { "Fork of " + $0.title } ?? "New session"
+        let sessionTitle = chat.choice.map { (chat.inPlace ? "" : "Fork of ") + $0.title } ?? "New session"
         return HStack(alignment: .center, spacing: 8) {
             Text(Self.name(chat.agent), color: theme.accent, font: session.fonts.statusEmphasis)
             pill(sessionTitle, theme: theme, enabled: !chat.started) {
                 chat.pickingSession.toggle()
             }
-            .tooltip(chat.started ? "This chat's session" : "Choose a session to fork")
+            .tooltip(chat.started ? "This chat's session" : "Choose a session")
             .agentId("inline-chat-session")
+            // In place: the question lands in that conversation and its own
+            // agent answers, tools and all. Fork: a read-only copy proposes.
+            if chat.choice != nil {
+                pill(chat.inPlace ? "In this session" : "Fork", theme: theme, enabled: !chat.started) {
+                    chat.inPlace.toggle()
+                }
+                .tooltip(chat.inPlace
+                    ? "Asks the session itself: the answer lands in its chat, and it may edit files. Click to ask a read-only fork instead."
+                    : "Asks a read-only copy, which proposes a change to review. Click to ask the session itself.")
+                .agentId("inline-chat-mode")
+            }
             Text(place, color: .muted, font: session.fonts.status, lineLimit: 1)
             Spacer()
             if chat.busy {
@@ -174,6 +185,11 @@ struct InlineChatView: View {
                     if let failure = turn.failure {
                         Text(failure, color: theme.accent, font: session.fonts.status)
                     }
+                }
+                if !chat.edited.isEmpty {
+                    Text("Changed " + chat.edited.map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: ", "),
+                         color: .secondary, font: session.fonts.status)
+                        .agentId("inline-chat-edited")
                 }
             }
             .padding(.trailing, 8)

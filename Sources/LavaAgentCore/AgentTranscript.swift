@@ -65,10 +65,23 @@ public enum TranscriptParser {
         case "custom_tool_call", "function_call", "local_shell_call":
             let name = payload["name"] as? String ?? "tool"
             let input = (payload["input"] as? String) ?? (payload["arguments"] as? String) ?? ""
+            if name == "apply_patch" {
+                return [TranscriptEntry(.tool, "apply_patch " + patchedPaths(input).joined(separator: " "))]
+            }
             let detail = commandIn(input)
             return [TranscriptEntry(.tool, detail.isEmpty ? name : "\(name) \(detail)")]
         default:
             return []
+        }
+    }
+
+    /// The files a patch in Codex's `apply_patch` format touches.
+    static func patchedPaths(_ patch: String) -> [String] {
+        patch.split(whereSeparator: \.isNewline).compactMap { line in
+            for marker in ["*** Update File: ", "*** Add File: ", "*** Delete File: "] where line.hasPrefix(marker) {
+                return String(line.dropFirst(marker.count)).trimmingCharacters(in: .whitespaces)
+            }
+            return nil
         }
     }
 
@@ -120,10 +133,12 @@ public struct TranscriptTail: Sendable {
     private var lines = LineBuffer()
     private let initialBytes: UInt64
 
-    public init(file: URL, agent: AgentSession.Agent, initialBytes: UInt64 = 2 * 1024 * 1024) {
+    /// `fromEnd`: the first read returns nothing and only marks the end —
+    /// for following what is said *after* a question goes out.
+    public init(file: URL, agent: AgentSession.Agent, initialBytes: UInt64 = 2 * 1024 * 1024, fromEnd: Bool = false) {
         self.file = file
         self.agent = agent
-        self.initialBytes = initialBytes
+        self.initialBytes = fromEnd ? 0 : initialBytes
     }
 
     public mutating func read() -> [TranscriptEntry] {
@@ -147,6 +162,35 @@ public struct TranscriptTail: Sendable {
         offset = size
         let parse = agent == .claude ? TranscriptParser.claude : TranscriptParser.codex
         return complete.flatMap(parse)
+    }
+}
+
+extension TranscriptEntry {
+    /// The entry as the inline chat hears a reply: text, or a tool used.
+    /// A user entry is not the reply.
+    public var event: [AgentEvent] {
+        switch kind {
+        case .user: return []
+        case .assistant: return [.textBlock, .text(text)]
+        case .tool:
+            let parts = text.split(separator: " ", maxSplits: 1)
+            return [.tool(name: parts.first.map(String.init) ?? text, detail: parts.count > 1 ? String(parts[1]) : "")]
+        }
+    }
+
+    /// Files this entry wrote, when it is a tool that writes files: Claude
+    /// Code's Edit, Write, MultiEdit and NotebookEdit, Codex's apply_patch.
+    /// As the tool was given them — absolute, or relative to the session's
+    /// folder.
+    public var editedPaths: [String] {
+        guard kind == .tool else { return [] }
+        let parts = text.split(separator: " ", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return [] }
+        switch parts[0] {
+        case "Edit", "Write", "MultiEdit", "NotebookEdit": return [parts[1]]
+        case "apply_patch": return parts[1].split(separator: " ").map(String.init)
+        default: return []
+        }
     }
 }
 

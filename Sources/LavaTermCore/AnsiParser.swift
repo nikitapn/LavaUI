@@ -89,7 +89,12 @@ public final class AnsiParser: @unchecked Sendable {
     /// is a reset, `CSI 0 m` the same by another road.
     private var csiAny = false
     private var csiPrivate = false
-    private var oscBuffer = ""
+    /// An OSC payload as the bytes it arrived as. Outside plain text the
+    /// parser goes byte by byte, so a title held as characters took each
+    /// byte of a multi-byte character for a Latin-1 one of its own — Claude
+    /// Code's spinner `⠳` in a tab title came out as `â` and two more. It is
+    /// decoded as UTF-8 once, when the sequence ends.
+    private var oscBytes: [UInt8] = []
     /// The start of a UTF-8 character the last chunk ended in the middle of.
     /// The PTY is read in fixed-size chunks, so a multi-byte character lands
     /// across two of them now and then, and decoding each half alone printed
@@ -101,7 +106,7 @@ public final class AnsiParser: @unchecked Sendable {
     public func reset() {
         state = .ground
         resetCSI()
-        oscBuffer = ""
+        oscBytes.removeAll(keepingCapacity: true)
         pendingUTF8 = []
     }
 
@@ -256,8 +261,8 @@ public final class AnsiParser: @unchecked Sendable {
             }
             // OSC 52 is a base64 clipboard payload; a long Grok copy is
             // tens of kilobytes. The old 4 KiB cap truncated it to garbage.
-            if oscBuffer.count < 512_000 {
-                oscBuffer.append(Character(s))
+            if oscBytes.count < 512_000, s.value <= 0xFF {
+                oscBytes.append(UInt8(s.value))
             }
             return []
 
@@ -267,7 +272,7 @@ public final class AnsiParser: @unchecked Sendable {
                 return [finishOSC()]
             }
             state = .ground
-            oscBuffer = ""
+            oscBytes.removeAll(keepingCapacity: true)
             return [.ignore]
 
         case .stringIgnored:
@@ -290,9 +295,9 @@ public final class AnsiParser: @unchecked Sendable {
     /// Classify a finished OSC payload. Unknown codes are ignored rather than
     /// printed, which is the whole reason OSC went through a string state.
     private func finishOSC() -> Output {
-        let raw = oscBuffer
+        let raw = String(decoding: oscBytes, as: UTF8.self)
         state = .ground
-        oscBuffer = ""
+        oscBytes.removeAll(keepingCapacity: true)
         guard let semi = raw.firstIndex(of: ";") else { return .ignore }
         let code = String(raw[..<semi])
         let payload = String(raw[raw.index(after: semi)...])
@@ -330,7 +335,7 @@ public final class AnsiParser: @unchecked Sendable {
             return []
         case 0x5D:  // ]
             state = .osc
-            oscBuffer = ""
+            oscBytes.removeAll(keepingCapacity: true)
             return []
         // DCS / SOS / PM / APC — ignore the string body until BEL or ST.
         case 0x50, 0x58, 0x5E, 0x5F:  // P X ^ _

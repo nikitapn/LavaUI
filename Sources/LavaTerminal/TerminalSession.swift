@@ -102,6 +102,13 @@ public final class TerminalSession: @unchecked Sendable {
         }
     }
 
+    /// The shell's process id while it runs — for telling which terminal a
+    /// program found by its own pid is running in.
+    public var shellPid: pid_t? {
+        guard let pid = pty?.childPid, pid > 0 else { return nil }
+        return pid
+    }
+
     public func stop() {
         inbox.close()
         pty?.stop()

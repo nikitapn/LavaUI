@@ -15,6 +15,7 @@ struct LavaEditorApp {
             exit(status)
         }
         SelectionExtension.start()
+        forgetLaunchingAgentSession()
         // Before the session, which reads the wrap and line-number settings
         // out of it in its initialiser.
         AppSettings.configure(appName: "LavaEditor")
@@ -291,5 +292,24 @@ struct LavaEditorApp {
                 session.clearRecentProjectPaths(kind)
             }
         }
+    }
+}
+
+/// Started from inside a Claude Code session — its shell tool, a `!`
+/// command — the editor inherits that session's identity: its id, the token
+/// for its messaging socket, and the mark of being its child. Everything the
+/// editor starts would inherit it in turn, so a `claude` typed into the
+/// terminal panel believed it was a sub-session of that one, did not
+/// register as a session of its own (`claude agents` never listed it, which
+/// the Agents view and the inline chat rely on to tell a running session
+/// from a stopped one), and held another session's token besides.
+///
+/// Only what ties a process to one running session goes; settings that
+/// apply to every session (`CLAUDE_CONFIG_DIR`, the user's own `CLAUDE_*`
+/// preferences) stay.
+private func forgetLaunchingAgentSession() {
+    for (key, _) in ProcessInfo.processInfo.environment
+    where key == "CLAUDECODE" || key == "CLAUDE_PID" || key == "CLAUDE_EFFORT" || key.hasPrefix("CLAUDE_CODE_") {
+        unsetenv(key)
     }
 }
