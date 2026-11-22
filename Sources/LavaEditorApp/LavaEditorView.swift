@@ -92,6 +92,8 @@ struct LavaEditorView: View {
                                               foreground: appearance.documentTheme.textPrimary)
                     }
                 #endif
+                case .terminal(let terminal):
+                    AgentTerminalView(session: session, terminal: terminal, appearance: appearance)
                 case .chat(let transcript):
                     SessionTranscriptView(session: session, transcript: transcript, appearance: appearance)
                 case .markdown(let text):

@@ -244,9 +244,10 @@ private struct ChannelRef: @unchecked Sendable {
 }
 
 extension EditorSession {
-    /// The terminal tab whose shell `pid` runs under, if any.
+    /// The terminal — a panel tab or an agent's document tab — whose shell
+    /// `pid` runs under, if any.
     func terminal(running pid: Int32) -> TerminalSession? {
-        let shells = terminal.tabs.compactMap { tab in tab.shellPid.map { ($0, tab) } }
+        let shells = (terminal.tabs + agentTerminals.map(\.session)).compactMap { tab in tab.shellPid.map { ($0, tab) } }
         guard !shells.isEmpty else { return nil }
         var current = pid
         for _ in 0..<64 {

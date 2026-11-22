@@ -54,6 +54,7 @@ final class EditorSession {
         didSet {
             guard activeIndex != oldValue else { return }
             refreshActivePreview()
+            focusActiveAgentTerminal()
             hoverCard = nil
             completion = nil
             scheduleLanguageSync()
@@ -682,6 +683,11 @@ final class EditorSession {
             if let tab = documents.firstIndex(where: { $0.id == preview.id }) { close(tab) }
         }
         guard let index = documents.firstIndex(where: { $0.id == sourceID }) else { return }
+        // An agent's terminal tab takes its shell with it — and the agent,
+        // whose conversation stays saved to be resumed.
+        if case .terminal(let terminal)? = documents[index].preview?.content, !terminal.session.exited {
+            terminal.session.stop()
+        }
         if pendingClose == documents[index].id { pendingClose = nil }
         forgetTab(documents[index].id)
         if documents.count == 1 {

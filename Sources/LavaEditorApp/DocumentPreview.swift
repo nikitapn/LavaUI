@@ -32,6 +32,8 @@ final class DocumentPreview {
         case markdown(String), message(String)
         /// An agent session's chat (the Agents view). Has no source tab.
         case chat(SessionTranscript)
+        /// An agent's own terminal UI (the Agents view). No source tab either.
+        case terminal(AgentTerminal)
         #if canImport(LavaEditorExtensionAPI)
         case surface(EmbeddedPreview)
         #endif
@@ -64,6 +66,15 @@ final class DocumentPreview {
         let name = chat.session.title
         sourceName = name.count > 40 ? String(name.prefix(39)) + "…" : name
         content = .chat(chat)
+    }
+
+    /// An agent's terminal tab. No source, like a chat tab.
+    init(terminal: AgentTerminal, title: String, name: String) {
+        sourceID = -1
+        optionID = "terminal:" + terminal.key
+        self.title = title
+        sourceName = name
+        content = .terminal(terminal)
     }
 
     func invalidate() {
