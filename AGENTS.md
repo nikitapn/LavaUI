@@ -506,7 +506,9 @@ Sources/
                    on it; this draws it and reports what was clicked
   LavaDebug/       Client: where the compositor's VRAM went (`--once` for text)
   HelloWorld/      Demo playground + FBD bits
-  LavaTerm*/       Terminal emulator (core headless + app)
+  LavaTerm*/       Terminal emulator (core headless + app). The PTY, the
+                   session and the grid view are the `LavaTerminal` library,
+                   which LavaEditor's terminal panel uses too
   Spotify*/        LavaSpotify (core headless + app)
   TraceLoom*/      Log / trace viewer + Ollama assistant
                    (`TraceLoom a.log b.log` opens a tab each;
@@ -1381,6 +1383,8 @@ so headless test runs skip it too.
 | Bindless texture table / its overflow | `QuadRenderer::textureSlot`, `ImageAtlas` |
 | Blur (backdrop + content) | `BlurPass`, `quad.frag` kinds 2/6, `DrawList.withBlurScope` |
 | Terminal reflow on resize | `TerminalScreen.reflow`, `rowWrapped` |
+| LavaEditor's terminal panel (Ctrl+` / Ctrl+J, Ctrl+Shift+` for another) | `Sources/LavaEditorApp/{TerminalPanel,TerminalPanelView}.swift` over `Sources/LavaTerminal` (`TerminalGrid`, `TerminalSession(workingDirectory:)`). The shell sees keys before the editor's menu shortcuts (`FocusManager.focus(keysBeforeShortcuts:)`) and declines only `TerminalPanel.editorKeeps`; the grid's `Canvas(focusID:)` is what keeps that focus alive, since the window drops focus held by an id not in the tree. The PTY child resets every signal to default before exec — LavaEditor ignores SIGINT, and an ignored signal survives exec |
+| Which keys a client hears at all (client mode) | `glfw_key` in `compositor/src/main.cpp`: XKB keysym → GLFW code. Punctuation, shifted or not, maps to the physical key's code; anything unmapped arrives as key 0 |
 | Perf scenarios | `Sources/LavaBench/`, `docs/performance.md` |
 | App demos | `Sources/HelloWorld/`, Spotify/TraceLoom/LavaTerm apps |
 | Fit / 1:1 / cursor-anchored zoom | `Sources/LavaViewCore/Viewport.swift` (pure, tested); the app only feeds it the canvas box |

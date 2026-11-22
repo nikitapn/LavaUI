@@ -138,6 +138,9 @@ final class EditorSession {
     /// The comparison on screen instead of the editor, when there is one. It
     /// belongs to a document, and shows only while that document is in front.
     var diff: DiffModel?
+    /// The terminals under the editor. See `TerminalPanel`.
+    let terminal = TerminalPanel()
+
     /// Undo history, caret and selection per document, so switching tabs or
     /// opening a comparison does not throw them away. Keyed by document id.
     @ObservationIgnored let editorStates = EditorStateStore()

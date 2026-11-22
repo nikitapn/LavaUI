@@ -48,8 +48,29 @@ struct LavaEditorView: View {
 
     // MARK: - The editor
 
-    /// The bars that come and go over the document, and the document.
+    /// The document, and the terminal panel under it when that is open.
+    ///
+    /// The split is always there and collapses while the panel is closed:
+    /// in an `if`, the editor would be a new view on every toggle and would
+    /// draw a frame scrolled to the top before its place could be restored.
     private var documentColumn: some View {
+        VSplitView(
+            fraction: Binding(
+                get: { session.terminal.editorFraction },
+                set: { session.terminal.editorFraction = $0 }
+            ),
+            minTop: 120, minBottom: 80,
+            collapsesBottom: !session.terminal.isOpen
+        ) {
+            documentStack
+        } bottom: {
+            TerminalPanelView(session: session, appearance: appearance)
+                .agentId("terminal-panel")
+        }
+    }
+
+    /// The bars that come and go over the document, and the document.
+    private var documentStack: some View {
         VStack(flexGrow: 1, spacing: 0) {
             if let document = session.closingDocument { unsavedBar(document) }
             if session.gotoOpen { gotoBar }

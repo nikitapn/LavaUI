@@ -183,6 +183,18 @@ struct LavaEditorApp {
                             "Source Control", id: "view.source-control",
                             shortcut: KeyShortcut(KeyCode.g, [.primary, .shift])
                         ) { session.showSidebar(.sourceControl) }
+                        MenuItem(
+                            "Terminal", id: "view.terminal",
+                            shortcut: KeyShortcut(KeyCode.graveAccent, .primary)
+                        ) { session.toggleTerminal() }
+                        MenuItem(
+                            "Toggle Panel", id: "view.panel",
+                            shortcut: KeyShortcut(KeyCode.j, .primary)
+                        ) { session.toggleTerminal() }
+                        MenuItem(
+                            "New Terminal", id: "view.new-terminal",
+                            shortcut: KeyShortcut(KeyCode.graveAccent, [.primary, .shift])
+                        ) { session.newTerminal() }
                         MenuItem("Refresh Folder", id: "view.refresh-folder",
                                  isEnabled: session.project != nil) { session.project?.refresh() }
                         MenuItem("Toggle Soft Wrap", id: "view.wrap", isChecked: session.wraps) {
