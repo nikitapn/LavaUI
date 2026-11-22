@@ -10533,6 +10533,26 @@ int glfw_key(xkb_keysym_t sym) {
   }
   if (sym >= XKB_KEY_A && sym <= XKB_KEY_Z) return static_cast<int>(sym);
   if (sym >= XKB_KEY_0 && sym <= XKB_KEY_9) return static_cast<int>(sym);
+  // Punctuation. GLFW names the physical key, and on a US layout its code is
+  // the unshifted character's ASCII; XKB names the symbol, which with Shift
+  // held is the shifted one — so `~` must come back as the grave key, or
+  // Ctrl+Shift+` is key 0. Without any of this every punctuation key reached
+  // a client as 0: no Ctrl+` for a terminal panel, no Ctrl+= / Ctrl+- zoom.
+  switch (sym) {
+    case XKB_KEY_space: return 32;
+    case XKB_KEY_apostrophe: case XKB_KEY_quotedbl: return 39;
+    case XKB_KEY_comma: case XKB_KEY_less: return 44;
+    case XKB_KEY_minus: case XKB_KEY_underscore: return 45;
+    case XKB_KEY_period: case XKB_KEY_greater: return 46;
+    case XKB_KEY_slash: case XKB_KEY_question: return 47;
+    case XKB_KEY_semicolon: case XKB_KEY_colon: return 59;
+    case XKB_KEY_equal: case XKB_KEY_plus: return 61;
+    case XKB_KEY_bracketleft: case XKB_KEY_braceleft: return 91;
+    case XKB_KEY_backslash: case XKB_KEY_bar: return 92;
+    case XKB_KEY_bracketright: case XKB_KEY_braceright: return 93;
+    case XKB_KEY_grave: case XKB_KEY_asciitilde: return 96;
+    default: break;
+  }
   // F1–F12 are GLFW 290–301, and contiguous in both. F2 renames in a file
   // manager; without these every function key reached a client as key 0.
   if (sym >= XKB_KEY_F1 && sym <= XKB_KEY_F12) {
