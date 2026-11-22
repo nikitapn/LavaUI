@@ -42,6 +42,9 @@ final class EditorSession {
             projectSearch.buffersChanged()
             scheduleLanguageSync()
             if diff != nil { scheduleDiffRefresh() }
+            if documents.count < oldValue.count || documents.first?.id != oldValue.first?.id {
+                pruneEditorStates()
+            }
         }
     }
     var activeIndex = 0 {
@@ -135,6 +138,24 @@ final class EditorSession {
     /// The comparison on screen instead of the editor, when there is one. It
     /// belongs to a document, and shows only while that document is in front.
     var diff: DiffModel?
+    /// Undo history, caret and selection per document, so switching tabs or
+    /// opening a comparison does not throw them away. Keyed by document id.
+    @ObservationIgnored let editorStates = EditorStateStore()
+    @ObservationIgnored private var pruneScheduled = false
+
+    /// Forgets the history of documents that have closed. After the frame
+    /// rather than at once: a tab being dragged is removed and inserted again
+    /// in two steps, and its history must survive the gap between them.
+    private func pruneEditorStates() {
+        guard !pruneScheduled else { return }
+        pruneScheduled = true
+        FrameTasks.after { [weak self] in
+            guard let self else { return }
+            self.pruneScheduled = false
+            self.editorStates.retain(Set(self.documents.map { AnyHashable($0.id) }))
+        }
+    }
+
     /// Bumped per edit while a comparison is up; see `scheduleDiffRefresh`.
     @ObservationIgnored var diffGeneration = 0
 

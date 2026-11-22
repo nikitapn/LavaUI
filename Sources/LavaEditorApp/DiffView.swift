@@ -101,7 +101,11 @@ struct DiffPane: View {
                         semanticHighlights: model.isEditable ? session.languageHighlights() : nil,
                         lineGaps: alignment.new.gaps.map { EditorLineGap(line: $0.line, rows: $0.rows) },
                         rangeFills: alignment.new.words.map { EditorRangeFill(range: $0, color: colors.addedWord) },
-                        scrollLink: model.scrollLink
+                        scrollLink: model.scrollLink,
+                        // The document's own history when this side is the
+                        // document, so edits made here undo after Done.
+                        stateStore: model.isEditable ? session.editorStates : nil,
+                        stateKey: model.documentID
                     )
                     .flexGrow(1)
                     .agentId("diff-new")

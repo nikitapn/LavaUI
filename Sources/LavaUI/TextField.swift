@@ -942,6 +942,30 @@ extension LeafNode {
         // when wrapping is turned off — see `EditorView.configure`.
     }
 
+    /// Drops every row table and wrap plan, for when rows are about to mean
+    /// something else: wrapping turned on or off, a new font, or the editor
+    /// pointed at another document's state (`EditorStateStore`) — which may
+    /// even have the same text, so the staleness checks cannot be trusted
+    /// to notice.
+    func forgetRows() {
+        lastWrappedText = ""
+        lastLogicalRowsText = nil
+        lastMeasuredWidth = 0
+        // The plan describes rows this editor no longer has, and holds a
+        // line table for a buffer it may never look at again.
+        wrapCacheRows = []
+        // And the rows-per-line estimate made for them: a new font fits a
+        // different number of characters in the same width.
+        wrapInner = 0
+        wrapPerRow = 0
+        wrapPlanText = ""
+        wrapMeasured = []
+        wrapUnmeasured = 0
+        wrapCursor = 0
+        logicalLineIndex = LineIndex()
+        rowsReplaced()
+    }
+
     /// Visual rows currently drawn.
     func rowCount() -> Int { editing.layout.count }
 

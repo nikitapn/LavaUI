@@ -432,6 +432,52 @@ public struct EditorRangeFill: Sendable, Equatable {
     }
 }
 
+/// Where an editor's text, selection and undo history live.
+final class EditingSlot {
+    var state: TextEditingState
+    /// Whether anything has been put here yet — a new slot's state is an
+    /// empty placeholder, not a document.
+    var isFilled = false
+
+    init(_ state: TextEditingState = TextEditingState("")) { self.state = state }
+}
+
+/// Editing state kept per document rather than per editor: undo history,
+/// caret and selection survive switching an editor to another document and
+/// back, and being shown by a different editor (a diff's, then the main
+/// one) — an editor given `stateStore` and a `stateKey` picks up whatever
+/// the store holds for that key, provided its text still matches.
+///
+/// The app owns it and calls `forget` when a document closes; otherwise a
+/// document's history is kept for as long as the store is.
+public final class EditorStateStore {
+    private var slots: [AnyHashable: EditingSlot] = [:]
+
+    public init() {}
+
+    func slot(for key: AnyHashable) -> EditingSlot {
+        if let slot = slots[key] { return slot }
+        let slot = EditingSlot()
+        slots[key] = slot
+        return slot
+    }
+
+    /// Drops what is kept for `key`.
+    public func forget(_ key: AnyHashable) {
+        slots[key] = nil
+    }
+
+    /// Drops everything kept for keys not in `keys`.
+    public func retain(_ keys: Set<AnyHashable>) {
+        slots = slots.filter { keys.contains($0.key) }
+    }
+
+    /// Whether `key` has undo history kept, for tests and menus.
+    public func canUndo(_ key: AnyHashable) -> Bool {
+        slots[key]?.state.canUndo ?? false
+    }
+}
+
 /// Editors that scroll together: give two `EditorView`s the same link and a
 /// scroll of either — wheel, scrollbar, caret, `reveal` — moves both, on
 /// both axes. Their content should be the same height, which is what
@@ -585,6 +631,10 @@ public struct EditorView: PrimitiveView {
     public var rangeFills: [EditorRangeFill]
     /// Shared with another editor to scroll in step. See `EditorScrollLink`.
     public var scrollLink: EditorScrollLink?
+    /// Keeps this editor's undo history, caret and selection per `stateKey`.
+    /// See `EditorStateStore`.
+    public var stateStore: EditorStateStore?
+    public var stateKey: AnyHashable?
 
     /// Creates an editor bound to `text`. Every parameter matches the property of the same name.
     public init(
@@ -612,8 +662,12 @@ public struct EditorView: PrimitiveView {
         onFollow: ((Int) -> Void)? = nil,
         lineGaps: [EditorLineGap] = [],
         rangeFills: [EditorRangeFill] = [],
-        scrollLink: EditorScrollLink? = nil
+        scrollLink: EditorScrollLink? = nil,
+        stateStore: EditorStateStore? = nil,
+        stateKey: AnyHashable? = nil
     ) {
+        self.stateStore = stateStore
+        self.stateKey = stateKey
         self.lineGaps = lineGaps
         self.rangeFills = rangeFills
         self.scrollLink = scrollLink
@@ -650,7 +704,9 @@ public struct EditorView: PrimitiveView {
 
     public func mountPrimitive() -> any AnyViewNode {
         let leaf = LeafNode(kind: .editor, label: "EditorView", width: .auto, height: .auto)
-        leaf.editing = TextEditingState(text)
+        if !adoptStoredState(leaf) {
+            leaf.editing = TextEditingState(text)
+        }
         leaf.seedLogicalRows()
         configure(leaf)
         leaf.installTextMeasure()
@@ -660,6 +716,17 @@ public struct EditorView: PrimitiveView {
     public func reconcilePrimitive(_ node: any AnyViewNode) -> any AnyViewNode {
         guard let leaf = node as? LeafNode, leaf.kind == .editor else {
             return mountPrimitive()
+        }
+        let switched = (stateStore != nil ? stateKey : nil) != leaf.editingKey
+        if switched {
+            if !adoptStoredState(leaf) {
+                // Leaving a store for an editor's own state: a fresh one, not
+                // the document's, which stays in the store.
+                leaf.editingSlot = EditingSlot(TextEditingState(text))
+                leaf.editingKey = nil
+            }
+            leaf.forgetRows()
+            leaf.seedLogicalRows()
         }
         if leaf.editing.text != text {
             leaf.editing.setText(text, keepingCursor: true)
@@ -672,6 +739,25 @@ public struct EditorView: PrimitiveView {
         if !leaf.usesTextMeasure { leaf.installTextMeasure() }
         leaf.markMeasureDirty()
         return leaf
+    }
+
+    /// Points `leaf` at the store's state for `stateKey`, filling it from
+    /// `text` the first time. A kept state whose text no longer matches —
+    /// the file was reloaded, or edited by something that is not an editor —
+    /// is reset to the text: its history describes a buffer that is gone.
+    /// False when there is no store to use.
+    private func adoptStoredState(_ leaf: LeafNode) -> Bool {
+        guard let stateStore, let stateKey else { return false }
+        let slot = stateStore.slot(for: stateKey)
+        if !slot.isFilled {
+            slot.state = TextEditingState(text)
+            slot.isFilled = true
+        } else if slot.state.text != text {
+            slot.state.setText(text, keepingCursor: true)
+        }
+        leaf.editingSlot = slot
+        leaf.editingKey = stateKey
+        return true
     }
 
     /// Ctrl+hover links. The editor finds and draws the word itself — a
@@ -737,21 +823,7 @@ public struct EditorView: PrimitiveView {
             // marks both branches of `refreshVisualRows` keep, or the first
             // pass after the toggle sees the buffer as unchanged and keeps the
             // table built for the other mode.
-            leaf.lastWrappedText = ""
-            leaf.lastLogicalRowsText = nil
-            leaf.lastMeasuredWidth = 0
-            // The plan describes rows this editor no longer has, and holds a
-            // line table for a buffer it may never look at again.
-            leaf.wrapCacheRows = []
-            // And the rows-per-line estimate made for them: a new font fits a
-            // different number of characters in the same width.
-            leaf.wrapInner = 0
-            leaf.wrapPerRow = 0
-            leaf.wrapPlanText = ""
-            leaf.wrapMeasured = []
-            leaf.wrapUnmeasured = 0
-            leaf.wrapCursor = 0
-            leaf.logicalLineIndex = LineIndex()
+            leaf.forgetRows()
         }
         leaf.wraps = wraps
         let next = highlighter ?? SyntaxHighlighter(rules: rules)

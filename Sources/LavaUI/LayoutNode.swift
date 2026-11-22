@@ -472,7 +472,21 @@ final class LeafNode: YogaBoxNode {
     /// Editable payload (textField leaves). Lives on the node because a
     /// PrimitiveView has no body, so it never goes through CompositeNode's
     /// @State transplant — the node's own lifetime is the persistence.
-    var editing = TextEditingState("")
+    ///
+    /// Held in a slot rather than inline so an editor can be pointed at a
+    /// document's own (`EditorView(stateStore:stateKey:)`): undo, selection
+    /// and all then outlive the node. `_modify` yields the slot's storage
+    /// itself, so an edit mutates in place exactly as a stored property
+    /// would — a get/set pair would copy the buffer on every keystroke.
+    var editing: TextEditingState {
+        get { editingSlot.state }
+        _modify { yield &editingSlot.state }
+        set { editingSlot.state = newValue }
+    }
+    /// Where `editing` lives: the node's own, or a store's.
+    var editingSlot = EditingSlot()
+    /// The store key `editingSlot` came from, if any.
+    var editingKey: AnyHashable?
     var isReadOnly = false
     /// What a secure field really holds, while `editing` holds a dot per
     /// character. Nil for every other field. See `TextField(secure:)`.
