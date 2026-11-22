@@ -39,6 +39,7 @@ final class EditorSession {
         // Every edit, save, reload and close passes through here, which is the
         // one place project search can hear about all of them. It debounces.
         didSet {
+            refreshActivePreview()
             projectSearch.buffersChanged()
             scheduleLanguageSync()
             if diff != nil { scheduleDiffRefresh() }
@@ -51,6 +52,7 @@ final class EditorSession {
         // The tab in front is the one whose highlighting a server is asked for.
         didSet {
             guard activeIndex != oldValue else { return }
+            refreshActivePreview()
             hoverCard = nil
             completion = nil
             scheduleLanguageSync()
@@ -85,6 +87,9 @@ final class EditorSession {
 
     /// Installed extensions; see `ExtensionCatalog`.
     var extensions = ExtensionCatalog.discover()
+    #if canImport(LavaEditorExtensionAPI)
+    @ObservationIgnored weak var visibleSurface: EmbeddedPreview?
+    #endif
     var extensionRunning = false
     var lineActions: [Int: [EditorLineAction]] = [:]
     var actionSnapshot: (document: Int, revision: Int, path: String, text: String)?
@@ -315,7 +320,7 @@ final class EditorSession {
             return .init(path: url.standardizedFileURL.path, position: .init(position), tabState: document.tabState)
         }
         return .init(
-            files: files, activePath: active.url?.standardizedFileURL.path,
+            files: files, activePath: (active.url ?? documents.first { $0.id == active.preview?.sourceID }?.url)?.standardizedFileURL.path,
             fontSize: zoomedDocument.map { Int($0.regular.pixelSize.rounded()) },
             projectRoot: project?.tree.root.path,
             expandedFolders: project.map { $0.tree.expanded.subtracting([""]).sorted() },
@@ -368,7 +373,7 @@ final class EditorSession {
         return font
     }
 
-    private func takeID() -> Int {
+    func takeID() -> Int {
         defer { nextID += 1 }
         return nextID
     }
@@ -479,7 +484,7 @@ final class EditorSession {
         documents[activeIndex].position = position
     }
 
-    private func loadIfNeeded(_ index: Int) {
+    func loadIfNeeded(_ index: Int) {
         guard documents.indices.contains(index),
               !documents[index].isLoaded,
               documents[index].loadError == nil
@@ -580,8 +585,9 @@ final class EditorSession {
         // behind, and every editor does this.
         if documents.count > 1,
            let scratch = documents.firstIndex(where: {
-               $0.url == nil && $0.tabState == .open && !$0.isModified && $0.text.isEmpty
+               $0.preview == nil && $0.url == nil && $0.tabState == .open && !$0.isModified && $0.text.isEmpty
            }),
+           !documents.contains(where: { $0.preview?.sourceID == documents[scratch].id }),
            scratch != activeIndex
         {
             forgetTab(documents[scratch].id)
@@ -657,6 +663,11 @@ final class EditorSession {
 
     func close(_ index: Int) {
         guard documents.indices.contains(index) else { return }
+        let sourceID = documents[index].id
+        for preview in documents.filter({ $0.preview?.sourceID == sourceID }) {
+            if let tab = documents.firstIndex(where: { $0.id == preview.id }) { close(tab) }
+        }
+        guard let index = documents.firstIndex(where: { $0.id == sourceID }) else { return }
         if pendingClose == documents[index].id { pendingClose = nil }
         forgetTab(documents[index].id)
         if documents.count == 1 {
@@ -890,12 +901,15 @@ final class EditorSession {
     }
 
     var matchingExtensionCommands: [InstalledCommand] {
-        extensions.commands.filter { $0.command.kind == .selectionEdit && $0.command.matches(language: active.language.rawValue, url: active.url) }
+        guard active.preview == nil else { return [] }
+        return extensions.commands.filter { $0.command.kind == .selectionEdit && $0.command.matches(language: active.language.rawValue, url: active.url) }
     }
 
     func reloadExtensions() {
         ExtensionHost.reload()
         extensions = ExtensionCatalog.discover()
+        for tab in documents { tab.preview?.invalidate() }
+        refreshActivePreview()
         actionSnapshot = nil
         refreshLineActions()
         notice = extensions.errors.isEmpty ? "Loaded \(extensions.commands.count) extension commands"

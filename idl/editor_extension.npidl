@@ -50,3 +50,50 @@ interface DocumentActionProvider {
   boolean SetLineActions(invocation: in u64, actions: in vector<DocumentLineAction>);
   boolean ReportResult(invocation: in u64, message: in string);
 }
+
+message PreviewDocument {
+  path: string;
+  text: string;
+}
+
+/// Read-only snapshot of the source buffer, including unsaved edits.
+interface MarkdownPreviewProvider {
+  PreviewDocument ReadDocument(invocation: in u64) raises(ExpiredInvocation);
+  boolean SetMarkdown(invocation: in u64, markdown: in string);
+}
+
+/// V1 draw lists use the little-endian DrawCommand and GlyphInstance layout
+/// from canvas. Font slot zero is the viewport face. Images are frame-local.
+enum SurfaceInputKind: u32 { press, drag, release, motion, leave, wheel, key, character, focus, cancel };
+message SurfaceInput {
+  kind: SurfaceInputKind;
+  viewportId: u64;
+  frameId: u64;
+  x: f32; y: f32; dx: f32; dy: f32;
+  code: i32; mods: i32; repeatKey: boolean; text: string;
+}
+message SurfaceViewport {
+  id: u64; width: f32; height: f32; scale: f32;
+  fontPath: string; fontSha256: string; face: u32; size26_6: u32; rasterFlags: u32;
+}
+message SurfaceRequest {
+  viewport: SurfaceViewport;
+  frameId: u64;
+  state: vector<u8>;
+  events: vector<SurfaceInput>;
+}
+message SurfaceImage {
+  id: u32; width: u32; height: u32;
+  rgba: vector<u8>;
+}
+message SurfaceFrame {
+  viewportId: u64; frameId: u64;
+  commands: vector<u8>; glyphs: vector<u8>;
+  images: vector<SurfaceImage>;
+  state: vector<u8>;
+}
+interface EmbeddedSurfaceProvider {
+  SurfaceRequest ReadRequest(invocation: in u64) raises(ExpiredInvocation);
+  PreviewDocument ReadDocument(invocation: in u64) raises(ExpiredInvocation);
+  boolean SubmitFrame(invocation: in u64, frame: in SurfaceFrame);
+}

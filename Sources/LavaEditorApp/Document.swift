@@ -14,6 +14,7 @@ struct EditorDocument: EditorTab {
     /// never been saved, which is what makes `Save` fall back to `Save As`.
     var url: URL?
     var text: String
+    var preview: DocumentPreview?
     var tabState: EditorTabState = .open
 
     /// Whether the buffer differs from what is on disk.
@@ -40,12 +41,13 @@ struct EditorDocument: EditorTab {
     private(set) var hasInvalidUTF8 = false
 
     var saveUnavailable: String? {
+        if preview != nil { return "Preview tabs are read-only." }
         guard isLoaded else { return loadError ?? "The file has not been loaded." }
         return hasInvalidUTF8 ? "This file is read-only because it contains invalid UTF-8." : nil
     }
 
     /// What the tab and the title bar call it.
-    var name: String { url?.lastPathComponent ?? "Untitled \(id)" }
+    var name: String { preview?.tabTitle ?? url?.lastPathComponent ?? "Untitled \(id)" }
 
     /// Directory, for telling two files of the same name apart.
     var detail: String? {

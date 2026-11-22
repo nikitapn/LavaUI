@@ -3333,3 +3333,37 @@ extension DrawList {
         }
     }
 }
+
+extension DrawList {
+    /// Imports a complete surface inside the editor's existing frame and clip.
+    public func drawEmbedded(_ surface: EmbeddedDrawFrame, in box: CanvasFrame, font: UIFont,
+                             images: [UInt32: UIImage]) {
+        let neededCommands = commandCount + surface.commands.count + 2
+        let neededGlyphs = glyphCount + surface.glyphs.count
+        if neededCommands > commandCapacity || neededGlyphs > glyphCapacity {
+            grow(commands: neededCommands, glyphs: neededGlyphs)
+        }
+        guard neededCommands <= commandCapacity, neededGlyphs <= glyphCapacity else { return }
+        pushClip(x: box.x, y: box.y, w: box.w, h: box.h)
+        defer { popClip() }
+        let base = UInt32(glyphCount)
+        for var glyph in surface.glyphs {
+            glyph.x += box.x
+            glyph.y += box.y
+            glyph.fontId = font.engineId
+            appendGlyph(glyph)
+        }
+        for var command in surface.commands {
+            command.x += box.x
+            command.y += box.y
+            if command.kind == DrawKind.text.rawValue { command.param += base }
+            if command.kind == DrawKind.image.rawValue {
+                guard let image = images[command.param] else { continue }
+                command.param = image.textureId
+            }
+            let alpha = Float(command.color >> 24) * alphaMultiplier
+            command.color = command.color & 0x00ff_ffff | (UInt32(clamping: Int(alpha.rounded())) << 24)
+            appendCommand(command)
+        }
+    }
+}

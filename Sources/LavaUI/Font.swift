@@ -1,4 +1,5 @@
 import CxxCanvas
+import CxxStdlib
 import Foundation
 
 /// A shaped glyph, plus which face has to draw it.
@@ -124,6 +125,9 @@ public final class UIFont: @unchecked Sendable {
 
     /// Move-only C++ font; only touched on the UI thread.
     private var raw: canvas.Font
+
+    /// SHA-256 of the loaded face file, shared by surfaces that shape on another process.
+    public private(set) lazy var contentDigest: String = String(raw.contentDigest())
 
     /// Distance from one baseline to the next, in pixels.
     public private(set) var lineHeight: Float = 16

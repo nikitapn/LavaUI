@@ -255,7 +255,7 @@ enum DragChipCapture {
         return sink.image(width: UInt32(width), height: UInt32(height))
     }
 
-    private static func release(_ root: any AnyViewNode) {
+    fileprivate static func release(_ root: any AnyViewNode) {
         var ids: Set<NodeID> = []
         collect(root, into: &ids)
         NodeRegistries.forget(ids)
@@ -264,6 +264,22 @@ enum DragChipCapture {
     private static func collect(_ node: any AnyViewNode, into ids: inout Set<NodeID>) {
         ids.insert(node.id)
         for child in node.childNodes { collect(child, into: &ids) }
+    }
+}
+
+extension DrawList {
+    /// Lays out a fresh LavaUI view in the supplied viewport. Surface input
+    /// and retained interaction state belong to the provider.
+    public static func captureEmbedded(editor: Editor, width: Float, height: Float, scale: Float,
+                                       view: some View) -> (commands: [UInt8], glyphs: [UInt8]) {
+        let root = ViewGraph.mount(view)
+        defer { DragChipCapture.release(root) }
+        guard width.isFinite, height.isFinite, width > 0, height > 0,
+              let yoga = root.flattenedLayoutNodes().first?.yoga else { return ([], []) }
+        YGNodeCalculateLayout(yoga, width, height, YGDirectionLTR)
+        return captureEmbedded(editor: editor, scale: scale) {
+            $0.emitDetached(root, width: width, height: height)
+        }
     }
 }
 
@@ -318,6 +334,10 @@ final class CapturedFrameSink: FrameSink {
 
     func commit(_ written: FrameCapacity) {
         self.written = written
+    }
+
+    func embeddedBytes() -> (commands: [UInt8], glyphs: [UInt8]) {
+        (Self.bytes(commands, written.commands), Self.bytes(glyphs, written.glyphs))
     }
 
     /// The committed frame as a chip. Nil if it drew nothing.

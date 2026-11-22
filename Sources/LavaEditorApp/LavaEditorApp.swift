@@ -111,7 +111,7 @@ struct LavaEditorApp {
                             shortcut: KeyShortcut(KeyCode.s, [.primary, .shift]),
                             isEnabled: session.active.saveUnavailable == nil
                         ) { session.saveAs() }
-                        MenuItem("Reload from Disk", id: "file.reload") { session.reload() }
+                        MenuItem("Reload from Disk", id: "file.reload", isEnabled: session.active.url != nil) { session.reload() }
                         // Not inside a workspace: the folder is part of it,
                         // and closing it there was a workspace that saved
                         // itself without one. Close Workspace is the way out,
@@ -140,7 +140,8 @@ struct LavaEditorApp {
                     Menu("Search", id: "search") {
                         MenuItem(
                             "Find…", id: "search.find",
-                            shortcut: KeyShortcut(KeyCode.f, .primary)
+                            shortcut: KeyShortcut(KeyCode.f, .primary),
+                            isEnabled: session.active.preview == nil
                         ) { session.openFind(replace: false) }
                         MenuItem(
                             "Find and Replace…", id: "search.replace",
@@ -149,25 +150,29 @@ struct LavaEditorApp {
                         ) { session.openFind(replace: true) }
                         MenuItem(
                             "Find Next", id: "search.next",
-                            shortcut: KeyShortcut(KeyCode.g, .primary)
+                            shortcut: KeyShortcut(KeyCode.g, .primary),
+                            isEnabled: session.active.preview == nil
                         ) { session.findNext() }
                         // Shift+F3 rather than Ctrl+Shift+G, which opens
                         // Source Control — as both are in VS Code.
                         MenuItem(
                             "Find Previous", id: "search.previous",
-                            shortcut: KeyShortcut(KeyCode.f3, .shift)
+                            shortcut: KeyShortcut(KeyCode.f3, .shift),
+                            isEnabled: session.active.preview == nil
                         ) { session.findPrevious() }
                         MenuSeparator()
                         MenuItem(
                             "Go to Line…", id: "search.goto",
-                            shortcut: KeyShortcut(KeyCode.l, .primary)
+                            shortcut: KeyShortcut(KeyCode.l, .primary),
+                            isEnabled: session.active.preview == nil
                         ) { session.openGoto() }
                     }
                     Menu("Git", id: "git") {
                         MenuItem(
                             session.visibleDiff == nil ? "Compare with HEAD" : "Close Comparison",
                             id: "git.compare-head",
-                            shortcut: KeyShortcut(KeyCode.d, [.primary, .shift])
+                            shortcut: KeyShortcut(KeyCode.d, [.primary, .shift]),
+                            isEnabled: session.active.preview == nil
                         ) { session.compareWithHEAD() }
                         MenuSeparator()
                         MenuItem(

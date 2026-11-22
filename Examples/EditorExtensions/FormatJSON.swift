@@ -5,6 +5,19 @@ import LavaEditorExtensionAPI
 public func activate(_ command: UnsafePointer<CChar>, _ reference: UnsafePointer<CChar>, _ invocation: UInt64) -> Int32 {
     let options: JSONSerialization.WritingOptions
     switch String(cString: command) {
+    case "overview": return renderOverview(reference, invocation: invocation)
+    case "preview":
+        return runMarkdownPreviewProvider(reference) { editor in
+            let source = try await editor.readDocument(invocation: invocation)
+            let json = try JSONSerialization.jsonObject(with: Data(source.text.utf8), options: [.fragmentsAllowed])
+            let bytes = try JSONSerialization.data(withJSONObject: json, options: [
+                .prettyPrinted, .sortedKeys, .fragmentsAllowed, .withoutEscapingSlashes,
+            ])
+            let markdown = "```json\n" + String(decoding: bytes, as: UTF8.self) + "\n```"
+            guard try await editor.setMarkdown(invocation: invocation, markdown: markdown) else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+        }
     case "format": options = [.prettyPrinted, .sortedKeys, .fragmentsAllowed, .withoutEscapingSlashes]
     case "compact": options = [.sortedKeys, .fragmentsAllowed, .withoutEscapingSlashes]
     default: return 2

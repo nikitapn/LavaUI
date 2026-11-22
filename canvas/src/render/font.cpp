@@ -408,6 +408,8 @@ VoidResult Font::loadFaceFromMemory(const uint8_t *bytes, size_t byteCount,
   return ok();
 }
 
+std::string Font::contentDigest() const { return sha256(impl_->bytes).hex(); }
+
 bool Font::isLoaded() const { return impl_->isLoaded(); }
 
 bool Font::hasNativeHinting() const { return impl_->nativeHinting; }

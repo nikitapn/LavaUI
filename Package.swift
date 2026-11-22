@@ -650,7 +650,7 @@ if haveNprpc {
                       swiftSettings: interopCxx),
         Target.testTarget(name: "LavaEditorExtensionAPITests", dependencies: ["LavaEditorExtensionAPI"],
                           swiftSettings: interopCxx),
-        Target.target(name: "FormatJSON", dependencies: ["LavaEditorExtensionAPI"],
+        Target.target(name: "FormatJSON", dependencies: ["LavaEditorExtensionAPI", "LavaUI"],
                       path: "Examples/EditorExtensions", exclude: ["README.md", "extension.json"],
                       swiftSettings: interopCxx),
         Target.target(

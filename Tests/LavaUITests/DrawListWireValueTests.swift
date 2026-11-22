@@ -73,3 +73,47 @@ final class DrawListWireValueTests: XCTestCase {
         XCTAssertEqual(SwiftKind.hoverSnap.rawValue, CxxKind.hoverSnap.rawValue)
     }
 }
+
+extension DrawListWireValueTests {
+    func testDetachedViewEmitsSurfaceLocalCommands() throws {
+        let editor = try XCTUnwrap(Editor.openClient(width: 320, height: 180))
+        var bounds: CanvasFrame?
+        let view = VStack(spacing: 0) {
+            Canvas(width: .pct(100), height: .pct(100)) { list, box in
+                bounds = box
+                list.rect(x: box.x, y: box.y, w: box.w, h: box.h, color: .blue)
+            }
+        }
+        let payload = DrawList.captureEmbedded(editor: editor, width: 320, height: 180, scale: 1.5, view: view)
+        XCTAssertEqual(bounds, CanvasFrame(x: 0, y: 0, w: 320, h: 180))
+        XCTAssertFalse(payload.commands.isEmpty)
+        XCTAssertNotNil(EmbeddedDrawFrame(commands: payload.commands, glyphs: payload.glyphs, imageIDs: []))
+    }
+
+    func testEmbeddedFramesValidateBeforeReplay() {
+        func command(_ kind: LavaUI.DrawKind, width: Float = 0, resource: UInt32 = 0) -> [UInt8] {
+            var item = canvas.DrawCommand()
+            item.kind = kind.rawValue
+            item.h = 16
+            item.w = width
+            item.param = resource
+            return withUnsafeBytes(of: &item) { Array($0) }
+        }
+        func accepts(_ commands: [UInt8], glyphs: [UInt8] = [], images: Set<UInt32> = []) -> Bool {
+            EmbeddedDrawFrame(commands: commands, glyphs: glyphs, imageIDs: images) != nil
+        }
+        let glyph = Array(repeating: UInt8(0), count: 16)
+        let text = command(.text, width: 1)
+        let image = command(.image, resource: 17)
+        XCTAssertTrue(accepts(command(.pushClip, width: 16) + text + image + command(.popClip), glyphs: glyph, images: [17]))
+        XCTAssertFalse(accepts(text))
+        XCTAssertFalse(accepts(text + text, glyphs: glyph))
+        XCTAssertFalse(accepts(image))
+        XCTAssertFalse(accepts(command(.imageSurface)))
+        XCTAssertFalse(accepts(command(.popClip)))
+        XCTAssertFalse(accepts(command(.pushClip, width: 16)))
+        XCTAssertFalse(accepts(command(.pushClip) + command(.popClip)))
+        XCTAssertFalse(accepts(command(.rect, width: .nan)))
+        XCTAssertFalse(accepts([0]))
+    }
+}

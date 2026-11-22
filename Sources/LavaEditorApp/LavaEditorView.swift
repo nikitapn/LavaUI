@@ -73,8 +73,8 @@ struct LavaEditorView: View {
     private var documentStack: some View {
         VStack(flexGrow: 1, spacing: 0) {
             if let document = session.closingDocument { unsavedBar(document) }
-            if session.gotoOpen { gotoBar }
-            if session.find.isOpen { findBar }
+            if session.active.preview == nil, session.gotoOpen { gotoBar }
+            if session.active.preview == nil, session.find.isOpen { findBar }
             if let notice = session.notice { noticeBar(notice) }
             editor(appearance)
         }
@@ -82,7 +82,25 @@ struct LavaEditorView: View {
 
     private func editor(_ appearance: EditorAppearance) -> some View {
         VStack(flexGrow: 1, spacing: 0) {
-            if let diff = session.visibleDiff {
+            if let preview = session.active.preview {
+                switch preview.content {
+                #if canImport(LavaEditorExtensionAPI)
+                case .surface(let surface):
+                    if let editor = session.imageEditor, let font = session.documentFont ?? FontStore.default {
+                        EmbeddedPreviewCanvas(surface: surface, editor: editor, font: font,
+                                              foreground: appearance.documentTheme.textPrimary)
+                    }
+                #endif
+                case .markdown(let text):
+                    ScrollView(.vertical) {
+                        VStack(padding: 20, spacing: 0) { MarkdownView(text, font: session.documentFont) }
+                    }
+                    .theme(appearance.documentTheme)
+                    .agentId("document-preview")
+                case .message(let text):
+                    Text(text, color: .muted).padding(20)
+                }
+            } else if let diff = session.visibleDiff {
                 DiffPane(session: session, model: diff, appearance: appearance, style: documentStyle(appearance))
                     .flexGrow(1)
                     .theme(appearance.documentTheme)
@@ -263,22 +281,27 @@ struct LavaEditorView: View {
     private func statusBar(_ appearance: EditorAppearance) -> some View {
         let theme = appearance.theme
         return HStack(height: .pt(46), padding: 0, alignment: .center, spacing: 6) {
-            pathLabel(theme: theme)
-            if session.active.hasInvalidUTF8, session.active.isLoaded {
-                Text("Read-only · invalid UTF-8", color: theme.accent,
-                     font: session.fonts.status, lineLimit: 1)
-                    .flexShrink(1)
-                    .agentId("status-invalid-utf8")
+            if let preview = session.active.preview {
+                Text(preview.tabTitle, color: theme.textSecondary, font: session.fonts.status)
+                Spacer()
+            } else {
+                pathLabel(theme: theme)
+                if session.active.hasInvalidUTF8, session.active.isLoaded {
+                    Text("Read-only · invalid UTF-8", color: theme.accent,
+                         font: session.fonts.status, lineLimit: 1)
+                        .flexShrink(1)
+                        .agentId("status-invalid-utf8")
+                }
+                lineStatus(theme: theme)
+                    .padding(.horizontal, 6)
+                    .agentId("status-lines")
+                Text(session.active.language.title, color: appearance.languageText, font: session.fonts.status)
+                    .padding(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
+                    .background(appearance.languageFill)
+                    .cornerRadius(12)
+                    .agentId("status-language")
+                wrapButton(appearance)
             }
-            lineStatus(theme: theme)
-                .padding(.horizontal, 6)
-                .agentId("status-lines")
-            Text(session.active.language.title, color: appearance.languageText, font: session.fonts.status)
-                .padding(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
-                .background(appearance.languageFill)
-                .cornerRadius(12)
-                .agentId("status-language")
-            wrapButton(appearance)
         }
         .padding(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 14))
         .background(theme.panel)

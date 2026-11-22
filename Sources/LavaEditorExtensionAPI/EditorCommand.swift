@@ -25,6 +25,11 @@ public func runDocumentActionProvider(_ reference: UnsafePointer<CChar>,
     runExtension(reference, as: DocumentActionProvider.self, body: body)
 }
 
+public func runMarkdownPreviewProvider(_ reference: UnsafePointer<CChar>,
+    body: @escaping @Sendable (MarkdownPreviewProvider) async throws -> Void) -> Int32 {
+    runExtension(reference, as: MarkdownPreviewProvider.self, body: body)
+}
+
 private func runExtension<T: NPRPCObject & Sendable>(_ reference: UnsafePointer<CChar>, as type: T.Type,
     body: @escaping @Sendable (T) async throws -> Void) -> Int32 {
     do {
@@ -55,4 +60,9 @@ private func runExtension<T: NPRPCObject & Sendable>(_ reference: UnsafePointer<
 // The worker publishes this value once before signalling the waiting thread.
 private final class CommandStatus: @unchecked Sendable {
     var code: Int32 = 1
+}
+
+public func runEmbeddedSurfaceProvider(_ reference: UnsafePointer<CChar>,
+    body: @escaping @Sendable (EmbeddedSurfaceProvider) async throws -> Void) -> Int32 {
+    runExtension(reference, as: EmbeddedSurfaceProvider.self, body: body)
 }

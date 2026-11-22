@@ -18,6 +18,20 @@
       "languages": [
         "json"
       ]
+    },
+    {
+      "id": "preview",
+      "title": "Formatted JSON",
+      "kind": "markdownPreview",
+      "languages": [
+        "json"
+      ]
+    },
+    {
+      "id": "overview",
+      "title": "JSON Overview",
+      "kind": "embeddedSurface",
+      "languages": ["json"]
     }
   ]
 }

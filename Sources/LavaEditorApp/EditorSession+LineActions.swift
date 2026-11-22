@@ -52,9 +52,9 @@ extension EditorSession {
         guard !scanningActions else { return }
         let document = active.id
         let version = revision
-        let providers = extensions.commands.filter {
+        let providers = active.preview == nil ? extensions.commands.filter {
             $0.command.kind == .documentActions && $0.command.matches(language: active.language.rawValue, url: active.url)
-        }
+        } : []
         guard !providers.isEmpty, text.utf8.count <= SelectionExtension.limit else {
             // Nothing to ask: nothing to show, rather than an old answer.
             actionSnapshot = (document, version, path, text)

@@ -24,9 +24,15 @@ struct TabContextMenu: View {
     @ViewBuilder var body: some View {
         let url = document.url?.standardizedFileURL
         let relative = url.flatMap { session.project?.tree.path(of: $0) }.flatMap { $0.isEmpty ? nil : $0 }
+        let previews = session.previewOptions(for: document)
+        let previewItems: [MenuEntry] = previews.map { option in
+            let title = previews.count == 1 ? "Open Preview" : "Open Preview · " + option.title
+            return .item(MenuItemModel(id: MenuID(option.id), title: title))
+        }
         let panel = MenuDropdownPanel(
             entries: [
                 Action.pin.item(document.tabState == .pinned ? "Unpin" : "Pin"),
+            ] + previewItems + [
                 Action.reveal.item("Reveal in Explorer View", enabled: relative != nil),
                 .separator,
                 Action.close.item("Close Tab"),
@@ -40,8 +46,12 @@ struct TabContextMenu: View {
             ],
             onActivate: { id in
                 dismiss()
-                guard let action = Action(rawValue: id.raw),
-                      let index = session.documents.firstIndex(where: { $0.id == document.id }) else { return }
+                guard let index = session.documents.firstIndex(where: { $0.id == document.id }) else { return }
+                if let option = previews.first(where: { $0.id == id.raw }) {
+                    session.openPreview(of: index, using: option)
+                    return
+                }
+                guard let action = Action(rawValue: id.raw) else { return }
                 switch action {
                 case .pin: session.toggleTabPin(index)
                 case .reveal:

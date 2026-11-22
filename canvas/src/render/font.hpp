@@ -118,6 +118,9 @@ class Font {
   // The object already exists either way; this just fills it in.
   [[nodiscard]] VoidResult load(const std::string &path, float pixelSize);
 
+  /// SHA-256 of the exact bytes this face shapes with.
+  std::string contentDigest() const;
+
   /// The full form: a face inside a collection, a size that is already 26.6,
   /// and a hinting selection. `load` above is this one with face 0 and the
   /// renderer's default hinting, kept because most callers want a font file
