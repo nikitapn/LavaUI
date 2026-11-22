@@ -122,14 +122,8 @@ struct ProjectExplorer: View {
                 .flexShrink(1)
                 .agentId("project-name")
             Spacer()
-            if let branch = project.branch {
-                Text(branch, color: appearance.languageText, font: session.fonts.status, lineLimit: 1)
-                    .padding(EdgeInsets(top: 3, leading: 9, bottom: 3, trailing: 9))
-                    .background(appearance.languageFill)
-                    .cornerRadius(10)
-                    .flexShrink(1)
-                    .agentId("project-branch")
-            }
+            BranchChip(session: session, project: project, appearance: appearance)
+                .agentId("project-branch")
         }
         .padding(EdgeInsets(top: 10, leading: 14, bottom: 8, trailing: 10))
     }
@@ -209,5 +203,29 @@ struct ProjectExplorer: View {
         .cornerRadius(5)
         .hoverSnap()
         .cursor(.pointer)
+    }
+}
+
+/// The branch, in a sidebar header. A click opens the branch picker.
+/// Shown while detached too, as "detached" — that is when switching back to
+/// a branch is most wanted.
+struct BranchChip: View {
+    let session: EditorSession
+    let project: ProjectSession
+    let appearance: EditorAppearance
+
+    @ViewBuilder var body: some View {
+        if project.isInRepository {
+            let session = self.session
+            Text(project.branch ?? "detached", color: appearance.languageText, font: session.fonts.status,
+                 hoverFill: appearance.languageFill.opacity(0.7), cornerRadius: 10, lineLimit: 1,
+                 onClick: { session.openBranchPicker() })
+                .padding(EdgeInsets(top: 3, leading: 9, bottom: 3, trailing: 9))
+                .background(appearance.languageFill)
+                .cornerRadius(10)
+                .flexShrink(1)
+                .cursor(.pointer)
+                .tooltip("Switch Branch or Worktree")
+        }
     }
 }

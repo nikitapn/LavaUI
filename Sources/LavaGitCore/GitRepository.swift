@@ -341,7 +341,7 @@ public struct GitRepository: Sendable, Equatable {
 
     // MARK: - Plumbing
 
-    private func withRepository<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
+    func withRepository<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
         LibGit.initialize()
         let repo = try LibGit.check("open") {
             git_repository_open_ext(&$0, root.path, UInt32(GIT_REPOSITORY_OPEN_NO_SEARCH.rawValue), nil)

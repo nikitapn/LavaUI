@@ -38,7 +38,7 @@ struct SourceControlPanel: View {
         let colors = GitMarkColors(appearance)
         return VStack(flexGrow: 1, spacing: 0) {
             header(theme: theme)
-            if project.repository == nil {
+            if !project.isInRepository {
                 Text("This folder is not in a git repository.", color: .muted,
                      font: session.fonts.status)
                     .padding(EdgeInsets(top: 6, leading: 14, bottom: 6, trailing: 14))
@@ -66,13 +66,8 @@ struct SourceControlPanel: View {
             Text("Source Control", color: .primary, font: session.fonts.tabSelected, lineLimit: 1)
                 .flexShrink(1)
             Spacer()
-            if let branch = project.branch {
-                Text(branch, color: appearance.languageText, font: session.fonts.status, lineLimit: 1)
-                    .padding(EdgeInsets(top: 3, leading: 9, bottom: 3, trailing: 9))
-                    .background(appearance.languageFill)
-                    .cornerRadius(10)
-                    .flexShrink(1)
-            }
+            BranchChip(session: session, project: project, appearance: appearance)
+                .agentId("scm-branch")
             iconButton(Glyph.refresh, tooltip: "Refresh", id: "scm-refresh", theme: theme) {
                 project.refreshStatus()
             }

@@ -91,6 +91,9 @@ final class EditorSession {
     @ObservationIgnored weak var visibleSurface: EmbeddedPreview?
     #endif
     var extensionRunning = false
+    /// Git → Switch Branch or Worktree…, while it is up. See `BranchPicker`.
+    var branchPicker: BranchPicker?
+    @ObservationIgnored var switchingBranch = false
     var lineActions: [Int: [EditorLineAction]] = [:]
     var actionSnapshot: (document: Int, revision: Int, path: String, text: String)?
     var actionGeneration: UInt64 = 0
@@ -808,7 +811,7 @@ final class EditorSession {
         if pinning { tabScroll.scrollToTop() }
     }
 
-    private func forgetTab(_ id: Int) {
+    func forgetTab(_ id: Int) {
         gitBaselines[id] = nil
         tabFrames[id] = nil
         if diff?.documentID == id { closeDiff() }

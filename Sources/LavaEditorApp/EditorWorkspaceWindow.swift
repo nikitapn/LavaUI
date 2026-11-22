@@ -50,5 +50,18 @@ struct EditorWorkspaceWindow: View {
         ) {
             if let chooser = fontDialog.chooser { chooser }
         }
+        .overlay(
+            isPresented: Binding(get: { session.branchPicker != nil }, set: { presented in
+                if !presented, session.branchPicker != nil { session.closeBranchPicker() }
+            }),
+            placement: BranchPickerView.placement,
+            style: session.branchPicker.map {
+                BranchPickerView.style(session: session, picker: $0, theme: appearance.theme)
+            } ?? OverlayStyle()
+        ) {
+            if let picker = session.branchPicker {
+                BranchPickerView(session: session, picker: picker, appearance: appearance)
+            }
+        }
     }
 }

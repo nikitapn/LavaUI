@@ -27,6 +27,9 @@ final class ProjectSession {
     var selected: String?
 
     @ObservationIgnored private(set) var repository: GitRepository?
+    /// `repository != nil`, observed: the repository is found on a worker
+    /// after the tree is up, and a view that asked before then has to hear.
+    private(set) var isInRepository = false
     /// Where the project sits relative to its repository; see `GitDecorations`.
     @ObservationIgnored private var repositoryPath: String? = ""
     @ObservationIgnored private var projectPath = ""
@@ -134,6 +137,7 @@ final class ProjectSession {
 
     private func adopt(_ repository: GitRepository?) {
         self.repository = repository
+        isInRepository = repository != nil
         guard let repository else { return }
         let top = repository.root.resolvingSymlinksInPath().path
         let mine = tree.root.resolvingSymlinksInPath().path

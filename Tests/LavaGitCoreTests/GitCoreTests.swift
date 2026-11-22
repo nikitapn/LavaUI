@@ -288,4 +288,101 @@ final class GitRepositoryTests: XCTestCase {
         XCTAssertEqual(try repo.branch(), "fresh")
         XCTAssertFalse(try repo.hasCommits())
     }
+
+    // MARK: - Branches, worktrees, checkout
+
+    private func write(_ text: String, to name: String, in folder: URL? = nil) throws {
+        try text.write(to: (folder ?? directory).appendingPathComponent(name), atomically: true, encoding: .utf8)
+    }
+
+    private func read(_ name: String) throws -> String {
+        try String(contentsOf: directory.appendingPathComponent(name), encoding: .utf8)
+    }
+
+    func testBranchesPutTheCurrentOneFirstAndCountUpstream() throws {
+        let repo = try XCTUnwrap(GitRepository.containing(directory))
+        let base = try XCTUnwrap(repo.branch())
+        try git_("branch", "feature")
+        try git_("branch", "--set-upstream-to", base, "feature")
+        try write("one\ntwo\nthree\n", to: "a.txt")
+        try git_("commit", "-q", "-am", "second on base")
+        let branches = try repo.branches()
+        XCTAssertEqual(branches.map(\.name), [base, "feature"])
+        XCTAssertTrue(branches[0].isHead)
+        XCTAssertEqual(branches[0].subject, "second on base")
+        let feature = branches[1]
+        XCTAssertEqual(feature.upstream, base)
+        XCTAssertEqual(feature.ahead, 0)
+        XCTAssertEqual(feature.behind, 1)
+        XCTAssertEqual(feature.subject, "first")
+    }
+
+    func testCheckoutCarriesUnrelatedChangesAndMovesHead() throws {
+        let repo = try XCTUnwrap(GitRepository.containing(directory))
+        let base = try XCTUnwrap(repo.branch())
+        try git_("checkout", "-q", "-b", "feature")
+        try write("feature\n", to: "f.txt")
+        try git_("add", "f.txt")
+        try git_("commit", "-q", "-m", "feature file")
+        try git_("checkout", "-q", base)
+
+        try write("one\ntwo\nlocal\n", to: "a.txt")
+        try repo.checkout(branch: "feature")
+        XCTAssertEqual(try repo.branch(), "feature")
+        XCTAssertEqual(try read("f.txt"), "feature\n")
+        XCTAssertEqual(try read("a.txt"), "one\ntwo\nlocal\n", "an edit the switch does not touch comes along")
+
+        try repo.checkout(branch: base)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("f.txt").path))
+    }
+
+    func testCheckoutRefusesToOverwriteAndWritesNothing() throws {
+        let repo = try XCTUnwrap(GitRepository.containing(directory))
+        let base = try XCTUnwrap(repo.branch())
+        try git_("checkout", "-q", "-b", "feature")
+        try write("feature version\n", to: "a.txt")
+        try write("tracked there\n", to: "u.txt")
+        try git_("add", "a.txt", "u.txt")
+        try git_("commit", "-q", "-m", "feature edits")
+        try git_("checkout", "-q", base)
+
+        try write("mine\n", to: "a.txt")
+        try write("untracked here\n", to: "u.txt")
+        XCTAssertThrowsError(try repo.checkout(branch: "feature")) { error in
+            XCTAssertEqual(error as? GitCheckoutError, .wouldOverwrite(["a.txt", "u.txt"]))
+        }
+        XCTAssertEqual(try repo.branch(), base)
+        XCTAssertEqual(try read("a.txt"), "mine\n")
+        XCTAssertEqual(try read("u.txt"), "untracked here\n")
+    }
+
+    func testWorktreesAndABranchCheckedOutInAnother() throws {
+        let repo = try XCTUnwrap(GitRepository.containing(directory))
+        let base = try XCTUnwrap(repo.branch())
+        let linked = directory.deletingLastPathComponent()
+            .appendingPathComponent(directory.lastPathComponent + "-wt", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: linked) }
+        try git_("worktree", "add", "-q", "-b", "agent", linked.path)
+
+        let fromMain = try repo.worktrees()
+        XCTAssertEqual(fromMain.map(\.branch), [base, "agent"])
+        XCTAssertEqual(fromMain.map(\.isMain), [true, false])
+        XCTAssertEqual(fromMain[1].root.resolvingSymlinksInPath(), linked.resolvingSymlinksInPath())
+
+        // Asked from inside the linked one, the answer is the same list.
+        let other = try XCTUnwrap(GitRepository.containing(linked))
+        XCTAssertEqual(try other.worktrees().map(\.branch), [base, "agent"])
+        XCTAssertEqual(try other.branches().first?.name, "agent")
+
+        XCTAssertThrowsError(try repo.checkout(branch: "agent")) { error in
+            guard case .checkedOutElsewhere(let branch, _) = error as? GitCheckoutError else {
+                return XCTFail("\(error)")
+            }
+            XCTAssertEqual(branch, "agent")
+        }
+
+        // A worktree whose folder was deleted is not offered.
+        try FileManager.default.removeItem(at: linked)
+        XCTAssertEqual(try repo.worktrees().count, 1)
+    }
 }

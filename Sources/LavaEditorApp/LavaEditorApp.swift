@@ -169,6 +169,11 @@ struct LavaEditorApp {
                     }
                     Menu("Git", id: "git") {
                         MenuItem(
+                            "Switch Branch or Worktree…", id: "git.switch",
+                            isEnabled: session.project?.isInRepository == true
+                        ) { session.openBranchPicker() }
+                        MenuSeparator()
+                        MenuItem(
                             session.visibleDiff == nil ? "Compare with HEAD" : "Close Comparison",
                             id: "git.compare-head",
                             shortcut: KeyShortcut(KeyCode.d, [.primary, .shift]),

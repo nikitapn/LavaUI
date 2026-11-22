@@ -454,9 +454,12 @@ public struct OverlayStyle {
     /// Non-modal popups close and consume outside presses. An open menu bar
     /// can also switch titles on that press. Keyboard handling is separate.
     public var modal: Bool
-    // Opt into a keyboard scope as well as pointer modality.
-    var onKey: ((KeyEvent) -> Bool)?
-    var onUnfocusedText: ((Character) -> Void)?
+    /// Keys while the overlay is up, before anything behind it: true means
+    /// handled. What makes a modal a keyboard scope as well as a pointer one.
+    public var onKey: ((KeyEvent) -> Bool)?
+    /// Typing that no field inside the overlay took — how a picker's search
+    /// field gets the first letter typed before it has focus.
+    public var onUnfocusedText: ((Character) -> Void)?
 
     /// Creates a style. Colours and radius left `nil` come from the current theme.
     public init(
