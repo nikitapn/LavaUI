@@ -31,9 +31,10 @@ public final class PtySession: @unchecked Sendable {
         stop()
     }
 
-    /// Start `$SHELL` (or `/bin/bash`) in a new session attached to a PTY.
+    /// Start `$SHELL` (or `/bin/bash`) in a new session attached to a PTY,
+    /// in `directory` when given, else wherever this process is.
     @discardableResult
-    public func start(cols: Int = 80, rows: Int = 24) -> Bool {
+    public func start(cols: Int = 80, rows: Int = 24, directory: String? = nil) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         guard !isRunning else { return true }
@@ -68,6 +69,11 @@ public final class PtySession: @unchecked Sendable {
             _ = ioctl(master, UInt(TIOCSWINSZ), &win)
         }
 
+        // Made before the fork: the child of a threaded process may only make
+        // async-signal-safe calls, and a Swift string conversion is not one.
+        let workingDirectory = directory.flatMap { strdup($0) }
+        defer { free(workingDirectory) }
+
         let pid = fork()
         if pid < 0 {
             close(master)
@@ -84,6 +90,18 @@ public final class PtySession: @unchecked Sendable {
             _ = dup2(slave, STDOUT_FILENO)
             _ = dup2(slave, STDERR_FILENO)
             if slave > STDERR_FILENO { close(slave) }
+            if let workingDirectory { _ = chdir(workingDirectory) }
+            // A shell starts with every signal at its default and none
+            // blocked. Ignored signals survive exec, and the app forking
+            // this may ignore some — LavaEditor ignores SIGINT, SIGQUIT and
+            // SIGPIPE — and then so does the shell and everything it runs:
+            // Ctrl+C echoed `^C` and stopped nothing.
+            for signal in 1..<Int32(NSIG) where signal != SIGKILL && signal != SIGSTOP {
+                Glibc.signal(signal, SIG_DFL)
+            }
+            var none = sigset_t()
+            sigemptyset(&none)
+            sigprocmask(SIG_SETMASK, &none, nil)
 
             setenv("TERM", "xterm-256color", 1)
             setenv("COLORTERM", "truecolor", 1)

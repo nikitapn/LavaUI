@@ -53,14 +53,27 @@ public final class TerminalSession: @unchecked Sendable {
     private var lastCols = 80
     private var lastRows = 24
 
-    public init() {}
+    /// Whether this terminal sees keys before the window's menu shortcuts.
+    /// See `FocusManager.focus(keysBeforeShortcuts:)`: inside an app with
+    /// menus of its own, Ctrl+C and Ctrl+W must reach the shell.
+    @ObservationIgnored public var keysBeforeShortcuts = false
+    /// Keys the terminal leaves to the app (its menu shortcuts) when it sees
+    /// them first. Nil: none.
+    @ObservationIgnored public var declinesKey: ((KeyEvent) -> Bool)?
+
+    /// Where the shell starts, or this process's directory when nil.
+    public let workingDirectory: URL?
+
+    public init(workingDirectory: URL? = nil) {
+        self.workingDirectory = workingDirectory
+    }
 
     public func start(onExit: @escaping @Sendable () -> Void) {
         statusLine = "opening PTY…"
         // Seed the chrome with this process's cwd — the shell usually starts
         // there, and OSC 7 will refine it once the shell reports in.
         pathLabel = Self.displayPath(
-            cwd: FileManager.default.currentDirectoryPath, title: "")
+            cwd: workingDirectory?.path ?? FileManager.default.currentDirectoryPath, title: "")
         let session = PtySession(
             onData: { [weak self] data in
                 guard let self else { return }
@@ -79,7 +92,7 @@ public final class TerminalSession: @unchecked Sendable {
                 }
             }
         )
-        if session.start(cols: screen.cols, rows: screen.rows) {
+        if session.start(cols: screen.cols, rows: screen.rows, directory: workingDirectory?.path) {
             pty = session
             statusLine = "shell · \(screen.cols)×\(screen.rows)"
             bump()

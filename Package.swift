@@ -80,6 +80,7 @@ var products: [Product] = [
     .library(name: "TraceLoomCore", targets: ["TraceLoomCore"]),
     .library(name: "SpotifyCore", targets: ["SpotifyCore"]),
     .library(name: "LavaTermCore", targets: ["LavaTermCore"]),
+    .library(name: "LavaTerminal", targets: ["LavaTerminal"]),
     .library(name: "WeatherCore", targets: ["WeatherCore"]),
     .library(name: "LavaViewCore", targets: ["LavaViewCore"]),
     .library(name: "LavaDiffCore", targets: ["LavaDiffCore"]),
@@ -520,18 +521,25 @@ var targets: [Target] = [
         name: "LavaEditorApp",
         dependencies: [
             "LavaUI", "LavaHost", "LavaText", "LavaDiffCore", "LavaGitCore", "LavaProjectCore",
-            "LavaExplorerCore", "LavaLSPCore", "LavaEditorSettings",
+            "LavaExplorerCore", "LavaLSPCore", "LavaEditorSettings", "LavaTerminal",
         ],
         resources: [.copy("Resources")],
         swiftSettings: interopCxx
     ),
-    .executableTarget(
-        name: "LavaTermApp",
-        dependencies: ["LavaUI", "LavaHost", "LavaTermCore"],
+    // A terminal as a view: the PTY, the session and the grid, no window.
+    // LavaTerm wraps it in chrome; LavaEditor puts it in a panel.
+    .target(
+        name: "LavaTerminal",
+        dependencies: ["LavaUI", "LavaTermCore"],
         swiftSettings: interopCxx,
         linkerSettings: [
             .linkedLibrary("util", .when(platforms: [.linux])),
         ]
+    ),
+    .executableTarget(
+        name: "LavaTermApp",
+        dependencies: ["LavaUI", "LavaHost", "LavaTermCore", "LavaTerminal"],
+        swiftSettings: interopCxx
     ),
     .executableTarget(
         name: "WeatherApp",
