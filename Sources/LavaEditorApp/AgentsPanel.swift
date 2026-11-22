@@ -25,6 +25,13 @@ struct AgentRow: Equatable, Identifiable {
 final class AgentsModel {
     private(set) var rows: [AgentRow] = []
     private(set) var loaded = false
+    /// The New Agent field is open.
+    var composing = false
+    var task = ""
+    var taskFocused = false
+    /// A `claude --bg -w` is being started.
+    var starting = false
+    var notice: String?
     @ObservationIgnored private var polling = false
     @ObservationIgnored private let cache = CodexSessions.MetaCache()
 
@@ -158,6 +165,73 @@ extension EditorSession {
         }
     }
 
+    /// New Agent: Claude Code on a task, in its background service, in a git
+    /// worktree it makes for itself (`claude --bg -w`). It shows up as a row
+    /// of its own once the worktree exists — the view is polling anyway.
+    /// Auto mode, as a session left to itself wants; a call auto mode cannot
+    /// decide waits for whoever attaches.
+    func startAgent() {
+        let model = agents
+        let task = model.task.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !task.isEmpty, !model.starting, let repository = project?.repository else { return }
+        guard let executable = ClaudeChatProcess.executable else {
+            model.notice = ClaudeChatProcess.Failure.notInstalled.description
+            return
+        }
+        let name = Self.worktreeName(for: task)
+        var arguments = ["--bg", "-w", name, "--permission-mode", "auto"]
+        if let model = ProcessInfo.processInfo.environment["LAVAEDITOR_CLAUDE_MODEL"], !model.isEmpty {
+            arguments += ["--model", model]
+        }
+        arguments.append(task)
+        let command = arguments
+        model.starting = true
+        model.notice = nil
+        let ref = AgentsRef(model)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let process = Process()
+            process.executableURL = executable
+            process.arguments = command
+            process.currentDirectoryURL = repository.root
+            let output = Pipe()
+            process.standardOutput = output
+            process.standardError = output
+            process.standardInput = FileHandle.nullDevice
+            var read = ""
+            var code: Int32 = -1
+            if (try? process.run()) != nil {
+                read = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                process.waitUntilExit()
+                code = process.terminationStatus
+            }
+            let text = read, status = code
+            // "backgrounded · 95abe5ab", among other lines.
+            let id = text.split(whereSeparator: \.isNewline)
+                .first { $0.contains("backgrounded") }
+                .flatMap { $0.split(separator: " ").last.map(String.init) }
+            let last = text.split(whereSeparator: \.isNewline).last.map(String.init) ?? ""
+            MainQueue.async {
+                guard let model = ref.model else { return }
+                model.starting = false
+                if status == 0 {
+                    model.task = ""
+                    model.composing = false
+                    model.notice = "Started \(id ?? "an agent") in .claude/worktrees/\(name). Its row appears in a moment."
+                } else {
+                    model.notice = "claude --bg failed (\(status)): \(last)"
+                }
+            }
+        }
+    }
+
+    /// A worktree name from the task's first words: `fix-the-login-bug-3f2a`.
+    static func worktreeName(for task: String) -> String {
+        let words = task.lowercased().split { !($0.isASCII && ($0.isLetter || $0.isNumber)) }.prefix(4)
+        let stem = words.joined(separator: "-")
+        let suffix = String(UInt32.random(in: 0...0xffff), radix: 16)
+        return (stem.isEmpty ? "agent" : String(stem.prefix(40))) + "-" + suffix
+    }
+
     /// The session's chat in a tab — the one already open for it, if any.
     func openSessionChat(_ agent: AgentSession) {
         let optionID = "chat:" + agent.id
@@ -186,8 +260,40 @@ struct AgentsPanel: View {
             HStack(padding: 0, alignment: .center, spacing: 8) {
                 Text("Agents", color: .primary, font: session.fonts.tabSelected, lineLimit: 1)
                 Spacer()
+                if project.isInRepository {
+                    Text(model.composing ? "Cancel" : "New Agent", color: .secondary, font: session.fonts.status,
+                         hoverFill: theme.hover, cornerRadius: 6, onClick: {
+                            model.composing.toggle()
+                            model.taskFocused = model.composing
+                            model.notice = nil
+                         })
+                        .padding(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8))
+                        .cursor(.pointer)
+                        .tooltip("Start Claude Code on a task, in the background, in a worktree of its own")
+                        .agentId("agents-new")
+                }
             }
             .padding(EdgeInsets(top: 10, leading: 14, bottom: 8, trailing: 10))
+            if model.composing {
+                VStack(spacing: 6) {
+                    TextField(
+                        text: Binding(get: { model.task }, set: { model.task = $0 }),
+                        placeholder: "What should it do? Enter starts it",
+                        font: session.fonts.tab,
+                        onSubmit: { session.startAgent() }
+                    )
+                    .focused(Binding(get: { model.taskFocused }, set: { model.taskFocused = $0 }))
+                    .agentId("agents-task")
+                    Text(model.starting ? "Starting…" : "Runs `claude --bg -w` in auto mode: a new branch and worktree, its own row here.",
+                         color: .muted, font: session.fonts.status)
+                }
+                .padding(EdgeInsets(top: 0, leading: 14, bottom: 8, trailing: 12))
+            }
+            if let notice = model.notice {
+                Text(notice, color: .muted, font: session.fonts.status)
+                    .padding(EdgeInsets(top: 0, leading: 14, bottom: 8, trailing: 12))
+                    .agentId("agents-notice")
+            }
             if !model.loaded {
                 Text("Looking at worktrees…", color: .muted, font: session.fonts.status).padding(14)
             } else {

@@ -215,8 +215,15 @@ public struct ClaudeLiveSession: Equatable, Sendable {
     /// The CLI's word: `busy` while a turn runs.
     public let state: String
     public let name: String
+    /// A background session's short id — what `claude attach` takes.
+    public let shortID: String?
 
     public var status: AgentStatus { state == "busy" ? .working : .waiting }
+
+    public var isBackground: Bool { kind == "background" }
+
+    /// What `claude attach` is given for it: the short id, else the name.
+    public var attachName: String { shortID ?? (name.isEmpty ? session : name) }
 
     public static func parse(_ data: Data) -> [ClaudeLiveSession] {
         guard let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
@@ -226,7 +233,7 @@ public struct ClaudeLiveSession: Equatable, Sendable {
             return ClaudeLiveSession(
                 session: session, pid: pid, directory: URL(fileURLWithPath: cwd, isDirectory: true),
                 kind: entry["kind"] as? String ?? "", state: entry["status"] as? String ?? "",
-                name: entry["name"] as? String ?? ""
+                name: entry["name"] as? String ?? "", shortID: entry["id"] as? String
             )
         }
     }

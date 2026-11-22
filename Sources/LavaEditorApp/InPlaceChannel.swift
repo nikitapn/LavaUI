@@ -11,28 +11,35 @@ import LavaUI
 /// How it gets there depends on where the session is, and never makes a
 /// second writer on a running conversation:
 /// - Codex: `codex queue --resume`, always.
-/// - Claude Code, not running: one more turn, `claude -p --resume` in auto
-///   mode — the same as the chat tab's Send.
-/// - Claude Code, running in this editor's terminal panel: the question is
-///   typed into that terminal, as a bracketed paste so a question of
-///   several lines arrives whole, and Enter. It queues if a turn is running.
-/// - Claude Code, running anywhere else: refused — that terminal is the
-///   only way in, and it is not ours. A fork still works.
+/// - Claude Code, not running: one more turn in Claude Code's background
+///   service, `claude --bg --resume` in auto mode — the same as the chat
+///   tab's Send.
+/// - Claude Code, running: typed into its terminal — an editor tab it runs
+///   in, or one the editor attaches for a background session. See
+///   `EditorSession.deliver(_:toRunning:in:done:)`. Refused only for a
+///   session in a terminal that is not ours; a fork still works there.
 ///
 /// This is the real agent with its real tools: it may edit files rather
 /// than propose a block. Every file it writes is reported as it goes, and
 /// the editor re-reads open tabs whose files changed.
 final class InPlaceChannel: AgentChatProcess, @unchecked Sendable {
-    private enum Route { case process, terminal, queued }
+    /// `live`: the turn is over when `claude agents` stops calling the
+    /// session busy. `queued`: when the Codex rollout's turn closes.
+    private enum Route { case live, queued }
 
-    private let session: AgentSession
+    /// Changes when Claude Code continues the question in a copy.
+    private var session: AgentSession
+    /// The question as the transcript will show it, while the reply is
+    /// being looked for in a copy's file: everything up to it is history.
+    private var skipUntil: String?
+    private var lastQuestion = ""
     private weak var editor: EditorSession?
     private let onEvent: (AgentEvent) -> Void
     private let onEdited: ([String]) -> Void
 
     // All of the below on the main queue only.
     private var turn = 0
-    private var route = Route.process
+    private var route = Route.live
     private var tail: TranscriptTail?
     private var sawReply = false
     private var processRunning = false
@@ -64,6 +71,8 @@ final class InPlaceChannel: AgentChatProcess, @unchecked Sendable {
         }
         turn &+= 1
         sawReply = false
+        skipUntil = nil
+        lastQuestion = text.trimmingCharacters(in: .whitespacesAndNewlines)
         quietSince = Date()
         // From the end as it is now: the reply is whatever comes after.
         var fresh = TranscriptTail(file: file, agent: session.agent, fromEnd: true)
@@ -85,33 +94,49 @@ final class InPlaceChannel: AgentChatProcess, @unchecked Sendable {
     }
 
     private func deliverToClaude(_ text: String, live: ClaudeLiveSession?) {
+        route = .live
         guard let live else {
-            route = .process
-            var arguments = ["-p", "--resume", session.id, "--permission-mode", "auto", "--permission-prompts", "none"]
-            if let model = ProcessInfo.processInfo.environment["LAVAEDITOR_CLAUDE_MODEL"], !model.isEmpty {
-                arguments += ["--model", model]
+            let before = session
+            let me = ChannelRef(self)
+            run(ClaudeChatProcess.executable, EditorSession.backgroundResume(session.id, message: text)) { output in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let copy = EditorSession.continuation(of: before, output: output)
+                    MainQueue.async { if let copy { me.channel?.switchTo(copy) } }
+                }
             }
-            run(ClaudeChatProcess.executable, arguments + [text])
             return
         }
-        guard let terminal = editor?.terminal(running: live.pid) else {
-            let place = live.kind == "background" ? "in the background (\(live.name))" : "in a terminal outside LavaEditor (pid \(live.pid))"
-            finish(error: "This session is running \(place), and only that can talk to it. Pick Fork to ask a copy of it.")
-            return
+        guard let editor else { return }
+        let me = ChannelRef(self)
+        editor.deliver(text, toRunning: live, in: session.directory) { error in
+            if let error { me.channel?.finish(error: error + " Pick Fork to ask a copy of it.") }
         }
-        route = .terminal
-        // Bracketed paste: the TUI takes the lines as one message rather
-        // than sending at the first newline. Then Enter.
-        terminal.write("\u{1b}[200~" + text + "\u{1b}[201~")
-        terminal.write("\r")
+    }
+
+    /// The reply is in `copy`'s file: read it from the question on.
+    private func switchTo(_ copy: AgentSession) {
+        guard tail != nil, let file = copy.file else { return }
+        session = copy
+        tail = TranscriptTail(file: file, agent: copy.agent)
+        skipUntil = lastQuestion
+        onEvent(.tool(name: "Continued", detail: "in a copy, \(copy.id.prefix(8))"))
     }
 
     /// Reads what the session wrote since, twice a second, until the turn
     /// is over by the session's own account.
     private func follow(_ turn: Int) {
         guard turn == self.turn, var tail else { return }
-        let entries = tail.read()
+        var entries = tail.read()
         self.tail = tail
+        if let question = skipUntil {
+            // History first, then the question, then the reply.
+            if let at = entries.lastIndex(where: { $0.kind == .user && $0.text == question }) {
+                entries = Array(entries[(at + 1)...])
+                skipUntil = nil
+            } else {
+                entries = []
+            }
+        }
         if !entries.isEmpty { quietSince = Date() }
         for entry in entries {
             if entry.kind == .assistant { sawReply = true }
@@ -131,11 +156,6 @@ final class InPlaceChannel: AgentChatProcess, @unchecked Sendable {
 
     private func turnOver() -> Bool {
         switch route {
-        case .process:
-            // A `claude -p` turn is over when the process is; the file was
-            // read once more after it ended, above.
-            guard !processRunning else { return false }
-            return sawReply || Date().timeIntervalSince(quietSince) > 3
         case .queued:
             guard !processRunning else { return false }
             if sawReply, let file = session.file, !CodexSessions.turnOpen(file) { return true }
@@ -145,8 +165,13 @@ final class InPlaceChannel: AgentChatProcess, @unchecked Sendable {
                 return true
             }
             return false
-        case .terminal:
-            // The terminal says nothing about turns; the CLI's list does.
+        case .live:
+            // Nothing came at all: the session goes on without the box.
+            if !sawReply, !processRunning, Date().timeIntervalSince(quietSince) > 120 {
+                onEvent(.text("No answer yet. The session carries on; its chat in the Agents view follows it."))
+                return true
+            }
+            // A terminal says nothing about turns; the CLI's list does.
             guard sawReply, !liveCheckRunning, Date().timeIntervalSince(lastLiveCheck) > 1.5 else { return false }
             lastLiveCheck = Date()
             liveCheckRunning = true
@@ -157,7 +182,7 @@ final class InPlaceChannel: AgentChatProcess, @unchecked Sendable {
                 MainQueue.async {
                     guard let channel = me.channel else { return }
                     channel.liveCheckRunning = false
-                    if !busy, channel.tail != nil, channel.route == .terminal { channel.finish(error: nil) }
+                    if !busy, channel.tail != nil, channel.route == .live { channel.finish(error: nil) }
                 }
             }
             return false
@@ -174,7 +199,7 @@ final class InPlaceChannel: AgentChatProcess, @unchecked Sendable {
         onEvent(.finished(isError: error != nil, message: error, costUSD: nil))
     }
 
-    private func run(_ executable: URL?, _ arguments: [String]) {
+    private func run(_ executable: URL?, _ arguments: [String], succeeded: (@Sendable (String) -> Void)? = nil) {
         guard let executable else {
             finish(error: "The \(session.agent == .claude ? "claude" : "codex") command was not found.")
             return
@@ -193,13 +218,14 @@ final class InPlaceChannel: AgentChatProcess, @unchecked Sendable {
         let me = ChannelRef(self)
         process.terminationHandler = { process in
             let data = (try? output.fileHandleForReading.readToEnd()) ?? Data()
-            let last = String(decoding: data.suffix(2000), as: UTF8.self)
-                .split(whereSeparator: \.isNewline).last.map(String.init) ?? ""
+            let text = String(decoding: data.suffix(4000), as: UTF8.self)
+            let last = text.split(whereSeparator: \.isNewline).last.map(String.init) ?? ""
             let status = process.terminationStatus
             MainQueue.async {
                 guard let channel = me.channel else { return }
                 channel.processRunning = false
                 if status != 0 { channel.finish(error: "\(executable.lastPathComponent) exited with status \(status): \(last)") }
+                else { succeeded?(text) }
             }
         }
         processRunning = true

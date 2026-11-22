@@ -1,6 +1,7 @@
 import Foundation
 import LavaEditorSettings
 import LavaProjectCore
+import LavaTerminal
 import LavaText
 import LavaUI
 import Observation
@@ -91,6 +92,9 @@ final class EditorSession {
     @ObservationIgnored weak var visibleSurface: EmbeddedPreview?
     #endif
     var extensionRunning = false
+    /// Terminal tabs the editor opened with `claude attach`, by session id,
+    /// to type into again. See `deliver(_:toRunning:in:done:)`.
+    @ObservationIgnored var attachedTerminals: [String: TerminalSession] = [:]
     /// The Agents view's rows. See `AgentsModel`.
     let agents = AgentsModel()
     /// Ctrl+I's box between lines, while it is open. See `InlineChat`.

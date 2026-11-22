@@ -279,6 +279,9 @@ final class TranscriptTests: XCTestCase {
         XCTAssertEqual(live.map(\.session), ["s1", "s2"])
         XCTAssertEqual(live.map(\.status), [.working, .waiting])
         XCTAssertEqual(live.first?.pid, 13244)
+        let background = ClaudeLiveSession.parse(Data(#"[{"pid":"950224","id":"95abe5ab","cwd":"/r/.claude/worktrees/x","kind":"background","sessionId":"95abe5ab-56fa","name":"ready-reply echo test","status":"idle","state":"done"}]"#.utf8))
+        XCTAssertEqual(background.first?.isBackground, true)
+        XCTAssertEqual(background.first?.attachName, "95abe5ab")
     }
 
     func testCodexTurnState() {

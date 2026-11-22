@@ -10,11 +10,15 @@ import Observation
 /// Saying something to it goes through the CLI, and never as a second
 /// writer on a session that is running: two processes appending to one
 /// conversation is how it gets corrupted. Codex has a command for exactly
-/// this (`codex queue`); a Claude Code session is continued only while
-/// nothing is running it, and otherwise offered in the terminal panel.
+/// this (`codex queue`). A Claude Code session nothing runs gets one more
+/// turn in the background service; a running one has the message typed into
+/// its terminal (`EditorSession.deliver`), or is refused when that terminal
+/// is not the editor's.
 @Observable
 final class SessionTranscript {
-    let session: AgentSession
+    /// The session followed. Changes when Claude Code continues a message in
+    /// a copy — see `EditorSession.continuation(of:output:)`.
+    private(set) var session: AgentSession
     private(set) var entries: [TranscriptEntry] = []
     /// The start of a long file was skipped.
     private(set) var truncated = false
@@ -26,7 +30,7 @@ final class SessionTranscript {
     var notice: String?
 
     @ObservationIgnored let scroll = ScrollPosition()
-    @ObservationIgnored private let reader: Reader?
+    @ObservationIgnored private var reader: Reader?
     @ObservationIgnored private weak var editor: EditorSession?
 
     /// Entries kept for the view: a long session's whole history would be
@@ -51,8 +55,11 @@ final class SessionTranscript {
             let (new, truncated) = reader.read()
             MainQueue.async {
                 guard let transcript = ref.transcript else { return }
-                if truncated != transcript.truncated { transcript.truncated = truncated }
-                if !new.isEmpty {
+                // Switched to another file meanwhile: this read is the old
+                // one's. Dropped, and the next tick reads the new file.
+                let current = transcript.reader === reader
+                if current, truncated != transcript.truncated { transcript.truncated = truncated }
+                if current, !new.isEmpty {
                     transcript.entries.append(contentsOf: new)
                     if transcript.entries.count > Self.shownEntries {
                         transcript.entries.removeFirst(transcript.entries.count - Self.shownEntries)
@@ -65,6 +72,16 @@ final class SessionTranscript {
                 }
             }
         }
+    }
+
+    /// Follows `copy` from now on: the whole conversation is in it, so the
+    /// tab is read again from its file.
+    private func follow(_ copy: AgentSession) {
+        session = copy
+        entries = []
+        truncated = false
+        reader = copy.file.map { Reader(TranscriptTail(file: $0, agent: copy.agent)) }
+        notice = "Claude Code continued this in a copy (\(copy.id.prefix(8))); following that here."
     }
 
     // MARK: - Talking to it
@@ -88,19 +105,18 @@ final class SessionTranscript {
         sending = true
         draft = ""
         run(executable, ["queue", "--thread", session.id, "--message", text, "--resume"], in: session.directory) { status, output in
-            self.notice = status == 0 ? "Queued for this session." : "codex queue failed: \(output)"
+            let last = output.split(whereSeparator: \.isNewline).last.map(String.init) ?? ""
+            self.notice = status == 0 ? "Queued for this session." : "codex queue failed: \(last)"
         }
     }
 
-    /// One more turn of a Claude Code session nothing else is running:
-    /// `claude -p --resume`, appending to it as the terminal would. Its
+    /// A message for a Claude Code session. Running, it is typed into its
+    /// terminal. Stopped, it is one more turn in Claude Code's background
+    /// service (`claude --bg --resume`, auto mode): the turn outlives the
+    /// editor, `claude agents` reports it while it works — so the status dot
+    /// is the CLI's answer rather than a guess — and a call auto mode cannot
+    /// decide waits for whoever attaches instead of being refused. Its
     /// progress shows up here through the file, like anyone's.
-    ///
-    /// Auto mode: the CLI decides each tool call itself, as it would for the
-    /// session in a terminal set to auto. A call it cannot decide would ask,
-    /// and nobody is attached to a turn started from here, so asking is
-    /// turned off (`--permission-prompts none`) — that one call is refused
-    /// rather than the turn waiting forever.
     private func continueClaude(_ text: String) {
         guard let executable = ClaudeChatProcess.executable else {
             notice = ClaudeChatProcess.Failure.notInstalled.description
@@ -115,21 +131,35 @@ final class SessionTranscript {
             MainQueue.async {
                 guard let transcript = ref.transcript else { return }
                 if let live {
-                    transcript.sending = false
-                    transcript.notice = live.kind == "background"
-                        ? "Running in the background (\(live.name)). Open it in the terminal to talk to it."
-                        : "Running in a terminal (pid \(live.pid)). Type there — two writers would corrupt the session."
+                    // Running: typed into its terminal — the editor's tab it
+                    // runs in, or one attached for a background session.
+                    guard let editor = transcript.editor else { return }
+                    editor.deliver(text, toRunning: live, in: session.directory) { error in
+                        transcript.sending = false
+                        if let error {
+                            transcript.notice = error
+                        } else {
+                            transcript.draft = ""
+                            transcript.notice = nil
+                        }
+                    }
                     return
                 }
+                // Stopped: one more turn in Claude Code's background service.
                 transcript.draft = ""
-                transcript.notice = "Continuing…"
-                var arguments = ["-p", "--resume", session.id,
-                                 "--permission-mode", "auto", "--permission-prompts", "none"]
-                if let model = ProcessInfo.processInfo.environment["LAVAEDITOR_CLAUDE_MODEL"], !model.isEmpty {
-                    arguments += ["--model", model]
-                }
-                transcript.run(executable, arguments + [text], in: session.directory) { status, output in
-                    transcript.notice = status == 0 ? nil : "claude exited with status \(status): \(output)"
+                transcript.notice = "Continuing in the background…"
+                transcript.run(executable, EditorSession.backgroundResume(session.id, message: text),
+                               in: session.directory) { status, output in
+                    guard status == 0 else {
+                        let last = output.split(whereSeparator: \.isNewline).last.map(String.init) ?? ""
+                        transcript.notice = "claude exited with status \(status): \(last)"
+                        return
+                    }
+                    transcript.notice = nil
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        let copy = EditorSession.continuation(of: session, output: output)
+                        MainQueue.async { if let copy { ref.transcript?.follow(copy) } }
+                    }
                 }
             }
         }
@@ -152,8 +182,7 @@ final class SessionTranscript {
         let box = DoneBox(done)
         process.terminationHandler = { process in
             let data = (try? output.fileHandleForReading.readToEnd()) ?? Data()
-            let text = String(decoding: data.suffix(2000), as: UTF8.self)
-                .split(whereSeparator: \.isNewline).last.map(String.init) ?? ""
+            let text = String(decoding: data.suffix(4000), as: UTF8.self)
             let status = process.terminationStatus
             MainQueue.async {
                 ref.transcript?.sending = false
@@ -275,7 +304,7 @@ struct SessionTranscriptView: View {
                     text: Binding(get: { transcript.draft }, set: { transcript.draft = $0 }),
                     placeholder: agent.agent == .codex
                         ? "Queue a message for this session…"
-                        : "Continue this session (only while nothing else is running it)…",
+                        : "Message this session — typed into its terminal while it runs, continued in the background when it does not…",
                     font: session.fonts.tab,
                     onSubmit: { transcript.send() }
                 )

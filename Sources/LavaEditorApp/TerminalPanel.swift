@@ -93,7 +93,8 @@ extension EditorSession {
     /// A new shell in `directory`, with `command` typed into it once it is
     /// up — a command rather than the shell's argument, so that quitting the
     /// program leaves you in a shell in that folder instead of closing the tab.
-    func newTerminal(in directory: URL?, typing command: String?) {
+    @discardableResult
+    func newTerminal(in directory: URL?, typing command: String?) -> TerminalSession {
         if terminal.font == nil, let editor = imageEditor {
             terminal.font = TerminalFont.load(into: editor, pixelSize: documentFont?.pixelSize ?? 15)
         }
@@ -116,6 +117,7 @@ extension EditorSession {
                 owner.session?.focusTerminal(session)
             }
         }
+        return session
     }
 
     func selectTerminal(_ index: Int) {
