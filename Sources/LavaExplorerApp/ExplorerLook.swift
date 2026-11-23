@@ -265,3 +265,15 @@ enum ExplorerGlyphs {
         return name != "folder"
     }
 }
+
+extension ExplorerLook {
+    /// The active pane's ring: `accent300` as it lands on `surface`, opaque.
+    /// The ring is drawn in pieces — the card's, and the current tab's
+    /// running down into it — and where a translucent `accent300` overlapped
+    /// itself the line came out brighter than the rest of the outline.
+    var paneRing: Color {
+        var solid = accent300
+        solid.a = 1
+        return surface.mixed(with: solid, accent300.a)
+    }
+}

@@ -512,7 +512,7 @@ private struct ExplorerTabs: View {
                 guard ringed, let card = session.cardFrames[pane.id] else { return }
                 let edge = PaneChrome.outlineWidth, r = PaneCard<EmptyView>.radius
                 list.roundedRect(x: card.x - edge, y: card.y - edge, w: card.w + 2 * edge,
-                                 h: card.h + 2 * edge, color: look.accent300, radius: r + edge)
+                                 h: card.h + 2 * edge, color: look.paneRing, radius: r + edge)
             }
         }
     }
@@ -526,7 +526,7 @@ private struct ExplorerTabs: View {
         let font = on ? fonts?.bodySemi : fonts?.body
         let width = min(200, font?.measure(tab.title).width ?? 120)
         let ringed = ringed && on
-        let card = look.card, ring = look.accent300
+        let card = look.card, ring = look.paneRing
         return HStack(padding: 0, alignment: .center, spacing: 2) {
             HStack(padding: 0, alignment: .center, spacing: 8,
                    onClick: { session.selectTab(id: tab.id) }) {
