@@ -2204,7 +2204,9 @@ final class OptionalFragmentNode: FragmentNode {
 
 /// ForEach: keyed child list (structural recon).
 final class ForEachFragmentNode<ID: Hashable>: FragmentNode {
-    private var keyed: [(id: ID, node: any AnyViewNode)] = []
+    /// `occurrence` is which row of that id this was, for the structural
+    /// key's `#n` — see `update`.
+    private var keyed: [(id: ID, node: any AnyViewNode, occurrence: Int)] = []
 
     init() {
         super.init(label: "ForEach", children: [])
@@ -2225,35 +2227,44 @@ final class ForEachFragmentNode<ID: Hashable>: FragmentNode {
         // hands over the only reference to that array, and taking the last
         // element of it is in place. Reading the bucket out and putting it
         // back instead would copy it once per row.
-        var oldBuckets: [ID: [any AnyViewNode]] = [:]
+        var oldBuckets: [ID: [(node: any AnyViewNode, occurrence: Int)]] = [:]
         oldBuckets.reserveCapacity(keyed.count)
         for entry in keyed.reversed() {
-            oldBuckets[entry.id, default: []].append(entry.node)
+            oldBuckets[entry.id, default: []].append((entry.node, entry.occurrence))
         }
 
-        var next: [(id: ID, node: any AnyViewNode)] = []
+        var next: [(id: ID, node: any AnyViewNode, occurrence: Int)] = []
         next.reserveCapacity(rows.count)
         var seen: [ID: Int] = [:]
 
         for row in rows {
             let key = row.id
             let childView = row.content
+            let occurrence = seen[key, default: 0]
+            seen[key] = occurrence + 1
             let childNode: any AnyViewNode
+            var keyIsCurrent = false
             if var bucket = oldBuckets.removeValue(forKey: key),
                let existing = bucket.popLast() {
                 if !bucket.isEmpty { oldBuckets[key] = bucket }
-                childNode = ViewGraph.reconcile(existing, with: childView)
+                childNode = ViewGraph.reconcile(existing.node, with: childView)
+                keyIsCurrent = childNode === existing.node
+                    && existing.occurrence == occurrence && childNode.structuralKey != nil
             } else {
                 childNode = ViewGraph.mount(childView)
             }
             // Structural path uses the ForEach key so list order changes do not
             // rename other rows (and agents can target `…/item-3/…`). A second
             // row with the same id gets a suffix so the two paths stay distinct.
-            let occurrence = seen[key, default: 0]
-            seen[key] = occurrence + 1
-            childNode.structuralKey =
-                occurrence == 0 ? "k:\(key)" : "k:\(key)#\(occurrence)"
-            next.append((key, childNode))
+            //
+            // Built once per node rather than per pass: interpolating an id
+            // that is not `CustomStringConvertible` goes through `Mirror`, and
+            // a menu bar's rows did that on every keystroke of an editor.
+            if !keyIsCurrent {
+                childNode.structuralKey =
+                    occurrence == 0 ? "k:\(key)" : "k:\(key)#\(occurrence)"
+            }
+            next.append((key, childNode, occurrence))
         }
         // Remaining oldBuckets entries drop out of `keyed` → ARC frees nodes.
         keyed = next
