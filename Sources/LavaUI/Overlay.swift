@@ -112,7 +112,21 @@ final class OverlayAttachment {
     var origin: (x: Float, y: Float) = (0, 0)
     var size: (w: Float, h: Float) = (0, 0)
 
-    var presented: Bool { isPresented() }
+    /// The newest content of an overlay that was hidden when it arrived, not
+    /// yet reconciled into `root`. See `OverlayView.reconcilePrimitive`.
+    var pendingContent: (() -> Void)?
+
+    /// Whether the overlay is showing — and if it is, its subtree is brought
+    /// up to date first, so nothing that asks this can see a hidden overlay's
+    /// stale content come into view.
+    var presented: Bool {
+        guard isPresented() else { return false }
+        if let pending = pendingContent {
+            pendingContent = nil
+            pending()
+        }
+        return true
+    }
 
     func contains(_ x: Float, _ y: Float) -> Bool {
         x >= origin.x && x < origin.x + size.w
@@ -294,19 +308,31 @@ public struct OverlayView<Content: View, OverlayContent: View>: PrimitiveView {
         // The subtree is kept mounted whether or not it is showing. Mounting it
         // lazily would make the first present a structural change, and a
         // structural change needs a body pass — which is exactly what reading
-        // the binding live is designed to avoid. The cost is that a hidden
-        // overlay's body still runs; for menu-sized content that is nothing.
-        let root: StyleBoxNode
-        if let existing = box.attachment.root {
-            existing.updateContent(
-                ViewGraph.reconcile(existing.contentNode, with: overlayContent)
-            )
-            root = existing
+        // the binding live is designed to avoid.
+        //
+        // But a hidden one is not reconciled: its newest content is kept and
+        // applied when `presented` next answers yes. Reconciling every closed
+        // menu of a menu bar on every body pass was most of the view-graph
+        // work of a keystroke in LavaEditor — the body runs per keystroke, and
+        // every row of every menu was compared each time to be shown never.
+        let att = box.attachment
+        if let existing = att.root {
+            configure(box, root: existing)
+            let content = overlayContent
+            let reconcile = {
+                existing.updateContent(ViewGraph.reconcile(existing.contentNode, with: content))
+            }
+            if att.isPresented() {
+                att.pendingContent = nil
+                reconcile()
+            } else {
+                att.pendingContent = reconcile
+            }
         } else {
-            root = StyleBoxNode(content: ViewGraph.mount(overlayContent))
-            box.attachment.root = root
+            let root = StyleBoxNode(content: ViewGraph.mount(overlayContent))
+            att.root = root
+            configure(box, root: root)
         }
-        configure(box, root: root)
         return box
     }
 
