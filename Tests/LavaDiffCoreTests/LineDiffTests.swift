@@ -124,6 +124,13 @@ final class LineDiffTests: XCTestCase {
         XCTAssertEqual(TextLines("a\n\n").lines, ["a", ""])
         XCTAssertTrue(TextLines("a\n").endsWithNewline)
         XCTAssertFalse(TextLines("a").endsWithNewline)
+        // A CRLF line keeps its `\r`; "\r\n" is one Character, and splitting
+        // on the Character "\n" left a CRLF file as one line.
+        XCTAssertEqual(TextLines("a\r\nb\r\n").lines, ["a\r", "b\r"])
+        XCTAssertEqual(TextLines("\n").lines, [""])
+        XCTAssertEqual(LineDiff.hunks(old: TextLines("a\r\nb\r\nc\r\n").lines,
+                                      new: TextLines("a\r\nx\r\nc\r\n").lines),
+                       [DiffHunk(old: 1..<2, new: 1..<2)])
 
         let diff = TextDiff(old: "a\n", new: "a")
         XCTAssertTrue(diff.isEmpty)

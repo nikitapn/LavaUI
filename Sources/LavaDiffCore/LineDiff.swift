@@ -1,3 +1,5 @@
+import Foundation
+
 /// One region where the two sides differ, as line ranges.
 ///
 /// Between consecutive hunks, and before the first and after the last, the two
@@ -34,11 +36,25 @@ public struct TextLines: Sendable {
     /// Whether the text ended with a newline.
     public let endsWithNewline: Bool
 
-    /// Splits `text`.
+    /// Splits `text` at each `\n` byte — the same breaks the editor's rows
+    /// have. Not at the `Character` `"\n"`: that is a grapheme walk over the
+    /// whole document on every keystroke the gutter diffs, and `"\r\n"` is
+    /// one grapheme, so a CRLF file came out as a single line. A CRLF line
+    /// keeps its `\r`, as it does in git.
     public init(_ text: String) {
-        var parts = text.split(separator: "\n", omittingEmptySubsequences: false)
-        endsWithNewline = text.hasSuffix("\n")
-        if endsWithNewline || text.isEmpty { parts.removeLast() }
+        var parts: [Substring] = []
+        let bytes = text.utf8
+        var start = bytes.startIndex
+        var index = start
+        while index < bytes.endIndex {
+            if bytes[index] == 0x0A {
+                parts.append(text[start..<index])
+                start = bytes.index(after: index)
+            }
+            index = bytes.index(after: index)
+        }
+        endsWithNewline = start == bytes.endIndex && !text.isEmpty
+        if !endsWithNewline && !text.isEmpty { parts.append(text[start..<bytes.endIndex]) }
         lines = parts
     }
 }
@@ -65,8 +81,14 @@ public enum LineDiff {
     public static func hunks<S: StringProtocol & Hashable>(
         old: [S], new: [S], options: DiffOptions = DiffOptions()
     ) -> [DiffHunk] {
-        var interner = Interner<Substring>()
-        func key(_ line: S) -> Substring {
+        // Keyed by bytes: `Substring`'s own hashing normalises to NFC first,
+        // which was most of a per-keystroke gutter diff. Lines that differ
+        // only in how an accent is encoded now differ, as they do in git.
+        var interner = Interner<LineBytes>()
+        func key(_ line: S) -> LineBytes {
+            LineBytes(trimmed(line))
+        }
+        func trimmed(_ line: S) -> Substring {
             let sub = Substring(line)
             guard options.ignoresTrailingWhitespace else { return sub }
             var end = sub.endIndex
@@ -199,5 +221,26 @@ enum Slider {
     static func isBlank<S: StringProtocol>(_ line: S?) -> Bool {
         guard let line else { return false }
         return line.allSatisfy { $0 == " " || $0 == "\t" || $0 == "\r" }
+    }
+}
+
+/// A line compared and hashed by its UTF-8 bytes.
+struct LineBytes: Hashable {
+    let text: Substring
+
+    init(_ text: Substring) { self.text = text }
+
+    static func == (a: Self, b: Self) -> Bool {
+        var a = a.text, b = b.text
+        return a.withUTF8 { x in
+            b.withUTF8 { y in
+                x.count == y.count && (x.isEmpty || memcmp(x.baseAddress!, y.baseAddress!, x.count) == 0)
+            }
+        }
+    }
+
+    func hash(into hasher: inout Hasher) {
+        var text = text
+        text.withUTF8 { hasher.combine(bytes: UnsafeRawBufferPointer($0)) }
     }
 }

@@ -52,22 +52,46 @@ public struct DocumentPositions: Sendable {
     public init(_ text: String, encoding: PositionEncoding = .utf16) {
         self.text = text
         self.encoding = encoding
-        var lines: [Line] = []
-        var start = text.startIndex
-        var offset = 0
-        var lineOffset = 0
-        var index = start
-        while index < text.endIndex {
-            let next = text.index(after: index)
-            if text.utf8[text.utf8.index(before: next)] == 10 {
-                lines.append(Line(start: start, end: index, offset: lineOffset))
-                start = next
-                lineOffset = offset + 1
+        // Found on bytes, and counted in Characters only where a line is not
+        // ASCII: this runs on every keystroke a server's highlighting is
+        // shifted through, and a grapheme walk of the whole document was
+        // milliseconds of it. No grapheme spans a `\n`, so lines count apart,
+        // and the `\r` of a CRLF is the newline's Character, not the line's.
+        var breaks: [(end: Int, ascii: Bool)] = []
+        var copy = text
+        let total = copy.withUTF8 { bytes -> Int in
+            var ascii = true
+            for i in 0..<bytes.count {
+                let byte = bytes[i]
+                if byte == 10 {
+                    breaks.append((i, ascii))
+                    ascii = true
+                } else if byte >= 0x80 {
+                    ascii = false
+                }
             }
-            offset += 1
-            index = next
+            breaks.append((bytes.count, ascii))
+            return bytes.count
         }
-        lines.append(Line(start: start, end: text.endIndex, offset: lineOffset))
+        let utf8 = text.utf8
+        var lines: [Line] = []
+        lines.reserveCapacity(breaks.count)
+        var startByte = 0
+        var offset = 0
+        for (number, line) in breaks.enumerated() {
+            let last = number == breaks.count - 1
+            var endByte = line.end
+            if !last, endByte > startByte,
+               utf8[utf8.index(utf8.startIndex, offsetBy: endByte - 1)] == 13 {
+                endByte -= 1
+            }
+            let start = utf8.index(utf8.startIndex, offsetBy: startByte)
+            let end = utf8.index(utf8.startIndex, offsetBy: endByte)
+            lines.append(Line(start: start, end: end, offset: offset))
+            offset += line.ascii ? endByte - startByte : text[start..<end].count
+            if !last { offset += 1 }
+            startByte = min(line.end + 1, total)
+        }
         self.lines = lines
         characterCount = offset
     }
@@ -126,26 +150,44 @@ public struct IncrementalChange: Codable, Sendable, Equatable {
     }
 
     /// Keeps the common prefix and suffix intact, including the exact Unicode spelling.
+    ///
+    /// The prefix and suffix are found on bytes and then backed off to a
+    /// position that is a `Character` boundary in both texts — the answer a
+    /// walk by `Character` gives, without grapheme-breaking the whole document
+    /// on every keystroke (that walk was ten milliseconds of a 100 KB file).
     public static func between(_ old: String, and new: String,
                                encoding: PositionEncoding = .utf16) -> Self? {
-        if old.utf8.elementsEqual(new.utf8) { return nil }
-        var oldStart = old.startIndex
-        var newStart = new.startIndex
-        while oldStart < old.endIndex && newStart < new.endIndex {
-            let oldNext = old.index(after: oldStart)
-            let newNext = new.index(after: newStart)
-            guard old[oldStart..<oldNext].utf8.elementsEqual(new[newStart..<newNext].utf8) else { break }
-            oldStart = oldNext
-            newStart = newNext
+        var oldBytes = old, newBytes = new
+        let common = oldBytes.withUTF8 { a in
+            newBytes.withUTF8 { b -> (prefix: Int, suffix: Int) in
+                let limit = min(a.count, b.count)
+                var prefix = 0
+                while prefix < limit && a[prefix] == b[prefix] { prefix += 1 }
+                var suffix = 0
+                while suffix < limit - prefix && a[a.count - 1 - suffix] == b[b.count - 1 - suffix] {
+                    suffix += 1
+                }
+                return (prefix, suffix)
+            }
         }
-        var oldEnd = old.endIndex
-        var newEnd = new.endIndex
-        while oldEnd > oldStart && newEnd > newStart {
-            let oldPrevious = old.index(before: oldEnd)
-            let newPrevious = new.index(before: newEnd)
-            guard old[oldPrevious..<oldEnd].utf8.elementsEqual(new[newPrevious..<newEnd].utf8) else { break }
-            oldEnd = oldPrevious
-            newEnd = newPrevious
+        if common.prefix == old.utf8.count && common.prefix == new.utf8.count { return nil }
+
+        func aligned(_ index: String.Index, in text: String) -> Bool {
+            index.samePosition(in: text) != nil
+        }
+        var oldStart = old.utf8.index(old.startIndex, offsetBy: common.prefix)
+        var newStart = new.utf8.index(new.startIndex, offsetBy: common.prefix)
+        while !(aligned(oldStart, in: old) && aligned(newStart, in: new)) {
+            oldStart = old.utf8.index(before: oldStart)
+            newStart = new.utf8.index(before: newStart)
+        }
+        // The suffix was measured short of the byte prefix, and backing off
+        // only moved the start earlier, so the ends cannot cross the starts.
+        var oldEnd = old.utf8.index(old.endIndex, offsetBy: -common.suffix)
+        var newEnd = new.utf8.index(new.endIndex, offsetBy: -common.suffix)
+        while !(aligned(oldEnd, in: old) && aligned(newEnd, in: new)) {
+            oldEnd = old.utf8.index(after: oldEnd)
+            newEnd = new.utf8.index(after: newEnd)
         }
         // Count line breaks only up to the edit. The unchanged suffix needs no line table.
         let bytes = old.utf8
