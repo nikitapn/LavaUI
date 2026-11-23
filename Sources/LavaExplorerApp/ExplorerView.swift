@@ -464,7 +464,12 @@ private struct ExplorerTabs: View {
     var body: some View {
         let look = ExplorerLook.current
         return HStack(height: .pt(Self.height), padding: 0, alignment: .end, spacing: 4) {
-            ScrollView(.horizontal, showsIndicator: false) {
+            // The current tab runs a card's corner down past the strip, and
+            // the card covers it everywhere but under its rounded corner: a
+            // current tab over that corner squares it, and moves with the
+            // strip when the renderer scrolls it.
+            ScrollView(.horizontal, showsIndicator: false,
+                       clipOutsetBottom: PaneCard<EmptyView>.radius) {
                 HStack(height: .pt(Self.height), padding: 0, alignment: .end, spacing: 4) {
                     ForEach(pane.tabs.tabs) { tab in
                         item(tab, look: look)
@@ -508,10 +513,6 @@ private struct ExplorerTabs: View {
                 let edge = PaneChrome.outlineWidth, r = PaneCard<EmptyView>.radius
                 list.roundedRect(x: card.x - edge, y: card.y - edge, w: card.w + 2 * edge,
                                  h: card.h + 2 * edge, color: look.accent300, radius: r + edge)
-                if pane.tabs.tabs.first?.id == pane.tabs.currentID {
-                    list.rect(x: card.x - edge, y: card.y - edge, w: r + edge, h: r + edge,
-                              color: look.accent300)
-                }
             }
         }
     }
@@ -545,24 +546,40 @@ private struct ExplorerTabs: View {
             .agentId("close-tab-\(tab.id)")
         }
         .padding(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 6))
-        .background(aimedAt ? look.accent300 : (on ? card : Color.clear))
-        .hoverBackground(on ? card : look.press.opacity(0.5))
+        // The current tab's fill is `tab-join`'s, below: it has to stop at
+        // the card's edge, which a background cannot. Card on card was no
+        // hover anyway.
+        .background(aimedAt ? look.accent300 : Color.clear)
+        .hoverBackground(on ? Color.clear : look.press.opacity(0.5))
         .cornerRadius(Self.radius)
         .underlay {
             // Square at the bottom where the current tab meets the card, and
             // the active pane's outline round its other three sides.
             Canvas(label: "tab-join", width: .pct(100), height: .pct(100)) { list, frame in
                 guard on else { return }
+                // Down past the strip by the card's corner: the card hides
+                // all of it but what lies under its rounded corner, which a
+                // tab over that corner squares. See `ExplorerTabs.body`.
+                let below = PaneCard<EmptyView>.radius
                 if ringed {
                     let edge = PaneChrome.outlineWidth
-                    // The viewport ends at the card. Put the lower corners
-                    // beyond it so the tab's sides stay straight at the join.
+                    // The lower corners beyond the clip, so the sides stay
+                    // straight all the way down.
                     list.roundedRect(x: frame.x - edge, y: frame.y - edge, w: frame.w + 2 * edge,
-                                     h: frame.h + Self.radius + 2 * edge,
+                                     h: frame.h + below + Self.radius + 2 * edge,
                                      color: ring, radius: Self.radius + edge)
                 }
-                list.rect(x: frame.x, y: frame.y + Self.radius, w: frame.w,
-                          h: frame.h - Self.radius, color: card)
+                // The fill stops at the card's left edge wherever the strip
+                // has scrolled, so a tab pushed past it leaves the ring's
+                // column outside the card showing: the card's side running
+                // on up the tab's cut edge. A clip that scrolled with the tab
+                // would cut nothing.
+                let cardX = session.cardFrames[pane.id]?.x ?? frame.x
+                list.pushClip(x: cardX, y: 0, w: 1_000_000, h: 1_000_000, fixedToWindow: true)
+                list.roundedRect(x: frame.x, y: frame.y, w: frame.w,
+                                 h: frame.h + below + Self.radius, color: card,
+                                 radius: Self.radius)
+                list.popClip()
             }
         }
         .cursor(.pointer)
@@ -577,8 +594,9 @@ private struct ExplorerTabs: View {
 }
 
 /// A pane's card: the toolbar, the files and the footer on the lightest
-/// colour, rounded — square at the top left while its first tab is the
-/// current one, so tab and card read as one shape.
+/// colour, rounded. Where the current tab sits over its top-left corner the
+/// corner is square, so tab and card read as one shape — the tab draws that,
+/// not the card: see `ExplorerTabs.body`.
 private struct PaneCard<Content: View>: View {
     @Bindable var session: ExplorerSession
     let pane: ExplorerPane
@@ -594,38 +612,12 @@ private struct PaneCard<Content: View>: View {
     }
 
     var body: some View {
-        let look = ExplorerLook.current
-        let card = look.card
-        let firstIsCurrent = pane.tabs.tabs.first?.id == pane.tabs.currentID
-        return VStack(flexGrow: 1, padding: 0, spacing: 0) {
+        VStack(flexGrow: 1, padding: 0, spacing: 0) {
             content
         }
-        .background(card)
+        .background(ExplorerLook.current.card)
         .cornerRadius(Self.radius)
         .clipped()
-        .underlay {
-            // Square at the top left while the first tab is current. The
-            // ring round an active pane is the tab strip's: see `ExplorerTabs`.
-            Canvas(label: "pane-card", width: .pct(100), height: .pct(100)) { list, frame in
-                if firstIsCurrent {
-                    list.rect(x: frame.x, y: frame.y, w: Self.radius, h: Self.radius, color: card)
-                }
-            }
-        }
-        .overlayLayer {
-            // The card's top row again, solid. The rounded fill antialiases
-            // its own top edge to about 83%, and over an active pane's ring
-            // that row read as a teal line along the bottom of the current
-            // tab — whose fill cannot reach it: the strip clips at the card,
-            // and the card paints after it. Straight part only, so the
-            // rounded corners keep their edge.
-            Canvas(label: "pane-card-top", width: .pct(100), height: .pct(100)) { list, frame in
-                let start = firstIsCurrent ? frame.x : frame.x + Self.radius
-                let end = frame.x + frame.w - Self.radius
-                guard end > start else { return }
-                list.rect(x: start, y: frame.y, w: end - start, h: 1, color: card)
-            }
-        }
         .onFrame { session.noteCardFrame(pane.id, $0) }
     }
 }

@@ -49,6 +49,13 @@ public struct SceneNodeFlags: OptionSet, Sendable {
     /// Snap the hover tint off instead of easing it. Dense full-width rows
     /// need this; a button does not. See `SceneNodeFlag.hoverSnap`.
     public static let hoverSnap = SceneNodeFlags(rawValue: SceneNodeFlag.hoverSnap.rawValue)
+
+    /// With `clip`: let the children draw `points` below the node's rect,
+    /// up to 255. The rect itself — hit testing, scrolling — is unchanged.
+    /// Bits 16–23; see `SceneNodeFlag` in idl/drawlist.npidl.
+    public static func clipOutsetBottom(_ points: Float) -> SceneNodeFlags {
+        SceneNodeFlags(rawValue: UInt32(min(255, max(0, points.rounded(.up)))) << 16)
+    }
 }
 
 /// Bits in a `scrollNode` command's `color` field. Mirrors
@@ -1020,8 +1027,13 @@ public final class DrawList {
     ///
     /// A rectangle with no area clears the clip to the whole window instead of
     /// hiding everything, so check for an empty rectangle before calling this.
-    public func pushClip(x: Float, y: Float, w: Float, h: Float) {
-        append(kind: .pushClip, x: x, y: y, w: w, h: h, color: .primary)
+    ///
+    /// `fixedToWindow` keeps the rect where it is when a renderer-side scroll
+    /// moves the content around it, so scrolled content is cut at a place
+    /// that stays put. Without it the clip scrolls with what it clips.
+    public func pushClip(x: Float, y: Float, w: Float, h: Float, fixedToWindow: Bool = false) {
+        append(kind: .pushClip, x: x, y: y, w: w, h: h, color: .primary,
+               param: fixedToWindow ? 1 : 0)
     }
 
     /// Ends the innermost `pushClip`.
@@ -1688,9 +1700,12 @@ public final class DrawList {
                 if viewCull.isEmpty { return }
                 NodeVisibility.mark(scroll.id)
 
-                let flags: SceneNodeFlags = scroll.axis == .vertical
+                var flags: SceneNodeFlags = scroll.axis == .vertical
                     ? [.clip, .scrollY, .absoluteCoordinates]
                     : [.clip, .scrollX, .absoluteCoordinates]
+                if scroll.clipOutsetBottom > 0 {
+                    flags.formUnion(.clipOutsetBottom(scroll.clipOutsetBottom))
+                }
                 beginNode(scroll.id, x: x, y: y, w: w, h: h, flags: flags)
                 if let request = scroll.revealRequest {
                     scrollNode(

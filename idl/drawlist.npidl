@@ -13,7 +13,12 @@ enum DrawCommandKind: u32 {
   circle = 3,
   /// x,y = p0; w,h = p1
   line = 4,
-  /// x,y,w,h = scissor rect
+  /// x,y,w,h = scissor rect. param bit 0: the rect is fixed to the window —
+  /// the renderer does not move it with the scene nodes around it, so
+  /// content a node scrolls is cut at a place that stays put (a current tab
+  /// running down into its card stops at the card's edge however far the
+  /// strip has scrolled). Clear, the rect moves with the content, as
+  /// anything drawn inside a node does.
   pushClip = 5,
   /// Ends the innermost clip.
   popClip = 6,
@@ -470,4 +475,10 @@ enum SceneNodeFlag: u32 {
   /// a button that snaps off is the same chip, just not stacked twenty
   /// deep. Default (flag clear) still eases both ways.
   hoverSnap = 64
+  // Bits 16–23 are not a flag but a number: how many layout pixels below
+  // its rect a `clip` node's children may still draw. Only the scissor
+  // grows — the rect, which hit testing and scrolling read, does not. For a
+  // strip whose current tab runs down into the card under it.
+  // `kSceneNodeClipOutsetBottom*` in draw_command.hpp,
+  // `SceneNodeFlags.clipOutsetBottom` in DrawList.swift.
 }

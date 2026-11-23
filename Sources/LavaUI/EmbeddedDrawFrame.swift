@@ -29,7 +29,9 @@ public struct EmbeddedDrawFrame {
             case .pushClip:
                 clipDepth += 1
                 // The native renderer reserves a zero-sized scissor for resetting the clip.
-                guard clipDepth <= 8, c.w > 0, c.h > 0 else { return nil }
+                // Nor a clip fixed to the window: an extension draws inside
+                // its own box and has no window to fix anything to.
+                guard clipDepth <= 8, c.w > 0, c.h > 0, c.param == 0 else { return nil }
             case .popClip:
                 guard clipDepth > 0 else { return nil }
                 clipDepth -= 1

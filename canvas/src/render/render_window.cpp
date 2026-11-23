@@ -1915,12 +1915,13 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       const float inheritedY1 = node.clipY1;
 
       if (node.flags & canvas::kSceneNodeClip) {
-        quads_.pushScissor({node.x, node.y}, {node.w, node.h});
+        const float below = canvas::sceneNodeClipOutsetBottom(node.flags);
+        quads_.pushScissor({node.x, node.y}, {node.w, node.h + below});
         node.clipped = true;
         node.clipX0 = std::max(node.clipX0, node.x);
         node.clipY0 = std::max(node.clipY0, node.y);
         node.clipX1 = std::min(node.clipX1, node.x + node.w);
-        node.clipY1 = std::min(node.clipY1, node.y + node.h);
+        node.clipY1 = std::min(node.clipY1, node.y + node.h + below);
       }
 
       node.recordIndex = sceneNodes_.size();
@@ -2228,7 +2229,11 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       }
       break;
     case canvas::DrawCommandKind::pushClip:
-      quads_.pushScissor({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h});
+      if (cmd.param & canvas::kClipFixedToWindow) {
+        quads_.pushScissor({cmd.x, cmd.y}, {cmd.w, cmd.h});
+      } else {
+        quads_.pushScissor({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h});
+      }
       break;
     case canvas::DrawCommandKind::popClip:
       quads_.popScissor();

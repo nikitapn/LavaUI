@@ -75,7 +75,7 @@ subtrees the renderer owns *between* client frames:
 
 | Flag | Meaning |
 |---|---|
-| `kSceneNodeClip` | scissor children to the node rect |
+| `kSceneNodeClip` | scissor children to the node rect — extended downward by bits 16–23 when set (`ScrollView(clipOutsetBottom:)`), the rect itself unchanged |
 | `kSceneNodeScrollY` / `ScrollX` | renderer may translate this subtree |
 | `kSceneNodeHitTest` | renderer resolves hover/press here |
 | `kSceneNodeAbsoluteCoordinates` | commands inside are window-space already |
@@ -88,6 +88,11 @@ Consequences that surprise people:
   the offset for hit-testing and lazy mounting (`ScrollNode.adoptRendererOffset`)
   rather than driving it. A stopped client still scrolls — as far as the
   overscan it last emitted (`ScrollView.paintedSpan`).
+- **A clip inside a node moves with it**, like everything else there. One
+  that must not — scrolled content cut at a fixed edge — is
+  `pushClip(…, fixedToWindow: true)` (`pushClip.param` bit 0). LavaExplorer's
+  current tab uses both: it runs down into its card past the strip's clip, and
+  its fill stops at the card's edge however far the strip has scrolled.
 - **Hover tints are renderer-side** too, which is why a hover costs no round
   trip and why `.nodeHover` must not force a client repaint.
 - One wheel detent is `kPixelsPerNotch` (72) in `render_window.cpp`. Both input

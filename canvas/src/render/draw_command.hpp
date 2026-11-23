@@ -130,6 +130,22 @@ inline constexpr uint32_t kSceneNodeWheel =
 inline constexpr uint32_t kSceneNodeHoverSnap =
     static_cast<uint32_t>(SceneNodeFlags::hoverSnap);
 
+/// `pushClip.param` bit: the rect is in window coordinates and is not moved
+/// by the scene nodes around it. See `pushClip` in idl/drawlist.npidl.
+inline constexpr uint32_t kClipFixedToWindow = 1u << 0;
+
+/// Bits 16–23 of a `beginNode`'s flags: how far below its rect a `clip`
+/// node lets its children draw, in layout pixels — see `SceneNodeFlag` in
+/// idl/drawlist.npidl. Only the scissor grows; the node's own rect, which
+/// is what hit testing and scrolling read, does not.
+inline constexpr uint32_t kSceneNodeClipOutsetBottomShift = 16;
+inline constexpr uint32_t kSceneNodeClipOutsetBottomMask = 0xffu << 16;
+
+inline float sceneNodeClipOutsetBottom(uint32_t flags) {
+  return static_cast<float>((flags & kSceneNodeClipOutsetBottomMask) >>
+                            kSceneNodeClipOutsetBottomShift);
+}
+
 /// One node's scroll offset, on its way back to the producer.
 struct SceneNodeOffset {
   uint32_t id = 0;

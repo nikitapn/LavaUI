@@ -40,6 +40,11 @@ public struct ScrollView<Content: View>: PrimitiveView {
     /// Keeps growing content at the end until the reader scrolls away.
     /// Returning to the end resumes following. Off by default.
     public var followsEnd: Bool
+    /// How far below the box the content may still draw, in points — for a
+    /// tab strip whose current tab runs down into the card under it, so the
+    /// join moves with the tab when the strip scrolls. Only the clip grows:
+    /// what the view lays out, hit-tests and scrolls is still the box.
+    public var clipOutsetBottom: Float
 
     /// Creates a scroll view. Every parameter matches the property of the same name.
     public init(
@@ -49,6 +54,7 @@ public struct ScrollView<Content: View>: PrimitiveView {
         revealInset: Float = 0,
         position: ScrollPosition? = nil,
         followsEnd: Bool = false,
+        clipOutsetBottom: Float = 0,
         @ViewBuilder content: () -> Content
     ) {
         self.axis = axis
@@ -58,6 +64,7 @@ public struct ScrollView<Content: View>: PrimitiveView {
         self.revealInset = max(0, revealInset)
         self.position = position
         self.followsEnd = followsEnd
+        self.clipOutsetBottom = max(0, clipOutsetBottom)
     }
 
     public var dumpDetail: String { "\(axis)" }
@@ -74,6 +81,7 @@ public struct ScrollView<Content: View>: PrimitiveView {
         node.showsIndicator = showsIndicator
         node.indicatorInset = indicatorInset
         node.revealInset = revealInset
+        node.clipOutsetBottom = clipOutsetBottom
         node.setFollowsEnd(followsEnd)
         node.registerScrolling()
         node.bind(position)
@@ -88,6 +96,7 @@ public struct ScrollView<Content: View>: PrimitiveView {
         scroll.showsIndicator = showsIndicator
         scroll.indicatorInset = indicatorInset
         scroll.revealInset = revealInset
+        scroll.clipOutsetBottom = clipOutsetBottom
         scroll.updateContent(ViewGraph.reconcile(scroll.contentNode, with: content))
         scroll.bind(position)
         return scroll
@@ -171,6 +180,8 @@ final class ScrollNode: YogaBoxNode {
     var indicatorInset: Float = 0
     /// See `ScrollView.revealInset`.
     var revealInset: Float = 0
+    /// See `ScrollView.clipOutsetBottom`.
+    var clipOutsetBottom: Float = 0
 
     private var followsEnd = false
     private(set) var isFollowingEnd = false
