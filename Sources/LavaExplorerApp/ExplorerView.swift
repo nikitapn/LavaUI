@@ -612,6 +612,20 @@ private struct PaneCard<Content: View>: View {
                 }
             }
         }
+        .overlayLayer {
+            // The card's top row again, solid. The rounded fill antialiases
+            // its own top edge to about 83%, and over an active pane's ring
+            // that row read as a teal line along the bottom of the current
+            // tab — whose fill cannot reach it: the strip clips at the card,
+            // and the card paints after it. Straight part only, so the
+            // rounded corners keep their edge.
+            Canvas(label: "pane-card-top", width: .pct(100), height: .pct(100)) { list, frame in
+                let start = firstIsCurrent ? frame.x : frame.x + Self.radius
+                let end = frame.x + frame.w - Self.radius
+                guard end > start else { return }
+                list.rect(x: start, y: frame.y, w: end - start, h: 1, color: card)
+            }
+        }
         .onFrame { session.noteCardFrame(pane.id, $0) }
     }
 }
