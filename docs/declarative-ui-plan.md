@@ -918,6 +918,14 @@ the idle gating from Phase 3. Pick one deliberately:
 
 Any is fine. Drifting into the first by accident is not.
 
+**Decided (2026-11-23): the renderer blinks it.** None of the three — the
+caret is a `blinkRect` draw command, and the renderer picks the shown or
+hidden half at replay and asks for its own frame at the flip. The producer is
+not woken at all in client mode, and windowed it sleeps until the flip and
+redraws the retained list with no body, layout or emit. Typing and caret moves
+restart the blink shown. See `CaretBlink` and `blinkRect` in
+`idl/drawlist.npidl`.
+
 #### Ladder — keep ImGui until the top
 
 The trap is replacing the ST editor first because it's the visible one. Invert:

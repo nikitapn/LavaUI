@@ -514,3 +514,29 @@ full-screen frame is 0.12 ms, so there is not much there to save. If a renderer
 driving many surfaces turns out not to stay flat, threading it — one `VkQueue`
 per thread — scales with the number of windows, which is the dimension that
 would actually be growing.
+
+## The caret blink
+
+The first renderer-owned state that is not geometry. A caret is a
+`blinkRect` command: the producer draws it on every frame the field is
+focused, and the renderer decides at replay which half of the period it is
+in — on its own steady clock, so the two processes need not share one. The
+command's `param` is a generation; one the renderer has not drawn restarts
+the blink shown. LavaUI hashes the edit count and the caret's position into
+it, so typing, arrow keys and clicks all hold the caret solid without each
+caller having to say so.
+
+What makes it free is that the renderer also owns *when*. After a replay that
+drew one, `RenderWindow::blinkDeadline` says when the next flip is due, and
+`takeInternalRepaint` answers yes from then on. Windowed, the frame loop
+sleeps exactly that long (`LavaWindow.syncCaret`) and draws the retained list
+— no body, layout or emit. In a compositor, `SurfaceRegistry::armBlinkTimer`
+holds one timer for the soonest caret on a visible, uncovered surface and asks
+for an output frame when it fires, so the flip lands on a vblank, and the
+client is not woken at all.
+
+Measured on LavaEditor (debug build): idle with the caret blinking, the
+client ran no frames in six seconds, and its compositor redrew the surface
+twelve times; windowed, twelve renderer frames of ~1.8 ms against the ~7 ms
+re-emit each flip cost before.
+

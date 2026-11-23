@@ -36,7 +36,11 @@ public enum FocusManager {
     ) {
         let scope = WindowScope.currentOrMain
         let moved = scope.focused != id
-        if moved { ViewInvalidation.markDirty() }
+        if moved {
+            ViewInvalidation.markDirty()
+            // A field that has just been focused shows its caret at once.
+            CaretBlink.noteEdit()
+        }
         scope.focused = id
         scope.keyHandler = onKey
         scope.charHandler = onChar
@@ -167,57 +171,41 @@ public struct KeyEvent {
     public var superKey: Bool { KeyMods.contains(mods, KeyMods.superKey) }
 }
 
-/// Caret blink, expressed as a phase rather than a timer.
+/// Caret blink: run by the renderer, restarted by the producer.
 ///
-/// The plan called for deciding this deliberately rather than drifting into it:
-/// a blinking caret dirties a frame twice a second forever, which is the one
-/// thing that defeats idle frame-gating. The compromise here is to blink only
-/// while focused, and to hold the caret solid for a moment after any edit so
-/// it never blinks mid-typing.
+/// A blinking caret used to dirty the whole window twice a second forever —
+/// a re-emit of every view for one rect, the one thing that defeated idle
+/// frame-gating. Now the caret is a `blinkRect` and the renderer decides
+/// which half of the period it is in, at replay, and asks for its own frame
+/// when the next flip is due: windowed, the loop sleeps until
+/// `Editor.blinkDeadline` and the flip arrives as `takeInternalRepaint`; in a
+/// client, the compositor runs it and the app is not woken at all.
 ///
-/// The phase is a pure function of the clock, so it is shared; what is per
-/// window (`WindowScope.caretLastPhase`) is the *last phase this window
-/// drew*, since two windows both showing a caret would otherwise consume each
-/// other's flips and one of them would stop blinking.
+/// What stays here is the producer's one say in it: the generation, which
+/// restarts the blink shown whenever the caret moves or the text is edited,
+/// so the caret never blinks out mid-typing.
 public enum CaretBlink {
     /// One full blink, in seconds: shown for the first half, hidden for the second.
     public static let period: Double = 1.0
-    nonisolated(unsafe) private static var lastEditAt: Double = 0
+    nonisolated(unsafe) private static var edits: UInt32 = 0
 
-    /// Records an edit, which holds the caret solid for half a second so it is
-    /// visible while typing.
+    /// Records an edit, which restarts the blink — shown — so the caret is
+    /// visible while typing. Moving the caret does the same on its own,
+    /// because where it stands is part of `generation`; this is for an edit
+    /// that leaves it where it was (a delete forward, a replace in place).
     public static func noteEdit() {
-        lastEditAt = now()
-        WindowScope.currentOrMain.caretLastPhase = true
+        edits &+= 1
     }
 
-    /// Whether the caret should be drawn right now.
-    public static var isVisible: Bool {
-        let t = now()
-        // Solid for half a second after typing.
-        if t - lastEditAt < 0.5 { return true }
-        return t.truncatingRemainder(dividingBy: period) < period / 2
-    }
-
-    /// Call once per frame while a field is focused: reports whether the blink
-    /// phase flipped, which is the only reason an idle app needs to redraw.
-    public static func phaseChanged() -> Bool {
-        let scope = WindowScope.currentOrMain
-        let visible = isVisible
-        defer { scope.caretLastPhase = visible }
-        return visible != scope.caretLastPhase
-    }
-
-    /// Adopts the current phase without reporting a change. The blink is
-    /// suspended while the window is invisible, so `lastPhase` is stale by an
-    /// arbitrary number of periods on restore; the caller redraws once anyway
-    /// and only wants the *next* `phaseChanged()` to be meaningful.
-    public static func resync() {
-        WindowScope.currentOrMain.caretLastPhase = isVisible
-    }
-
-    private static func now() -> Double {
-        Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
+    /// What the renderer restarts the blink on when it changes: the edits so
+    /// far and where the caret stands. The renderer runs the blink itself —
+    /// see `DrawList.blinkingRect` — so this is the producer's only say in it.
+    static func generation(x: Float, y: Float) -> UInt32 {
+        var hash: UInt32 = 2_166_136_261
+        for word in [edits, x.bitPattern, y.bitPattern] {
+            hash = (hash ^ word) &* 16_777_619
+        }
+        return hash
     }
 }
 

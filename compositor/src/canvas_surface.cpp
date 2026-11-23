@@ -765,6 +765,10 @@ bool CanvasSurface::takeInternalRepaint() {
   return renderer_.engine().takeInternalRepaint(windowId_);
 }
 
+double CanvasSurface::blinkDeadline() {
+  return renderer_.engine().blinkDeadline(windowId_);
+}
+
 bool CanvasSurface::redraw() {
   const int64_t started = FrameProbe::on() ? FrameProbe::now() : 0;
   if (!renderer_.engine().renderFrame(windowId_)) return false;

@@ -289,7 +289,30 @@ enum DrawCommandKind: u32 {
   /// `.fit` and `.stretch`, and the layout box for `.fill`, whose picture
   /// overshoots it on one axis and is cut back to it — which is why the box
   /// is stated rather than taken from the image's rect.
-  imageClip = 26
+  imageClip = 26,
+  /// A filled rectangle the *renderer* blinks: a text caret.
+  ///
+  ///   x, y, w, h = the rect, as `rect`
+  ///   color      = its colour
+  ///   param      = blink generation: a new value restarts the blink shown
+  ///   aux        = one full period in seconds — shown for the first half,
+  ///                hidden for the second; 0 uses 1 s
+  ///
+  /// The renderer decides at replay time which half it is in, and asks for a
+  /// frame of its own when the next flip is due, so a focused field costs the
+  /// producer nothing while it waits: no wake, no body, no emit, no new list.
+  /// Before this every flip was a whole-window re-emit, twice a second, in
+  /// every app with a field focused.
+  ///
+  /// The generation is the producer's only say in the phase, and it is all
+  /// it needs: it changes on every edit and caret move, and the renderer
+  /// restarts the blink — shown — when it sees one it has not drawn. That is
+  /// what keeps the caret solid while typing. The clock is the renderer's
+  /// own, so producer and renderer need not share one.
+  ///
+  /// Its own kind rather than a `rect` with a flag, so a reader that does not
+  /// know it draws nothing rather than a caret that never blinks.
+  blinkRect = 27
 }
 
 /// Raw input events for the draw-list producer.

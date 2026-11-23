@@ -2880,6 +2880,7 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Arms the timer that carries renderer-owned animations along.
   void start(wl_event_loop *loop) {
     animation_ = wl_event_loop_add_timer(loop, on_animation, this);
+    blink_ = wl_event_loop_add_timer(loop, on_blink, this);
     // The trailing edge of a settings burst — see `save`.
     saveTimer_ = wl_event_loop_add_timer(loop, on_save_timer, this);
     placements_ = lava::WindowMemory::load(
@@ -7443,7 +7444,37 @@ class SurfaceRegistry : public lava::CompositorHost {
       again = true;
     }
     animating_ = again;
+    armBlinkTimer();
     return again;
+  }
+
+  /// Wakes the loop when the soonest caret on screen next flips.
+  ///
+  /// A caret is a `blinkRect`: its client drew it once and is not woken
+  /// again, and the surface's renderer says when its next half begins. That
+  /// is a deadline, not a running animation, so nothing schedules frames
+  /// toward it — this timer does, by asking for an output frame when it
+  /// fires, which keeps the flip on a vblank like every other renderer-owned
+  /// change; `stepAnimations` then finds the surface due and redraws it.
+  ///
+  /// Armed after every step, which is after every redraw that could have
+  /// moved a deadline. Hidden and covered surfaces are left out: a caret
+  /// nobody can see is not worth a frame, and the surface catches up the
+  /// next time anything draws it.
+  void armBlinkTimer() {
+    if (blink_ == nullptr) return;
+    double soonest = -1.0;
+    for (const auto &surface : surfaces_) {
+      if (!surface->canvas || !visible(*surface) || fullyOccluded(*surface)) continue;
+      const double deadline = surface->canvas->blinkDeadline();
+      if (deadline >= 0.0 && (soonest < 0.0 || deadline < soonest)) soonest = deadline;
+    }
+    // 0 disarms a wl timer. A millisecond late rather than early, so the frame
+    // it asks for does not land just short of the flip.
+    const int ms = soonest < 0.0
+                       ? 0
+                       : std::max(1, static_cast<int>(std::ceil(soonest * 1000.0)) + 1);
+    wl_event_source_timer_update(blink_, ms);
   }
 
   /// Tells wlroots the surface's contents changed, and when they will have
@@ -8480,10 +8511,17 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// costing two redraws; 2 ms leaves headroom to 500 Hz.
   static constexpr int64_t kMinStepUs = 2000;
   wl_event_source *animation_ = nullptr;
+  /// See `armBlinkTimer`.
+  wl_event_source *blink_ = nullptr;
   /// `flushPresents`' list, kept so a frame does not allocate one.
   std::vector<ClientSurface *> pendingScratch_;
   int64_t lastStepAt_ = 0;
   bool animating_ = false;
+
+  static int on_blink(void *data) {
+    static_cast<SurfaceRegistry *>(data)->animate();
+    return 0;
+  }
 
   static int on_animation(void *data) {
     auto *self = static_cast<SurfaceRegistry *>(data);
@@ -15177,6 +15215,58 @@ bool log_level_from_env(const char *value, wlr_log_importance &out) {
 
 } // namespace
 
+namespace {
+
+// The signals the event loop reads, blocked before anything else, because
+// `wl_event_loop_add_signal` reads them off a signalfd and a signalfd only
+// sees signals that are blocked. libwayland does block it — but only on the thread that registers, and by
+// then the control plane has started NPRPC's threads, which would inherit
+// nothing and take the SIGHUP with its default disposition. The compositor
+// exits, on the signal that was supposed to reload its config.
+//
+// A mask set before any thread exists is inherited by every thread created
+// afterwards, which is the only version of this that stays true.
+//
+// And before `main`, because Tracy does not wait for it: a profiling build
+// (`-Dtracy`) starts Tracy's threads from a static initialiser, and those kept
+// an empty mask. A SIGTERM delivered to one of them took the default action
+// — the compositor died without its orderly shutdown and without writing its
+// window memory, which is what the placement test's `lateid` case saw. A
+// priority constructor runs ahead of every ordinary static initialiser, so
+// every thread, Tracy's included, is created with the mask already set.
+void blockLoopSignals() {
+  sigset_t mask;
+  sigemptyset(&mask);
+  sigaddset(&mask, SIGHUP);
+  // SIGUSR2 for the same reason — it dumps the GPU report through the loop.
+  sigaddset(&mask, SIGUSR2);
+  // SIGUSR1 likewise: the synthetic file drop. Unblocked and handled through
+  // the loop, or the default action would kill the compositor instead.
+  sigaddset(&mask, SIGUSR1);
+  // SIGCHLD for the same reason, and it matters more: the compositor is the
+  // parent of the panel and the dock, and `ShellSupervisor` learns one died
+  // by reading this off the loop's signalfd. Unblocked, the default
+  // disposition discards it and a crashed dock never comes back.
+  sigaddset(&mask, SIGCHLD);
+  // And the two ways a compositor is asked to stop. Taken on the loop
+  // instead of by default disposition so that ending one is an orderly
+  // shutdown: the control plane unlinks its reference, the shell components
+  // are told to go while their sockets still work, and clients see a
+  // display that closed rather than one that vanished. Developing a
+  // compositor means killing it a hundred times a day — usually a nested
+  // one, sharing a runtime directory with the session it runs inside — and
+  // every one of those left a stale reference behind before this.
+  sigaddset(&mask, SIGTERM);
+  sigaddset(&mask, SIGINT);
+  pthread_sigmask(SIG_BLOCK, &mask, nullptr);
+}
+
+__attribute__((constructor(101))) void blockLoopSignalsBeforeStaticInit() {
+  blockLoopSignals();
+}
+
+} // namespace
+
 int main() {
   // Read before the log is up, reported after — a typo here is worth saying
   // out loud rather than silently logging less than the user asked for.
@@ -15220,41 +15310,10 @@ int main() {
   // settings app was told the modifier was Alt when `lava.conf` said Super.
   bool nested = false;
 
-  // Blocked here, before anything else, because `wl_event_loop_add_signal`
-  // reads it off a signalfd and a signalfd only sees signals that are blocked.
-  // libwayland does block it — but only on the thread that registers, and by
-  // then the control plane has started NPRPC's threads, which would inherit
-  // nothing and take the SIGHUP with its default disposition. The compositor
-  // exits, on the signal that was supposed to reload its config.
-  //
-  // A mask set before any thread exists is inherited by every thread created
-  // afterwards, which is the only version of this that stays true.
-  {
-    sigset_t mask;
-    sigemptyset(&mask);
-    sigaddset(&mask, SIGHUP);
-    // SIGUSR2 for the same reason — it dumps the GPU report through the loop.
-    sigaddset(&mask, SIGUSR2);
-    // SIGUSR1 likewise: the synthetic file drop. Unblocked and handled through
-    // the loop, or the default action would kill the compositor instead.
-    sigaddset(&mask, SIGUSR1);
-    // SIGCHLD for the same reason, and it matters more: the compositor is the
-    // parent of the panel and the dock, and `ShellSupervisor` learns one died
-    // by reading this off the loop's signalfd. Unblocked, the default
-    // disposition discards it and a crashed dock never comes back.
-    sigaddset(&mask, SIGCHLD);
-    // And the two ways a compositor is asked to stop. Taken on the loop
-    // instead of by default disposition so that ending one is an orderly
-    // shutdown: the control plane unlinks its reference, the shell components
-    // are told to go while their sockets still work, and clients see a
-    // display that closed rather than one that vanished. Developing a
-    // compositor means killing it a hundred times a day — usually a nested
-    // one, sharing a runtime directory with the session it runs inside — and
-    // every one of those left a stale reference behind before this.
-    sigaddset(&mask, SIGTERM);
-    sigaddset(&mask, SIGINT);
-    pthread_sigmask(SIG_BLOCK, &mask, nullptr);
-  }
+  // Already blocked, by a constructor that ran before this did — see
+  // `blockLoopSignals`. Again here so the guarantee is visible where the
+  // loop that depends on it starts.
+  blockLoopSignals();
 
   Server server;
   server.display = wl_display_create();

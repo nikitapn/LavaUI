@@ -116,6 +116,12 @@ let tracyTimer: String = {
 
 // TRACY_ONLY_LOCALHOST: by default the client listens on every interface,
 // and what it serves is the process's strings, timings and call sites.
+//
+// Tracy starts its threads during static initialisation, before `main`, and
+// nothing here changes that: even TRACY_DELAYED_INIT keeps a static
+// initialiser that starts it. Whatever a process means to block for all its
+// threads has to be blocked earlier still — see `blockLoopSignals` in the
+// compositor.
 let tracyDefines: [CXXSetting] = !tracyEnabled ? [] : [
     .define("TRACY_ENABLE"),
     .define("TRACY_ONLY_LOCALHOST"),

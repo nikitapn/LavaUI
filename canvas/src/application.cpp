@@ -872,6 +872,11 @@ bool Application::takeInternalRepaint(uint32_t windowId) {
   return w && w->takeInternalRepaint();
 }
 
+double Application::blinkDeadline(uint32_t windowId) {
+  AppWindow *w = impl_->win(windowId);
+  return w ? w->blinkDeadline() : -1.0;
+}
+
 bool Application::scrollSceneUnclaimed(float dx, float dy, uint32_t windowId) {
   AppWindow *w = impl_->win(windowId);
   return w && w->scrollSceneUnclaimed(dx, dy);

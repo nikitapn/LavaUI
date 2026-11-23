@@ -1603,6 +1603,10 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
 {
   ZoneScopedN("Replay draw list");
   outBoundaries.clear();
+  // This frame's blinking rects say when the next flip is; none says there
+  // is no blink at all. See `blinkRect` and `finishBlink`.
+  blinkSeenThisFrame_ = false;
+  blinkNextFlipThisFrame_ = -1.0;
   // Cleared per replay, not carried: a claim is about the frame that made it,
   // and a producer that stops sending one is saying it is no longer opaque.
   opaqueX_ = opaqueY_ = opaqueW_ = opaqueH_ = 0.f;
@@ -2033,6 +2037,30 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
                        faded(cmd.color), cmd.aux);
       });
       break;
+    case canvas::DrawCommandKind::blinkRect: {
+      // Which half of its period the caret is in, by this renderer's clock.
+      // A generation not drawn before restarts the blink, shown: the
+      // producer bumps it on every edit and caret move, which is what holds
+      // the caret solid while somebody types.
+      const double now = blinkClock();
+      const double half = (cmd.aux > 0.f ? double(cmd.aux) : 1.0) / 2.0;
+      if (!blinkActive_ || cmd.param != blinkGeneration_) {
+        blinkActive_ = true;
+        blinkGeneration_ = cmd.param;
+        blinkEpoch_ = now;
+      }
+      const double phase = std::floor((now - blinkEpoch_) / half);
+      const double flip = blinkEpoch_ + (phase + 1.0) * half;
+      if (blinkNextFlipThisFrame_ < 0 || flip < blinkNextFlipThisFrame_) {
+        blinkNextFlipThisFrame_ = flip;
+      }
+      blinkSeenThisFrame_ = true;
+      if (static_cast<int64_t>(phase) % 2 == 0) {
+        quads_.pushBox({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h},
+                       faded(cmd.color), 0.f);
+      }
+      break;
+    }
     case canvas::DrawCommandKind::strokedRect:
       // `param` is 24.8 fixed point — see `strokedRect` in idl/drawlist.npidl.
       quads_.pushBoxStroke({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h},
@@ -2772,6 +2800,18 @@ bool RenderWindow::advanceSceneAnimations(
   return animating;
 }
 
+double RenderWindow::blinkClock()
+{
+  using namespace std::chrono;
+  return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+
+double RenderWindow::blinkDeadline() const
+{
+  if (nextBlinkFlip_ < 0) return -1.0;
+  return std::max(0.0, nextBlinkFlip_ - blinkClock());
+}
+
 void RenderWindow::render(const canvas::DrawList &list)
 {
   ZoneScopedN("RenderWindow::render");
@@ -2886,6 +2926,10 @@ void RenderWindow::render(const canvas::DrawList &list)
   std::vector<Boundary> boundaries;
   const auto replayStart = std::chrono::steady_clock::now();
   replayDrawList(list, viewW, viewH, boundaries);
+  // A frame with no blinking rect ends the blink: the field lost focus, or
+  // the caret became a selection. The next one to appear starts shown.
+  blinkActive_ = blinkActive_ && blinkSeenThisFrame_;
+  nextBlinkFlip_ = blinkSeenThisFrame_ ? blinkNextFlipThisFrame_ : -1.0;
   // Replay has just named this frame's textures; this is the index the frame
   // will be submitted under.
   TextureManager::getInstance().noteWindowSampled(

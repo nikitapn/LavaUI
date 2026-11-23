@@ -140,14 +140,6 @@ public final class WindowScope {
     var defaultKeyHandler: ((KeyEvent) -> Bool)?
     var defaultCharHandler: ((Character) -> Bool)?
 
-    // ─── Caret blink (see `CaretBlink`) ──────────────────────────────────
-
-    /// Per window, so two windows with focused fields do not eat each other's
-    /// phase flips. The *timing* stays global: the blink is a function of the
-    /// clock, and a solid-after-typing hold belongs to the keyboard, which
-    /// only one window has at a time.
-    var caretLastPhase = true
-
     // ─── Visibility (see `NodeVisibility`) ───────────────────────────────
 
     var visibleNodes: Set<NodeID> = []

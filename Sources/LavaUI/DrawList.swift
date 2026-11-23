@@ -541,6 +541,18 @@ public final class DrawList {
         append(kind: .rect, x: x, y: y, w: w, h: h, color: color)
     }
 
+    /// A rect the renderer blinks — a caret. Drawn every frame it is wanted;
+    /// the renderer decides which half of `period` it is in, and redraws for
+    /// the flip itself. A `generation` it has not drawn before restarts the
+    /// blink, shown. See `blinkRect` in idl/drawlist.npidl.
+    public func blinkingRect(
+        x: Float, y: Float, w: Float, h: Float, color: Color,
+        generation: UInt32, period: Double
+    ) {
+        append(kind: .blinkRect, x: x, y: y, w: w, h: h, color: color,
+               param: generation, aux: Float(period))
+    }
+
     /// Promises that `x,y,w,h` of this frame is fully opaque, so a compositor
     /// showing it can skip blending there — and skip drawing whatever is
     /// behind it entirely.
@@ -2507,7 +2519,7 @@ extension DrawList {
                     w: w, h: lineH, color: theme.textMuted, font: font
                 )
             }
-            if focused, CaretBlink.isVisible {
+            if focused {
                 caret(x: x + inset, y: firstTop, h: lineH, theme: theme)
             }
             return
@@ -2573,7 +2585,7 @@ extension DrawList {
                 )
             }
 
-            if focused, !state.hasSelection, CaretBlink.isVisible, row == caretRow {
+            if focused, !state.hasSelection, row == caretRow {
                 let local = localIndex(
                     in: lineText, matching: state.focus, lineStart: lineStart, state: state
                 )
@@ -2590,10 +2602,18 @@ extension DrawList {
     /// and a soft double-width bar at the next — thicker and thinner by turns
     /// as the user typed. Snapped, it is the same bar wherever it stands, at
     /// least one pixel wide.
+    ///
+    /// Blinked by the renderer, not by re-emitting: drawn on every frame the
+    /// field is focused, and the renderer hides it for the second half of each
+    /// period. Where it stands is part of its generation, so moving it — an
+    /// edit, an arrow key, a click — restarts the blink shown, not only the
+    /// edits that call `CaretBlink.noteEdit`.
     fileprivate func caret(x: Float, y: Float, h: Float, theme: Theme) {
-        rect(
-            x: x.rounded(), y: y, w: max(1, theme.caretWidth.rounded()), h: h,
-            color: theme.textPrimary
+        let x = x.rounded()
+        blinkingRect(
+            x: x, y: y, w: max(1, theme.caretWidth.rounded()), h: h,
+            color: theme.textPrimary,
+            generation: CaretBlink.generation(x: x, y: y), period: CaretBlink.period
         )
     }
 
@@ -3057,7 +3077,7 @@ extension DrawList {
                 )
             }
 
-            if focused, !state.hasSelection, CaretBlink.isVisible, row == caretRow {
+            if focused, !state.hasSelection, row == caretRow {
                 let column = caretOffset - range.lowerBound
                 caret(x: textX + columnX(column), y: rowTop, h: lineH, theme: leaf.theme)
             }

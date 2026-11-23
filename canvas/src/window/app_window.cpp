@@ -230,6 +230,18 @@ double monotonicSeconds()
 
 }  // namespace
 
+bool AppWindow::takeInternalRepaint()
+{
+  const bool was = internalRepaint_ || (render_ && render_->blinkDue());
+  internalRepaint_ = false;
+  return was;
+}
+
+double AppWindow::blinkDeadline() const
+{
+  return render_ ? render_->blinkDeadline() : -1.0;
+}
+
 void AppWindow::stepSceneAnimations()
 {
   if (!render_) return;

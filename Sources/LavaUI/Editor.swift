@@ -209,6 +209,15 @@ public final class Editor: @unchecked Sendable {
         engine.takeInternalRepaint(window.raw)
     }
 
+    /// Seconds until the renderer's caret blink in this window next flips,
+    /// or nil when nothing blinks — always nil for a compositor client,
+    /// whose caret the compositor blinks. The frame loop sleeps until then;
+    /// the flip itself arrives as `takeInternalRepaint`.
+    public func blinkDeadline(window: WindowID = .main) -> Double? {
+        let seconds = engine.blinkDeadline(window.raw)
+        return seconds < 0 ? nil : seconds
+    }
+
     /// Offers a wheel notch to the retained scroll containers under the
     /// pointer, after nothing in this process wanted it.
     ///

@@ -148,6 +148,8 @@ public:
 
   /// See `AppWindow::takeInternalRepaint`.
   bool takeInternalRepaint(uint32_t windowId = 0);
+  /// See `AppWindow::blinkDeadline`.
+  double blinkDeadline(uint32_t windowId = 0);
 
   /// See `AppWindow::scrollSceneUnclaimed`.
   bool scrollSceneUnclaimed(float dx, float dy, uint32_t windowId = 0);

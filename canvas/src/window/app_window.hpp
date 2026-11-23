@@ -199,12 +199,17 @@ class AppWindow {
   /// scroll today, an animation later. The frame loop has no other way to
   /// know: nothing was published and no input was queued, because the whole
   /// point is that the producer was not involved.
-  bool takeInternalRepaint()
-  {
-    const bool was = internalRepaint_;
-    internalRepaint_ = false;
-    return was;
-  }
+  ///
+  /// A caret blink that has come due counts too: the renderer blinks it, and
+  /// the producer is not woken for it beyond `blinkDeadline` telling its
+  /// loop when to look.
+  bool takeInternalRepaint();
+
+  /// Seconds until this window's caret next changes half — the frame loop
+  /// sleeps that long and then finds `takeInternalRepaint` true. Negative
+  /// when nothing blinks, and always for a client, whose blink is the
+  /// compositor's to run.
+  double blinkDeadline() const;
 
   // ─── Window ──────────────────────────────────────────────────────────────
 

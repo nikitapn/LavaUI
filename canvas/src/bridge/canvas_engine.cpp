@@ -328,6 +328,16 @@ bool Engine::takeInternalRepaint(uint32_t windowId)
     [&](Application &app) { return app.takeInternalRepaint(windowId); });
 }
 
+double Engine::blinkDeadline(uint32_t windowId)
+{
+  // Not `return withApp(...)`: with no application that answers `R{}`, and
+  // for this question 0 means "due now" — a loop that would never park.
+  double deadline = -1.0;
+  impl_->withApp(
+    [&](Application &app) { deadline = app.blinkDeadline(windowId); });
+  return deadline;
+}
+
 bool Engine::scrollSceneUnclaimed(float dx, float dy, uint32_t windowId)
 {
   return impl_->withApp([&](Application &app) {

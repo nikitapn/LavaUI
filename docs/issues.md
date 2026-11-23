@@ -21,6 +21,11 @@ redraw, so the caret returns without keyboard or pointer input.
 Verified against `HelloWorld` with a focused `TextField`: 8 caret redraws in 4s
 while visible, 0 in 5s while iconified, and blinking resumes on restore.
 
+**Since superseded (2026-11-23):** the renderer blinks the caret now
+(`blinkRect`), and `phaseChanged()` / `resync()` are gone. The visibility gate
+survives in `LavaWindow.syncCaret`, around the wake toward the renderer's
+`blinkDeadline` rather than around a re-emit.
+
 ### Observed
 
 When a text field or editor retains focus and the window is minimized, caret

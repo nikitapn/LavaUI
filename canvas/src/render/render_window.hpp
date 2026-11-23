@@ -368,6 +368,13 @@ class RenderWindow {
   /// is how the publish gets noticed. Set during replay — where the rows
   /// actually arrive — and read after it, because the step that would use the
   /// new span runs before the replay that delivers it.
+  /// Seconds until a `blinkRect` in the last frame drawn changes half —
+  /// 0 once it is due — or negative when that frame had none. A repaint
+  /// for it is one the producer is not involved in, like a scroll step:
+  /// see `AppWindow::takeInternalRepaint` and the compositor's blink timer.
+  double blinkDeadline() const;
+  bool blinkDue() const { return nextBlinkFlip_ >= 0 && blinkDeadline() <= 0.0; }
+
   bool takeSceneResume()
   {
     const bool was = sceneResume_;
@@ -685,6 +692,18 @@ class RenderWindow {
   /// a member because Tracy keys a plot by the address of its name. Both
   /// inert unless the build has TRACY_ENABLE.
   canvas::GpuTrace gpuTrace_;
+
+  /// The caret blink (`blinkRect`): the generation being blinked, when its
+  /// shown half began, and when the next flip is due — all on the renderer's
+  /// steady clock, so the producer never has to share one. `ThisFrame` is
+  /// the replay's scratch, settled after it.
+  static double blinkClock();
+  bool     blinkActive_ = false;
+  uint32_t blinkGeneration_ = 0;
+  double   blinkEpoch_ = 0.0;
+  double   nextBlinkFlip_ = -1.0;
+  bool     blinkSeenThisFrame_ = false;
+  double   blinkNextFlipThisFrame_ = -1.0;
   std::string damagePlotName_;
   /// Set by replay when the frame samples another surface's live buffer,
   /// whose pixels change without anything in this list changing.

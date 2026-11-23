@@ -222,6 +222,12 @@ class Engine {
   /// third signal.
   bool takeInternalRepaint(uint32_t windowId = 0);
 
+  /// Seconds until the renderer's caret blink in this window next flips,
+  /// at which point `takeInternalRepaint` turns true; negative when nothing
+  /// blinks. What a frame loop sleeps toward instead of re-emitting the
+  /// window for every flip. See `blinkRect` in idl/drawlist.npidl.
+  double blinkDeadline(uint32_t windowId = 0);
+
   /// Offers a wheel notch to the retained scroll containers under the pointer,
   /// after the producer has found nothing of its own that wanted it.
   ///

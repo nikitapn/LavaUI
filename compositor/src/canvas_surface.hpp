@@ -398,6 +398,11 @@ class CanvasSurface {
   /// drawing again to show it.
   bool takeInternalRepaint();
 
+  /// Seconds until this surface's caret blink next flips — when
+  /// `takeInternalRepaint` turns true for it — or negative when it has none.
+  /// What the registry's blink timer is armed from.
+  double blinkDeadline();
+
   /// Redraws the frame already held, without waiting for a new one.
   ///
   /// What `takeInternalRepaint` is answered with: the content has not changed,

@@ -283,22 +283,26 @@ public final class LavaWindow {
             // A blinking caret is the other thing that keeps an idle app awake
             // forever, and unlike an animation it does not need
             // `NodeVisibility` to know it is pointless: nobody can see a
-            // minimized window's caret, so it must not schedule wakes or dirty
-            // frames there.
-            // Text only: a focused list has no caret, and waking four times a
-            // second for it would keep an idle window busy for nothing.
-            if scope.windowVisible, FocusManager.isEditingText {
-                if CaretBlink.phaseChanged() { ViewInvalidation.markNeedsRedraw() }
-                FrameScheduler.requestWake(in: CaretBlink.period / 4)
+            // minimized window's caret, so it must not schedule wakes there.
+            // Only a frame that drew a caret has a deadline, so a focused list
+            // — no caret — wakes nothing.
+            //
+            // The renderer blinks it (`CaretBlink`), so all this window does is
+            // sleep until the renderer's next flip — a wake, not a frame: the
+            // frame is `takeInternalRepaint` answering yes once it is due, and
+            // it redraws the retained list without a body, a layout or an emit.
+            // A millisecond late rather than early, so the wake does not land
+            // just short of the flip and have to go round again. Nil in a
+            // client: the compositor blinks its caret, and this loop parks.
+            if scope.windowVisible, let deadline = editor.blinkDeadline(window: id) {
+                FrameScheduler.requestWake(in: deadline + 0.001)
             }
 
             if scope.windowVisible != wasWindowVisible {
                 wasWindowVisible = scope.windowVisible
-                // On restore the caret has to come back without waiting for the
-                // user to type or click: the suspended blink left the phase
-                // stale, so adopt the live one and paint a frame with it.
+                // On restore, one frame: the renderer kept the blink's clock,
+                // but nothing was drawn while minimized to show where it is.
                 if scope.windowVisible {
-                    CaretBlink.resync()
                     ViewInvalidation.markNeedsRedraw()
                 }
             }
