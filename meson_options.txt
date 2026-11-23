@@ -15,3 +15,13 @@ option(
     + 'our patches, linked statically (fetched on first setup). system: the '
     + 'installed wlroots-0.19, without them.',
 )
+option(
+  'tracy',
+  type: 'combo',
+  choices: ['off', 'on', 'full'],
+  value: 'off',
+  description: 'Compile the Tracy profiler client into canvas and the '
+    + 'compositor (the submodule canvas/third-party/tracy, v0.15.0). on: records only '
+    + 'while a profiler is connected. full: from launch. The SwiftPM side '
+    + 'is LAVA_TRACY in the environment of swift build.',
+)

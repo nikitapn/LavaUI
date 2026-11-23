@@ -103,6 +103,7 @@ class RenderDevice
   // device creation. The present mode it unlocks may only be requested when
   // this is true — see createSwapchain.
   bool fifoLatestReadyEnabled_ = false;
+  const char *calibratedTimestampsSuffix_ = nullptr;
   /// Set when the physical device supports it *and* we asked for it on the
   /// logical device. Sampler creation must not enable anisotropy otherwise.
   bool samplerAnisotropy_ = false;
@@ -536,6 +537,9 @@ class RenderDevice
     return graphicsAndPresentationQueueFamilyIdx_;
   }
   bool fifoLatestReadyEnabled() const { return fifoLatestReadyEnabled_; }
+  /// "EXT" or "KHR" when a profiling build enabled calibrated timestamps on
+  /// this device, the suffix its entry points carry; null otherwise.
+  const char *calibratedTimestampsSuffix() const { return calibratedTimestampsSuffix_; }
 
   VmaAllocator                      getAllocator() { return allocator_; }
   VkCommandPool                     getCommandPool() { return commandPool_; }

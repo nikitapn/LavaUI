@@ -66,6 +66,11 @@ class FrameDamage {
     pendingAll_ = true;
   }
 
+  /// Of the tiles in the frame `end` just compared, the share that differed
+  /// from the frame before: 1 for one that could not be compared (blur, a
+  /// resize, the first). What a partial redraw would have had to draw.
+  float changedFraction() const { return changedFraction_; }
+
   /// Order-sensitive hash helpers, exposed so producers mix the same way.
   static uint64_t mix(uint64_t h, uint64_t v);
   static uint64_t hashBytes(const void *data, size_t size, uint64_t seed);
@@ -79,6 +84,7 @@ class FrameDamage {
   std::vector<uint8_t> pending_;
   bool havePrevious_ = false;
   bool frameAll_ = false;
+  float changedFraction_ = 1.f;
   /// Nothing has been taken yet, so the first frame is reported whole.
   bool pendingAll_ = true;
 };

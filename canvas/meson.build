@@ -23,6 +23,7 @@ canvas_engine_sources = files(
   'src/render/font.cpp',
   'src/render/font_key.cpp',
   'src/render/frame_damage.cpp',
+  'src/render/gpu_trace.cpp',
   'src/render/gpu_ledger.cpp',
   'src/render/gpu_report.cpp',
   'src/render/image_atlas.cpp',
@@ -44,12 +45,19 @@ canvas_engine_sources = files(
   'src/window/window_platform.cpp',
 )
 
+# The process's one Tracy client and the C shim over it. Always compiled:
+# without -Dtracy it is a handful of empty functions, and Tracy.hpp's macros
+# in the engine expand to nothing. See trace/lava_trace.cpp.
+canvas_engine_sources += files('trace/lava_trace.cpp')
+
 canvas_includes = include_directories(
   'src',
   'src/bridge',
   'third-party/stb',
   'third-party/vma/include',
   'third-party/freetype/include',
+  'third-party/tracy/public',
+  'trace/include',
 )
 
 canvas_deps = [
@@ -73,6 +81,9 @@ canvas_deps = [
   # The stack trace printed by the VR() macro when a Vulkan call fails.
   meson.get_compiler('cpp').find_library('boost_stacktrace_basic'),
   meson.get_compiler('cpp').find_library('m'),
+  # Tracy's listener thread and its symbol lookup; harmless without it.
+  dependency('threads'),
+  meson.get_compiler('cpp').find_library('dl'),
 ]
 
 canvas_defines = [
@@ -81,6 +92,26 @@ canvas_defines = [
   '-DCANVAS_HAVE_DBUSMENU',
   '-DCANVAS_HAVE_RSVG',
 ]
+if get_option('tracy') != 'off'
+  if not import('fs').exists('third-party/tracy/public/TracyClient.cpp')
+    error('-Dtracy needs the Tracy submodule: git submodule update --init canvas/third-party/tracy')
+  endif
+  # Localhost only: the client otherwise listens on every interface, serving
+  # the process's strings and timings to anyone who connects.
+  canvas_defines += ['-DTRACY_ENABLE', '-DTRACY_ONLY_LOCALHOST']
+  if get_option('tracy') == 'on'
+    canvas_defines += ['-DTRACY_ON_DEMAND']
+  endif
+  # rdtsc only where the kernel trusts the TSC itself; otherwise zones jump by
+  # the warp between cores. See `tracyTimer` in canvas/Package.swift for why
+  # DISALLOW_HW_TIMER and not TIMER_FALLBACK.
+  clocksource = run_command('cat',
+    '/sys/devices/system/clocksource/clocksource0/current_clocksource',
+    check: false).stdout().strip()
+  if clocksource != '' and clocksource != 'tsc'
+    canvas_defines += ['-DTRACY_DISALLOW_HW_TIMER']
+  endif
+endif
 
 libcanvas = static_library(
   'canvas',

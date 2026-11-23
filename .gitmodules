@@ -10,3 +10,7 @@
 [submodule "canvas/third-party/yoga"]
 	path = canvas/third-party/yoga
 	url = git@github.com:facebook/yoga.git
+[submodule "canvas/third-party/tracy"]
+	path = canvas/third-party/tracy
+	url = https://github.com/wolfpld/tracy.git
+	shallow = true

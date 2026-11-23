@@ -38,6 +38,7 @@
 #include <xkbcommon/xkbregistry.h>
 
 #include "appmenu.hpp"
+#include "util/tracy.hpp"
 #include "canvas_surface.hpp"
 #include "clipboard.hpp"
 #include "output_box.hpp"
@@ -9568,6 +9569,7 @@ void Output::syncScanoutLock() {
 }
 
 void Output::on_frame(wl_listener *listener, void *) {
+  ZoneScopedN("Output frame");
   auto *output = owner_of<Output>(listener);
   // Renderer-owned motion — an eased scroll, a hover tint fading in — steps
   // here, before the composite, so that its clock is the display's and the
@@ -9582,15 +9584,24 @@ void Output::on_frame(wl_listener *listener, void *) {
     // waits on the CPU for every render the flush just queued: with four
     // frosted terminals repainting, 13–18 ms of a 16.7 ms frame. The price is
     // frost one frame behind what is under it, which a blur hides.
-    surfaces.refreshBackdropBlurs();
+    {
+      ZoneScopedN("Refresh backdrop blurs");
+      surfaces.refreshBackdropBlurs();
+    }
     // Client frames before the renderer's own animation step, never after:
     // drawing takes the newest frame out of the arena, so a hover tint's
     // redraw that ran first swallowed the frame `flushPresents` was there to
     // draw — and with it the panel geometry, reveal and frost that only a
     // presented frame commits. A dock under the pointer, which is always
     // easing something, lost exactly the frame that resized it.
-    surfaces.flushPresents();
-    animating = surfaces.stepAnimations();
+    {
+      ZoneScopedN("Client frames");
+      surfaces.flushPresents();
+    }
+    {
+      ZoneScopedN("Renderer animations");
+      animating = surfaces.stepAnimations();
+    }
   }
   output->syncScanoutLock();
   // Composite is surface 0 in the probe: it is the desktop's own frame rather
@@ -9601,6 +9612,7 @@ void Output::on_frame(wl_listener *listener, void *) {
   // `wlr_scene_output_commit`, opened up for the one thing it hides: the
   // state, whose wait timeline is when this composite stops reading.
   if (wlr_scene_output_needs_frame(output->scene_output)) {
+    ZoneScopedN("Composite");
     wlr_output_state state;
     wlr_output_state_init(&state);
     if (wlr_scene_output_build_state(output->scene_output, &state, nullptr)) {
@@ -9626,6 +9638,9 @@ void Output::on_frame(wl_listener *listener, void *) {
   // concerned, settled. An animation that is still running has to keep the
   // output awake itself or it stops one frame in.
   if (animating) wlr_output_schedule_frame(output->wlr);
+  // One frame set for every output: a second screen marks it too, which a
+  // capture of a one-screen session never sees.
+  FrameMark;
 }
 
 void Output::on_present(wl_listener *listener, void *data) {

@@ -155,18 +155,21 @@ public enum LavaApp {
             // Clear any D-Bus work already queued before parking in GLFW.
             main.menuHost?.poll()
             editor.pumpEvents(timeout: wake)
+            // Everything from here to the park is one iteration's work. The
+            // wait itself is not a zone: an idle app would be all "waiting".
+            let iteration = Trace.begin("Loop iteration")
 
             // After wake (input, animation, agent, or D-Bus pump interval),
             // service the agent before the rest of the frame so injects land
             // this tick.
-            agentServer?.poll()
+            Trace.zone("Agent server") { agentServer?.poll() }
 
             // Before input and before invalidation is consumed: a worker
             // result delivered while the loop was parked belongs to the frame
             // about to be built, not the one after it. No window is current
             // here, so a coarse invalidation from a worker reaches all of them
             // — see `WindowScope`.
-            MainQueue.drain()
+            Trace.zone("MainQueue.drain") { MainQueue.drain() }
 
             // Global-menu: process GetLayout / activations that arrived during
             // the wait (and any more that show up while dispatching).
@@ -185,14 +188,15 @@ public enum LavaApp {
             // input, D-Bus pumps, agent traffic — because ids age on emit
             // passes, not on iterations. See `SceneNodeIdentity`.
             SceneNodeIdentity.advanceFrame()
-            for window in windows { window.update() }
+            Trace.zone("Input") { for window in windows { window.update() } }
 
             // Once for the process, not once per window: the registry is
             // shared and each entry knows which window it redraws.
-            AnimationDriver.tick()
+            Trace.zone("AnimationDriver.tick") { AnimationDriver.tick() }
 
             for window in windows { window.syncCaret() }
-            for window in windows { window.present() }
+            var presented = false
+            for window in windows where window.present() { presented = true }
 
             reapClosedWindows()
             // After present, so anything queued from an input handler this
@@ -204,11 +208,15 @@ public enum LavaApp {
             // menu measured a menu that had not been built yet, found no plate,
             // and was never shown. The stall ends within `publishStallDeadline`.
             if !windows.contains(where: { $0.holdsFrame }) {
-                FrameTasks.drain()
+                Trace.zone("FrameTasks.drain") { FrameTasks.drain() }
             }
             // A handler may have asked for a window; bring it up before the
             // loop parks again, or it would stay blank until the next event.
             bringUpPendingWindows()
+            iteration.end()
+            // The process's frame: an iteration that put something on
+            // screen. Each window also marks a set of its own.
+            if presented { Trace.frameMark() }
         }
 
         for window in windows { window.teardown() }

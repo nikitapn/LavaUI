@@ -13,6 +13,7 @@
 
 #include "render/blur_pass.hpp"
 #include "render/draw_command.hpp"
+#include "render/gpu_trace.hpp"
 #include "render/quad_renderer.hpp"
 #include "util/types.hpp"
 
@@ -606,6 +607,8 @@ class RenderWindow {
   void createSwapchain();
   void cleanupSwapchain();
   void createPresentSyncObjects();
+  /// The GPU track and plot names, in a profiling build. See `gpuTrace_`.
+  void initTrace();
   void createSyncObjects();
   void createCommandBuffer();
   void createColorResources();
@@ -678,6 +681,11 @@ class RenderWindow {
 
   /// Per-tile tally of what each exported frame submitted. See `takeDamage`.
   canvas::FrameDamage damage_;
+  /// This window's GPU track in Tracy, and the name of its damage plot —
+  /// a member because Tracy keys a plot by the address of its name. Both
+  /// inert unless the build has TRACY_ENABLE.
+  canvas::GpuTrace gpuTrace_;
+  std::string damagePlotName_;
   /// Set by replay when the frame samples another surface's live buffer,
   /// whose pixels change without anything in this list changing.
   bool        sampledLiveSurface_ = false;

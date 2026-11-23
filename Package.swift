@@ -37,6 +37,15 @@ let haveNprpc = FileManager.default.fileExists(atPath: nprpcPath + "/Package.swi
 
 let interopCxx: [SwiftSetting] = [.interoperabilityMode(.Cxx)]
 
+// ── Tracy ──────────────────────────────────────────────────────────────────
+// `LAVA_TRACY=1 swift build` (or `=full`). canvas/Package.swift reads the
+// same variable and compiles Tracy's client into CTracy; this side only lets
+// `Trace` in LavaUI call it. Without it `Trace.zone` is just its closure.
+let tracyMode = ProcessInfo.processInfo.environment["LAVA_TRACY"] ?? ""
+let tracyEnabled = tracyMode == "1" || tracyMode == "on" || tracyMode == "full"
+let lavaUISwiftSettings: [SwiftSetting] = interopCxx
+    + (tracyEnabled ? [.define("LAVA_TRACY")] : [])
+
 var packageDependencies: [Package.Dependency] = [
     .package(path: "canvas"),
     .package(url: "https://github.com/shadone/KDBXKit.git", exact: "1.3.0"),
@@ -482,11 +491,16 @@ var targets: [Target] = [
                 package: "canvas",
                 condition: .when(platforms: [.linux])
             ),
+            .product(
+                name: "CTracy",
+                package: "canvas",
+                condition: .when(platforms: [.linux])
+            ),
         ],
         resources: [
             .copy("Resources/fonts"),
         ],
-        swiftSettings: interopCxx
+        swiftSettings: lavaUISwiftSettings
     ),
     // Runtime host selection stays above LavaUI so NPRPC remains optional.
     .target(

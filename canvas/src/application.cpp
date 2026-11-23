@@ -6,6 +6,7 @@
 #include <optional>
 #include <filesystem>
 
+#include "util/tracy.hpp"
 #include "application.hpp"
 
 #include "util/key_codes.hpp"
@@ -931,10 +932,17 @@ void Application::retireFrames()
 }
 
 bool Application::repaint(uint32_t windowId) {
-  prepareFrames();
+  ZoneScopedN("Application::repaint");
+  {
+    ZoneScopedN("prepareFrames");
+    prepareFrames();
+  }
   AppWindow *w = impl_->win(windowId);
   const bool ok = w && w->repaint();
-  retireFrames();
+  {
+    ZoneScopedN("retireFrames");
+    retireFrames();
+  }
   return ok;
 }
 

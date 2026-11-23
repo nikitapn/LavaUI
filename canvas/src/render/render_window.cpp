@@ -69,6 +69,7 @@ RenderWindow::RenderWindow(RenderDevice &device, GLFWwindow *window,
   createCommandBuffer();
   createSyncObjects();
   createPresentSyncObjects();
+  initTrace();
 
   dev_.registerWindow(this);
 }
@@ -94,6 +95,7 @@ RenderWindow::RenderWindow(RenderDevice &device, uint32_t width,
   createSizedResources();
   createCommandBuffer();
   createSyncObjects();
+  initTrace();
 
   dev_.registerWindow(this);
 }
@@ -131,6 +133,9 @@ RenderWindow::~RenderWindow()
   if (dev_.getDevice() != VK_NULL_HANDLE) {
     vkDeviceWaitIdle(dev_.getDevice());
   }
+
+  // Its query pool, before the device's idle is forgotten.
+  gpuTrace_.destroy();
 
   // Renderers first: their vertex buffers and blur targets are this window's,
   // and the attachments below are what they were drawing into.
@@ -657,6 +662,15 @@ void RenderWindow::createCommandBuffer()
      "failed to allocate command buffers!");
 }
 
+void RenderWindow::initTrace()
+{
+#ifdef TRACY_ENABLE
+  const std::string name = (windowed_ ? "Window " : "Surface ") + std::to_string(ownerId_);
+  gpuTrace_.create(dev_, queue_, *queueMutex_, commandPool_, "GPU " + name);
+  damagePlotName_ = "Changed tiles % (" + name + ")";
+#endif
+}
+
 void RenderWindow::createSyncObjects()
 {
   VkFenceCreateInfo fenceInfo {
@@ -752,6 +766,8 @@ void RenderWindow::endMainRenderPass(VkCommandBuffer commandBuffer)
 void RenderWindow::waitForInFlightFrame()
 {
   if (inFlightFences_[currentFrame_] == VK_NULL_HANDLE) return;
+  // Time spent here is the GPU (or the presentation engine) being behind.
+  ZoneScopedN("Wait for frame slot");
   vkWaitForFences(dev_.getDevice(), 1, &inFlightFences_[currentFrame_], VK_TRUE,
                   UINT64_MAX);
 }
@@ -803,6 +819,7 @@ void RenderWindow::submitFrame(
 
   uint32_t swapImageIndex = 0;
   if (windowed_) {
+    ZoneScopedN("Acquire swapchain image");
     VkResult acq = vkAcquireNextImageKHR(
       dev_.getDevice(), swapchain_, UINT64_MAX, imageAvailableSemaphores_[frame],
       VK_NULL_HANDLE, &swapImageIndex);
@@ -828,6 +845,12 @@ void RenderWindow::submitFrame(
 
   VR(vkBeginCommandBuffer(cmd, &beginInfo),
      "failed to begin recording command buffer!");
+  // Last frame's timestamps from this slot, read back and reset outside any
+  // render pass — the one place in the buffer that is.
+  gpuTrace_.collect(cmd);
+
+  {
+  CANVAS_GPU_ZONE(gpuTrace_, cmd, "Frame");
 
   // Taken back from the consumer before anything writes it, because the render
   // pass is about to resolve into it. Contents discarded — every frame covers
@@ -953,6 +976,7 @@ void RenderWindow::submitFrame(
                           1,
                           &copyRegion);
   }
+  } // GPU zone "Frame"
 
   VR(vkEndCommandBuffer(cmd), "failed to record command buffer!");
 
@@ -1002,6 +1026,7 @@ void RenderWindow::submitFrame(
   // was recorded. See there for why the ordering matters.
 
   {
+    ZoneScopedN("Queue submit and present");
     std::lock_guard queueLock(*queueMutex_);
     VR(vkQueueSubmit(queue_, 1, &submitInfo, fence),
        "failed to submit draw command buffer!");
@@ -1576,6 +1601,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
                                   float viewH,
                                   std::vector<Boundary> &outBoundaries)
 {
+  ZoneScopedN("Replay draw list");
   outBoundaries.clear();
   // Cleared per replay, not carried: a claim is about the frame that made it,
   // and a producer that stops sending one is saying it is no longer opaque.
@@ -2748,6 +2774,8 @@ bool RenderWindow::advanceSceneAnimations(
 
 void RenderWindow::render(const canvas::DrawList &list)
 {
+  ZoneScopedN("RenderWindow::render");
+  ZoneValue(list.commandCount);
   // Held for the whole frame. Shared, so other windows draw alongside this
   // one; it excludes only the device-wide steps — atlas growth, garbage
   // collection, resize — which now run between frames rather than inside one.
@@ -2884,13 +2912,24 @@ void RenderWindow::render(const canvas::DrawList &list)
   // before the submit, and kept if the submit throws: the next frame is then
   // compared against one that never reached the buffer, and the difference
   // between the two is still in what is pending.
-  if (!windowed_ && exportTarget_ != nullptr) {
+  //
+  // A profiling build counts it for every window, windowed ones too: the
+  // share of tiles that changed is what a partial redraw would save, and it
+  // is the windowed app that has the one timeline to read it against.
+#ifdef TRACY_ENABLE
+  constexpr bool tallyForTrace = true;
+#else
+  constexpr bool tallyForTrace = false;
+#endif
+  if ((!windowed_ && exportTarget_ != nullptr) || tallyForTrace) {
+    ZoneScopedN("Frame damage");
     // Counted in layout pixels, which is what the batches were recorded in;
     // `takeDamage` hands it out in buffer pixels.
     damage_.begin(logical_.width, logical_.height);
     if (anyBlur || sampledLiveSurface_) damage_.markAll();
     else quads_.accumulateDamage(damage_);
     damage_.end();
+    TracyPlot(damagePlotName_.c_str(), damage_.changedFraction() * 100.0);
   }
 
   submitFrame(
@@ -2900,7 +2939,10 @@ void RenderWindow::render(const canvas::DrawList &list)
       // Always open the clear pass so an empty first segment still clears the
       // framebuffer before a leading blur.
       beginMainRenderPass(commandBuffer, /*clear=*/true);
-      quads_.drawSegment(commandBuffer, 0);
+      {
+        CANVAS_GPU_ZONE(gpuTrace_, commandBuffer, "Segment");
+        quads_.drawSegment(commandBuffer, 0);
+      }
 
       uint32_t segment = 0;
       for (const auto &b : boundaries) {
@@ -2917,12 +2959,18 @@ void RenderWindow::render(const canvas::DrawList &list)
           // The frame so far *is* the source, so it has to be resolved before
           // it can be read.
           endMainRenderPass(commandBuffer);
-          blur_.captureAndBlur(commandBuffer, frameImage(),
-                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               extent.width, extent.height,
-                               deviceRadius(b.radius));
+          {
+            CANVAS_GPU_ZONE(gpuTrace_, commandBuffer, "Backdrop blur");
+            blur_.captureAndBlur(commandBuffer, frameImage(),
+                                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                 extent.width, extent.height,
+                                 deviceRadius(b.radius));
+          }
           beginMainRenderPass(commandBuffer, /*clear=*/false);
-          quads_.drawSegment(commandBuffer, segment);
+          {
+            CANVAS_GPU_ZONE(gpuTrace_, commandBuffer, "Segment");
+            quads_.drawSegment(commandBuffer, segment);
+          }
           break;
 
         case Boundary::Kind::ContentBegin:
@@ -2935,14 +2983,20 @@ void RenderWindow::render(const canvas::DrawList &list)
 
         case Boundary::Kind::ContentEnd:
           blur_.endSceneCapture(commandBuffer);
-          // Already at capture scale — the subtree was drawn into it that
-          // way, so the blit that follows is 1:1 rather than a downsample.
-          blur_.captureAndBlur(commandBuffer, blur_.sceneImage(),
-                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               blur_.captureWidth(), blur_.captureHeight(),
-                               deviceRadius(b.radius));
+          {
+            CANVAS_GPU_ZONE(gpuTrace_, commandBuffer, "Content blur");
+            // Already at capture scale — the subtree was drawn into it that
+            // way, so the blit that follows is 1:1 rather than a downsample.
+            blur_.captureAndBlur(commandBuffer, blur_.sceneImage(),
+                                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                 blur_.captureWidth(), blur_.captureHeight(),
+                                 deviceRadius(b.radius));
+          }
           beginMainRenderPass(commandBuffer, /*clear=*/false);
-          quads_.drawSegment(commandBuffer, segment);
+          {
+            CANVAS_GPU_ZONE(gpuTrace_, commandBuffer, "Segment");
+            quads_.drawSegment(commandBuffer, segment);
+          }
           break;
         }
       }

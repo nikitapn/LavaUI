@@ -81,10 +81,19 @@ void FrameDamage::end()
   }
   if (frameAll_ || !sameGrid) {
     pendingAll_ = true;
-  } else if (!pendingAll_) {
+    changedFraction_ = 1.f;
+  } else {
+    // Counted even when everything is pending anyway: the share is about
+    // this frame against the last, not about what the consumer still owes.
+    size_t changed = 0;
     for (size_t i = 0; i < current_.size(); ++i) {
-      if (current_[i] != previous_[i]) pending_[i] = 1;
+      if (current_[i] != previous_[i]) {
+        ++changed;
+        if (!pendingAll_) pending_[i] = 1;
+      }
     }
+    changedFraction_ = current_.empty()
+      ? 0.f : static_cast<float>(changed) / static_cast<float>(current_.size());
   }
   previous_.swap(current_);
   previousCols_ = cols_;

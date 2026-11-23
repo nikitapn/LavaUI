@@ -564,6 +564,31 @@ void RenderDevice::createLogicalDevice()
     }
   }
 
+#ifdef TRACY_ENABLE
+  // A profiling build only: lets Tracy's GPU contexts map GPU ticks onto its
+  // CPU clock as they go (see `canvas::GpuTrace`). EXT first, because a
+  // driver that has both answers to either and older ones have only EXT.
+  {
+    uint32_t extCount = 0;
+    vkEnumerateDeviceExtensionProperties(physicalDevice_, nullptr, &extCount, nullptr);
+    std::vector<VkExtensionProperties> available(extCount);
+    vkEnumerateDeviceExtensionProperties(physicalDevice_, nullptr, &extCount,
+                                         available.data());
+    const auto has = [&](const char *name) {
+      return std::ranges::any_of(available, [name](const VkExtensionProperties &ext) {
+        return std::strcmp(ext.extensionName, name) == 0;
+      });
+    };
+    if (has("VK_EXT_calibrated_timestamps")) {
+      deviceExtensions.push_back("VK_EXT_calibrated_timestamps");
+      calibratedTimestampsSuffix_ = "EXT";
+    } else if (has("VK_KHR_calibrated_timestamps")) {
+      deviceExtensions.push_back("VK_KHR_calibrated_timestamps");
+      calibratedTimestampsSuffix_ = "KHR";
+    }
+  }
+#endif
+
   // Must outlive vkCreateDevice: it is referenced through pNext.
 #ifdef VK_KHR_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME
   VkPhysicalDevicePresentModeFifoLatestReadyFeaturesKHR fifoLatestReady {

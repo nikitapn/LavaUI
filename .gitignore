@@ -19,6 +19,7 @@ compositor/.cache/
 # Meson build
 build
 build-release
+build-tracy
 
 # Cloned by scripts/fetch-nprpc.sh / scripts/build-wlroots.sh, not vendored.
 # third-party/wlroots is meson's checkout of wlroots.wrap; the wrap and the

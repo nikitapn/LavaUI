@@ -487,6 +487,82 @@ Rules of thumb:
 - `perf record -F 999 -g -p <pid>` — the last resort, and the only one that
   names a function. Attach by exact pid (`pgrep -x TraceLoom`); `pgrep -f` also
   matches wrapper shells and will attach to the wrong process.
+- **Tracy** — a timeline rather than a sum: which frame, which stage, what
+  the GPU was doing at the time. Below.
+
+### Tracy
+
+A build-time switch, so a normal build carries none of it — no thread, no
+socket, and Swift's `Trace.zone { }` compiles to its closure:
+
+```bash
+LAVA_TRACY=1 swift build         # records while a profiler is connected
+LAVA_TRACY=full swift build      # records from launch (startup work)
+meson setup build-tracy -Dtracy=on && ninja -C build-tracy   # the compositor
+```
+
+The client is the submodule `canvas/third-party/tracy`, pinned to v0.15.0 and
+needed by a profiling build only (`git submodule update --init
+canvas/third-party/tracy`; a `LAVA_TRACY` build without it stops at the
+manifest and says so). The profiler has to be the same version, or it refuses
+the connection. The engine and the compositor include `util/tracy.hpp`, which
+supplies empty macros when Tracy is off — never Tracy's own headers, which a
+normal build does not have. It listens
+on `127.0.0.1:8086` and nowhere else (`TRACY_ONLY_LOCALHOST`). A second Tracy
+process takes the next port.
+
+**One client per process, in CTracy** (`canvas/trace/`). Swift reaches it
+through a C shim, because TracyC.h's API is macros that Swift cannot call;
+the engine uses Tracy.hpp's macros directly. Both land in the same profiler,
+so a **windowed** app (`env -u LAVA_CLIENT` — the shell exports
+`LAVA_CLIENT=1`) is one timeline: the loop, body / layout / emit, the engine's
+replay and submit, and a GPU track per window. In client mode the app has no
+GPU, and its frames are drawn by the compositor, which is a second Tracy
+client — `build-tracy`'s compositor shows each surface's GPU track under its
+own name.
+
+What is instrumented:
+
+| Where | Zones |
+|---|---|
+| `LavaApp.run` | `Loop iteration` (from waking to parking again; the wait is not a zone), `Agent server`, `MainQueue.drain`, `Input`, `AnimationDriver.tick`, `FrameTasks.drain`; the main frame mark on an iteration that drew |
+| `LavaWindow.present` | `Frame` (text: the root view; value: the invalidation level), `Body`, `Layout`, `Emit` (value: commands), `Submit draw list`, `Engine renderFrame`, or `Renderer frame` for the retained-list redraws a scroll mostly is. Each window marks a frame set of its own |
+| canvas | `Application::repaint`, `RenderWindow::render`, `Replay draw list`, `Wait for frame slot`, `Acquire swapchain image`, `Queue submit and present`, `Frame damage` |
+| canvas, GPU | `Frame`, `Segment`, `Backdrop blur`, `Content blur` — `canvas::GpuTrace`, one Vulkan context per window, calibrated when the device has `VK_EXT/KHR_calibrated_timestamps` |
+| compositor | `Output frame`, `Refresh backdrop blurs`, `Client frames`, `Renderer animations`, `Composite`; a frame mark per output frame |
+
+And one plot per window, **`Changed tiles %`**: of `FrameDamage`'s 32 px
+tiles, the share whose submitted content differed from the frame before —
+100 for a frame that blurs or samples another surface. It is what a partial
+redraw would have to draw, and the number to read before building one. A
+profiling build counts it for windowed apps too, where nothing else needs it.
+
+**The clock follows the kernel's.** Tracy reads `rdtsc`, which is only right
+where every core's counter agrees, and on the machine this was written on they
+do not: the kernel logs `Measured 2657830998 cycles TSC warp between CPUs`
+at boot (0.83 s at 3.2 GHz), marks the TSC unstable and runs on HPET. In
+Tracy that was one impossible 834 ms frame per capture — whichever frame the
+main thread changed cores in — with every timestamp after it shifted, and the
+same frame at 3 ms in `LAVAUI_DEBUG`. So the build reads
+`/sys/devices/system/clocksource/clocksource0/current_clocksource`, and
+anything but `tsc` gets `TRACY_DISALLOW_HW_TIMER`: `clock_gettime`, slower
+per zone, never wrong. `TRACY_TIMER_FALLBACK` is not enough — it still uses
+`rdtsc` whenever CPUID calls the TSC invariant, and this CPU does.
+`LAVA_TRACY_TIMER=tsc|fallback` overrides the detection.
+
+Two things a C API user trips over, both handled in the shim and worth knowing
+before extending it: under `TRACY_ON_DEMAND` a zone's context carries the
+connection it began under, and an end that does not carry it back is silently
+dropped — the first version packed the context into a `UInt64`, lost that
+field, and recorded frame marks and no zones at all. And Swift zones use
+allocated source locations (Swift has no static storage a C macro could point
+into), tens of nanoseconds each: right for a frame's stages, wrong inside a
+per-glyph loop.
+
+`tracy-capture -o x.tracy -a 127.0.0.1 -s 10` records without the GUI and
+`tracy-csvexport x.tracy` summarises per zone; `-u` lists every zone, and its
+CSV is not quoted, so a `Frame` row whose text (a view type) holds commas
+spills into extra columns.
 
 ## Correctness under stress
 

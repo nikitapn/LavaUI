@@ -141,6 +141,10 @@ public final class LavaWindow {
     private var lastMetricsGeneration = FontStore.metricsGeneration
 
     private let enableDebug = ProcessInfo.processInfo.environment["LAVAUI_DEBUG"] == "1"
+    /// This window's own frame set in Tracy, beside the process's main one:
+    /// with two windows open, the main set counts the loop and this counts
+    /// what each window drew.
+    private lazy var traceFrames = Trace.FrameSet("Window \(id.raw) \(rootLabel)")
     private var probeBody = 0.0
     private var probeLayout = 0.0
     private var probeEmit = 0.0
@@ -302,9 +306,10 @@ public final class LavaWindow {
     }
 
     /// Does whatever work this window's invalidation asks for, and presents if
-    /// there was any.
-    func present() {
-        WindowScope.withCurrent(scope) {
+    /// there was any. True when something was drawn.
+    @discardableResult
+    func present() -> Bool {
+        WindowScope.withCurrent(scope) { () -> Bool in
             let level = ViewInvalidation.consume()
             if dirty { ViewInvalidation.markNeedsBody() }
             var work = dirty ? InvalidationLevel.body : level
@@ -325,7 +330,7 @@ public final class LavaWindow {
             // disturbed, so a `.body` resumed here still rebuilds properly.
             if work > .none, stalledOnConsumer() {
                 deferredWork = max(work, ViewInvalidation.consume())
-                return
+                return false
             }
 
             // A frame the renderer wants for itself: a tint still fading, a
@@ -340,20 +345,33 @@ public final class LavaWindow {
             // scroll that stops moving stops being drawn.
             let rendererWantsFrame = editor.takeInternalRepaint(window: id)
             guard work > .none else {
-                if rendererWantsFrame { editor.renderFrame(window: id) }
-                return
+                guard rendererWantsFrame else { return false }
+                // No body, no layout, no emit: the retained list again, for
+                // a scroll easing or a tint fading. Most scrolling frames are
+                // these.
+                let zone = Trace.begin("Renderer frame")
+                editor.renderFrame(window: id)
+                zone.end()
+                Trace.frameMark(traceFrames)
+                return true
             }
 
+            let frame = Trace.begin("Frame")
+            frame.text(rootLabel)
+            frame.value(Int(work.rawValue))
             let p0 = enableDebug ? FrameScheduler.now() : 0
             renderFrame(work)
             let p1 = enableDebug ? FrameScheduler.now() : 0
-            editor.renderFrame(window: id)
+            Trace.zone("Engine renderFrame") { editor.renderFrame(window: id) }
             if enableDebug { logFrame(work, renderStart: p0, presentStart: p1) }
             // Only after a frame was actually emitted. Advancing the image
             // clock on an idle iteration would mean "nothing was drawn", which
             // makes every cached image look unused — including the ones on
             // screen — and evicts them straight into a reload.
             ImageStore.endFrame(into: editor)
+            frame.end()
+            Trace.frameMark(traceFrames)
+            return true
         }
     }
 
@@ -484,6 +502,7 @@ public final class LavaWindow {
         let bodyW = width
         let bodyH = max(1, height - menuH)
         let t0 = enableDebug ? FrameScheduler.now() : 0
+        let bodyZone = level >= .body ? Trace.begin("Body") : nil
         if level >= .body {
             // Per-node invalidation: a change tracked to specific composite
             // nodes recomputes just those, instead of every node in the tree
@@ -511,9 +530,10 @@ public final class LavaWindow {
             }
             reresolvePointerState()
         }
+        bodyZone?.end()
         let t1 = enableDebug ? FrameScheduler.now() : 0
         let frames = level >= .layout
-            ? host.calculateLayout(width: bodyW, height: bodyH)
+            ? Trace.zone("Layout") { host.calculateLayout(width: bodyW, height: bodyH) }
             : host.lastLayoutFrames
         let t2 = enableDebug ? FrameScheduler.now() : 0
         if enableDebug {
@@ -562,15 +582,18 @@ public final class LavaWindow {
                 drawList.opaqueBounds(x: 0, y: 0, w: width, h: height)
             }
         }
+        let emitZone = Trace.begin("Emit")
         drawList.emitTree(
             root, originX: 0, originY: menuH, viewportW: width, viewportH: height
         )
+        emitZone.value(drawList.commandCount)
+        emitZone.end()
         // This frame's NodeVisibility is now current; give any node that just
         // scrolled/resized/expanded into view a queued wake so it resumes on
         // its own next iteration (see doc comment).
         AnimationDriver.requestRevisibilityCheck()
 
-        editor.submitDrawList(drawList)
+        Trace.zone("Submit draw list") { editor.submitDrawList(drawList) }
         if enableDebug { probeEmit = (FrameScheduler.now() - t2) * 1000 }
         dirty = false
     }
