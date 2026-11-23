@@ -69,14 +69,19 @@ struct LavaEditorView: View {
         }
     }
 
-    /// The bars that come and go over the document, and the document.
     private var documentStack: some View {
-        VStack(flexGrow: 1, spacing: 0) {
+        let showsFind = session.active.preview == nil && session.find.isOpen
+        return VStack(flexGrow: 1, spacing: 0) {
             if let document = session.closingDocument { unsavedBar(document) }
             if session.active.preview == nil, session.gotoOpen { gotoBar }
-            if session.active.preview == nil, session.find.isOpen { findBar }
             if let notice = session.notice { noticeBar(notice) }
             editor(appearance)
+                .overlay(
+                    alignment: .topTrailing, insets: EdgeInsets(top: 12, trailing: 32),
+                    style: showsFind ? OverlayStyle(cornerRadius: 8, padding: 0) : nil
+                ) {
+                    if showsFind { findBar }
+                }
         }
     }
 
@@ -180,66 +185,97 @@ struct LavaEditorView: View {
 
     // MARK: - Bars
 
-    /// Find, and replace when it was asked for. One bar rather than two
-    /// dialogs: replace is find with an extra field, and a modal that covers
-    /// the text you are searching is the oldest complaint about find dialogs.
     private var findBar: some View {
-        VStack(padding: 6, spacing: 4) {
-            HStack(alignment: .center, spacing: 6) {
-                Text("Find", color: .muted).frame(width: .pt(56))
+        let theme = appearance.theme
+        let hasMatches = session.find.search.count > 0
+        let noResults = session.find.search.isActive && !hasMatches
+        return VStack(padding: 4, spacing: 4) {
+            HStack(alignment: .center, spacing: 2) {
                 TextField(
                     text: Binding(
                         get: { session.find.query },
                         set: { session.find.query = $0; session.runSearch() }
                     ),
-                    placeholder: "search…",
+                    placeholder: "Find in document",
                     font: session.fonts.tab,
                     autoFocus: true,
                     selectionOnFocus: .all,
+                    onCancel: { session.closeFind() },
                     onSubmit: { session.findNext() }
                 )
-                .flexGrow(1)
+                .frame(width: .pt(200))
+                .flexShrink(1)
                 .focused($session.findQueryFocused)
                 .agentId("find-query")
-                Text(matchLabel, color: .dim).frame(width: .pt(90))
-                Text("Aa", color: session.find.caseSensitive ? .accent : .dim, onClick: {
-                    session.find.caseSensitive.toggle()
-                    session.runSearch()
-                })
-                .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
-                .hoverBackground(Environment.current.theme.hover)
-                .cornerRadius(4)
-                .cursor(.pointer)
-                .agentId("find-case")
-                Button("‹") { session.findPrevious() }.agentId("find-prev")
-                Button("›") { session.findNext() }.agentId("find-next")
-                Button("Done") { session.closeFind() }.agentId("find-close")
+                Text(matchLabel, color: noResults ? appearance.modified : theme.textSecondary,
+                     font: session.fonts.status, lineLimit: 1)
+                    .padding(EdgeInsets(leading: 6))
+                    .frame(width: .pt(90))
+                    .agentId("find-status")
+                Text("Aa", color: session.find.caseSensitive ? .accent : .secondary, font: session.fonts.status,
+                     align: .center, onClick: {
+                         session.find.caseSensitive.toggle()
+                         session.runSearch()
+                     })
+                    .frame(width: .pt(26), height: .pt(26))
+                    .hoverBackground(theme.hover)
+                    .cornerRadius(4)
+                    .cursor(.pointer)
+                    .tooltip("Match Case")
+                    .agentId("find-case")
+                findIcon(.arrowUp, enabled: hasMatches, tip: "Previous Match", id: "find-prev") {
+                    session.findPrevious()
+                }
+                findIcon(.arrowDown, enabled: hasMatches, tip: "Next Match", id: "find-next") {
+                    session.findNext()
+                }
+                findIcon(.cross, enabled: true, tip: "Close", id: "find-close") {
+                    session.closeFind()
+                }
             }
             if session.find.showsReplace, !session.active.hasInvalidUTF8 {
-                HStack(alignment: .center, spacing: 6) {
-                    Text("Replace", color: .muted).frame(width: .pt(56))
+                HStack(alignment: .center, spacing: 4) {
                     TextField(
                         text: Binding(get: { session.find.replacement }, set: { session.find.replacement = $0 }),
-                        placeholder: "replacement…",
+                        placeholder: "Replace with",
                         font: session.fonts.tab,
+                        onCancel: { session.closeFind() },
                         onSubmit: { session.replaceCurrent() }
                     )
                     .flexGrow(1)
                     .agentId("replace-text")
-                    Button("Replace") { session.replaceCurrent() }.agentId("replace-one")
-                    Button("Replace All") { session.replaceAll() }.agentId("replace-all")
+                    Button("Replace", font: session.fonts.status, isEnabled: hasMatches) { session.replaceCurrent() }
+                        .agentId("replace-one")
+                    Button("Replace All", font: session.fonts.status, isEnabled: hasMatches) { session.replaceAll() }
+                        .agentId("replace-all")
                 }
             }
         }
-        .background(Environment.current.theme.panel)
+        .agentId("find-bar")
+    }
+
+    private func findIcon(
+        _ mark: Mark.Kind, enabled: Bool, tip: String, id: String, action: @escaping () -> Void
+    ) -> some View {
+        let theme = appearance.theme
+        return HStack(width: .pt(26), height: .pt(26), alignment: .center, spacing: 0,
+                      onClick: enabled ? action : nil) {
+            Spacer()
+            Mark(mark, size: mark == .cross ? 10 : 12, color: enabled ? theme.textSecondary : theme.textDim)
+            Spacer()
+        }
+        .hoverBackground(enabled ? theme.hover : .clear)
+        .cornerRadius(4)
+        .cursor(enabled ? .pointer : .arrow)
+        .tooltip(tip)
+        .agentId(id)
     }
 
     private var matchLabel: String {
         let search = session.find.search
         guard search.isActive else { return "" }
-        guard search.count > 0 else { return "no matches" }
-        let current = search.currentIndex.map { $0 + 1 } ?? 0
-        return "\(current) of \(search.count)"
+        guard let current = search.currentIndex else { return "No results" }
+        return "\(current + 1) of \(search.count)"
     }
 
     private var gotoBar: some View {

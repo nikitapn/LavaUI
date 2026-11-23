@@ -255,7 +255,6 @@ struct AgentLaunchView: View {
         return VStack(spacing: 2, onClick: enabled ? { launch.select(destination) } : nil) {
             Text(destination.title, color: enabled ? .primary : .muted, font: session.fonts.tab)
             Text(detail, color: .muted, font: session.fonts.status, lineLimit: 1)
-                .tooltip(detail)
         }
         .padding(EdgeInsets(top: 7, leading: 10, bottom: 7, trailing: 10))
         .background(selected ? theme.selectionFill : .clear)

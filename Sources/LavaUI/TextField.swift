@@ -22,6 +22,8 @@ public struct TextField: PrimitiveView {
     public var font: UIFont?
     /// Called when Enter is pressed in a single-line field.
     public var onSubmit: (() -> Void)?
+    /// Called instead of resigning focus when Escape is pressed.
+    public var onCancel: (() -> Void)?
     /// When true, Enter inserts a newline instead of submitting, and the box
     /// grows to fit its lines. Hard line breaks only for now — soft wrap is a
     /// separate step, because a wrapped visual line is no longer a logical one
@@ -89,6 +91,7 @@ public struct TextField: PrimitiveView {
     ///   follows the theme.
     /// - secure: Shows a dot per character instead of the text, and refuses
     ///   copy, cut and undo. Single-line only.
+    /// - onCancel: Called when Escape is pressed.
     /// - onSubmit: Called when Enter is pressed in a single-line field.
     public init(
         text: Binding<String>,
@@ -104,6 +107,7 @@ public struct TextField: PrimitiveView {
         focusRingColor: Color? = nil,
         restingOutline: Bool? = nil,
         secure: Bool = false,
+        onCancel: (() -> Void)? = nil,
         onSubmit: (() -> Void)? = nil
     ) {
         self._text = text
@@ -119,6 +123,7 @@ public struct TextField: PrimitiveView {
         self.focusRingColor = focusRingColor
         self.restingOutline = restingOutline
         self.isSecure = secure && !multiline
+        self.onCancel = onCancel
         self.onSubmit = onSubmit
     }
 
@@ -215,6 +220,13 @@ public struct TextField: PrimitiveView {
         leaf.isMultiline = isMultiline
         leaf.maxLines = maxLines
         leaf.wraps = wraps && isMultiline
+        leaf.keyInterceptor = onCancel.map { cancel in
+            { event in
+                guard event.key == KeyCode.escape else { return false }
+                cancel()
+                return true
+            }
+        }
         // No wrapping or sizing here: only the Yoga measure callback knows
         // the resolved width, and setting `height` after installTextMeasure()
         // has forced it to .auto never reached Yoga anyway.
@@ -1291,6 +1303,9 @@ extension LeafNode {
             // Four is the common default; Shift+Tab has no outdent yet, so it
             // falls through to focus traversal rather than pretending.
             editing.insert(Self.indentUnit)
+        case KeyCode.escape where kind == .editor:
+            guard editing.hasSelection else { return true }
+            editing.setCursor(editing.selectedRange.upperBound)
         case KeyCode.escape:
             FocusManager.resignFocus(id)
         case KeyCode.a where event.control:

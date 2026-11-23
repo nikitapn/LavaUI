@@ -169,7 +169,11 @@ extension EditorSession {
             scheduleCompletion(immediately: true)
             return true
         }
-        guard var open = completion, open.documentID == active.id, !open.shown.isEmpty else { return false }
+        guard var open = completion, open.documentID == active.id, !open.shown.isEmpty else {
+            if event.key == KeyCode.escape, find.isOpen { closeFind() }
+            // Let the editor handle its selection after the overlay closes.
+            return false
+        }
         let count = open.shown.count
         switch event.key {
         case KeyCode.down: open.selected = (open.selected + 1) % count

@@ -75,10 +75,12 @@ public struct CodexAppServer {
     private func query<Result>(_ read: (Connection) throws -> Result) -> Result? {
         // The proxy speaks stdio too. When a shared daemon is available it
         // knows which threads are active, including those owned by other UIs.
-        for arguments in [["app-server", "proxy"], ["app-server", "--stdio"]] {
+        // A daemon can accept the connection and never answer the handshake.
+        // Give it a short head start before launching a standalone server.
+        for (transport, handshakeTimeout) in [("proxy", 0.35), ("--stdio", 5.0)] {
             do {
-                let connection = try Connection(executable: executable, arguments: arguments)
-                try connection.initialize()
+                let connection = try Connection(executable: executable, arguments: ["app-server", transport])
+                try connection.initialize(timeout: handshakeTimeout)
                 return try read(connection)
             } catch {
                 continue
@@ -148,7 +150,7 @@ public struct CodexAppServer {
         private let output: FileHandle
         private var incoming = Data()
         private var nextID = 0
-        private let deadline = DispatchTime.now() + 5
+        private var deadline = DispatchTime.now()
 
         init(executable: URL, arguments: [String]) throws {
             let stdin = Pipe()
@@ -164,11 +166,13 @@ public struct CodexAppServer {
             try process.run()
         }
 
-        func initialize() throws {
+        func initialize(timeout: TimeInterval) throws {
+            deadline = DispatchTime.now() + timeout
             let _: [String: Any] = try response("initialize", [
                 "clientInfo": ["name": "lava_editor", "title": "LavaEditor", "version": "1"],
             ])
             try send(["method": "initialized"])
+            deadline = DispatchTime.now() + 5
         }
 
         deinit {

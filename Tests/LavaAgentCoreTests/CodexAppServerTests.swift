@@ -10,6 +10,11 @@ final class CodexAppServerTests: XCTestCase {
         let executable = directory.appendingPathComponent("codex")
         try #"""
         #!/bin/sh
+        if [ "$2" = "proxy" ]; then
+            # Keep the connection open without acknowledging initialize.
+            while IFS= read -r line; do :; done
+            exit
+        fi
         [ "$2" = "--stdio" ] || exit 1
         while IFS= read -r line; do
             case "$line" in
@@ -32,7 +37,9 @@ final class CodexAppServerTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
 
         let server = CodexAppServer(executable: executable)
+        let start = ProcessInfo.processInfo.systemUptime
         let sessions = try XCTUnwrap(server.sessions(in: [URL(fileURLWithPath: "/work/repo")]))
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - start, 2, "A stalled proxy delayed the stdio fallback")
         XCTAssertEqual(sessions.map(\.agent.id), ["nested", "main"])
         XCTAssertEqual(sessions.first?.status, .waiting)
         XCTAssertNil(sessions.first?.agent.file)

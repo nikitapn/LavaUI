@@ -439,6 +439,22 @@ final class EditorWrapTests: XCTestCase {
         XCTAssertEqual(rows, try coldRows(expected))
     }
 
+    func testEscapeCollapsesEitherSelectionDirectionAtItsEnd() throws {
+        let leaf = try settle(wraps: true)
+        leaf.focusSelf(binding: binding, onSubmit: nil)
+        let start = leaf.editing.text.startIndex
+        let end = leaf.editing.text.index(start, offsetBy: 5)
+        for (anchor, focus) in [(start, end), (end, start)] {
+            leaf.editing.setCursor(anchor)
+            leaf.editing.setCursor(focus, extending: true)
+            XCTAssertTrue(FocusManager.handle(KeyEvent(key: KeyCode.escape, mods: 0)))
+            XCTAssertFalse(leaf.editing.hasSelection)
+            XCTAssertEqual(leaf.editing.focus, end)
+            XCTAssertTrue(FocusManager.isFocused(leaf.id))
+        }
+        XCTAssertEqual(box, Self.text)
+    }
+
     /// The other half: a key that only moved the caret must leave the wrap
     /// marks alone. Clearing them was what made Page Down re-break the whole
     /// file — 4.4 s a press on a 4 MB log, and paid again on every arrow key.

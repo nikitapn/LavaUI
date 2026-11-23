@@ -19,6 +19,7 @@ struct FindState {
     var replacement = ""
     var caseSensitive = false
     var search = TextSearch()
+    var hasRevealedMatch = false
 
     /// Buffer the offsets in `search` were found in. `TextSearch` holds no
     /// reference to the text on purpose, so this is what stops a stale match
@@ -852,11 +853,10 @@ final class EditorSession {
         controller.focus()
     }
 
-    /// Recomputes matches against the buffer as it is now.
-    ///
-    /// Biased to the caret, so opening find jumps to the next match rather
-    /// than back to the top of the file.
+    /// Recomputes highlights near the caret. Document edits also call this,
+    /// so only explicit navigation can change the editor's selection.
     func runSearch() {
+        find.hasRevealedMatch = false
         guard !find.query.isEmpty else {
             find.search = TextSearch()
             return
@@ -867,24 +867,23 @@ final class EditorSession {
             caseSensitive: find.caseSensitive, near: caret
         )
         find.searchedRevision = revision
-        revealCurrentMatch()
     }
 
     func findNext() {
-        guard find.search.isActive else { runSearch(); return }
-        find.search.next()
+        if !find.search.isActive || find.searchedRevision != revision { runSearch() }
+        if find.hasRevealedMatch { find.search.next() }
         revealCurrentMatch()
     }
 
     func findPrevious() {
-        guard find.search.isActive else { runSearch(); return }
+        if !find.search.isActive || find.searchedRevision != revision { runSearch() }
         find.search.previous()
         revealCurrentMatch()
     }
 
     private func revealCurrentMatch() {
         guard let match = find.search.current else { return }
-        controller.reveal(range: match)
+        find.hasRevealedMatch = controller.reveal(range: match)
     }
 
     func replaceCurrent() {
