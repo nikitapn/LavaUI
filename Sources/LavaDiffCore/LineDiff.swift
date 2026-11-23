@@ -81,33 +81,46 @@ public enum LineDiff {
     public static func hunks<S: StringProtocol & Hashable>(
         old: [S], new: [S], options: DiffOptions = DiffOptions()
     ) -> [DiffHunk] {
-        // Keyed by bytes: `Substring`'s own hashing normalises to NFC first,
-        // which was most of a per-keystroke gutter diff. Lines that differ
-        // only in how an accent is encoded now differ, as they do in git.
         var interner = Interner<LineBytes>()
-        func key(_ line: S) -> LineBytes {
-            LineBytes(trimmed(line))
-        }
-        func trimmed(_ line: S) -> Substring {
-            let sub = Substring(line)
-            guard options.ignoresTrailingWhitespace else { return sub }
-            var end = sub.endIndex
-            while end > sub.startIndex {
-                let before = sub.index(before: end)
-                let c = sub[before]
-                guard c == " " || c == "\t" || c == "\r" else { break }
-                end = before
-            }
-            return sub[sub.startIndex..<end]
-        }
-        let a = old.map { interner.id(key($0)) }
-        let b = new.map { interner.id(key($0)) }
+        let a = old.map { interner.id(key($0, options)) }
+        let b = new.map { interner.id(key($0, options)) }
+        return hunks(oldIDs: a, newIDs: b, old: old, new: new, options: options)
+    }
 
+    /// The hunks that turn `base` into `new`, with `base` hashed once rather
+    /// than on every call — the gutter diffs one commit's copy against every
+    /// keystroke. The same answer as `hunks(old:new:options:)`.
+    public static func hunks(from base: DiffBaseline, to new: [Substring]) -> [DiffHunk] {
+        var interner = Interner<LineBytes>(base: base.table)
+        let b = new.map { interner.id(key($0, base.options)) }
+        return hunks(oldIDs: base.ids, newIDs: b, old: base.lines, new: new, options: base.options)
+    }
+
+    private static func hunks<S: StringProtocol>(
+        oldIDs a: [Int], newIDs b: [Int], old: [S], new: [S], options: DiffOptions
+    ) -> [DiffHunk] {
         var myers = Myers(a, b, costLimit: options.costLimit)
         myers.run()
         var hunks = collect(changedA: myers.changedA, changedB: myers.changedB)
         Slider.slide(&hunks, oldIDs: a, newIDs: b, old: old, new: new)
         return hunks
+    }
+
+    /// What a line is compared by. Bytes, not `Substring`'s own hashing,
+    /// which normalises to NFC first and was most of a per-keystroke gutter
+    /// diff: lines that differ only in how an accent is encoded differ, as
+    /// they do in git.
+    static func key<S: StringProtocol>(_ line: S, _ options: DiffOptions) -> LineBytes {
+        let sub = Substring(line)
+        guard options.ignoresTrailingWhitespace else { return LineBytes(sub) }
+        var end = sub.endIndex
+        while end > sub.startIndex {
+            let before = sub.index(before: end)
+            let c = sub[before]
+            guard c == " " || c == "\t" || c == "\r" else { break }
+            end = before
+        }
+        return LineBytes(sub[sub.startIndex..<end])
     }
 
     /// Turns per-line change flags into hunks. The unchanged lines of the two
@@ -242,5 +255,29 @@ struct LineBytes: Hashable {
     func hash(into hasher: inout Hasher) {
         var text = text
         text.withUTF8 { hasher.combine(bytes: UnsafeRawBufferPointer($0)) }
+    }
+}
+
+/// One side of a line diff, hashed once, for diffing many versions of the
+/// other side against it: HEAD's copy of a file, which the gutter compares
+/// with the buffer on every keystroke. Build it off the main thread — it is
+/// the whole file's worth of hashing that `LineDiff.hunks(from:to:)` then
+/// does not repeat.
+public struct DiffBaseline: Sendable {
+    /// The lines, as given.
+    public let lines: [Substring]
+    /// What the comparison ignores; fixed for the baseline's life, since the
+    /// numbering depends on it.
+    public let options: DiffOptions
+    let ids: [Int]
+    let table: [LineBytes: Int]
+
+    /// Hashes `lines` under `options`.
+    public init(_ lines: [Substring], options: DiffOptions = DiffOptions()) {
+        var interner = Interner<LineBytes>()
+        self.lines = lines
+        self.options = options
+        ids = lines.map { interner.id(LineDiff.key($0, options)) }
+        table = interner.table
     }
 }

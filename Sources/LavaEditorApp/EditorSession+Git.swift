@@ -6,7 +6,10 @@ import LavaUI
 /// The last commit's copy of a document, split into lines once, which every
 /// keystroke after that is diffed against.
 struct GitBaseline {
-    let lines: TextLines
+    /// HEAD's lines, hashed once on the worker that fetched them: the gutter
+    /// diffs every keystroke against them, and hashing the whole commit's
+    /// copy each time was most of that diff.
+    let lines: DiffBaseline
     /// Bumped on every fetch, so the marks memo knows a commit made in a
     /// terminal since is a different baseline even if the text is not.
     let generation: Int
@@ -27,11 +30,11 @@ extension EditorSession {
         let id = documents[index].id
         let owner = SessionRef(session: self)
         DispatchQueue.global(qos: .userInitiated).async {
-            var lines: TextLines?
+            var lines: DiffBaseline?
             if let repository = GitRepository.containing(url),
                case .text(let text)? = try? repository.contents(of: url, at: .head)
             {
-                lines = TextLines(text)
+                lines = DiffBaseline(TextLines(text).lines)
             }
             let fetched = lines
             MainQueue.async {
@@ -70,7 +73,7 @@ extension EditorSession {
         )
         if let cached = marksCache, cached.key == key { return cached.marks }
 
-        let hunks = LineDiff.hunks(old: base.lines.lines, new: TextLines(document.text).lines)
+        let hunks = LineDiff.hunks(from: base.lines, to: TextLines(document.text).lines)
         let colors = ChangeColors(appearance)
         let fills = highlightsChangedLines
         let marks = hunks.map { hunk -> EditorLineMark in

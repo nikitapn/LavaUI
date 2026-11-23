@@ -136,4 +136,27 @@ final class LineDiffTests: XCTestCase {
         XCTAssertTrue(diff.isEmpty)
         XCTAssertTrue(diff.newlineAtEndChanged)
     }
+
+    /// A baseline hashed once gives what diffing from scratch gives, for
+    /// every version diffed against it — including lines it has never seen,
+    /// repeats, and an option that changes what equal means.
+    func testDiffBaselineAgreesWithAFreshDiff() {
+        let head = "struct A {\n    var x = 1\n}\n\nstruct B {\n    var y = 2  \n}\n\n}\n"
+        let versions = [
+            head,
+            "struct A {\n    var x = 1\n    var z = 3\n}\n\nstruct B {\n    var y = 2  \n}\n\n}\n",
+            "struct A {\n}\n\nstruct B {\n    var y = 2\n}\n\n}\n",
+            "new\nstruct A {\n    var x = 1\n}\n}\n}\n\nstruct B {\n    var y = 2  \n}\n\n}\n",
+            "", "only\n", "}\n}\n}\n",
+        ]
+        for options in [DiffOptions(), DiffOptions(ignoresTrailingWhitespace: true)] {
+            let base = DiffBaseline(TextLines(head).lines, options: options)
+            for version in versions {
+                let new = TextLines(version).lines
+                XCTAssertEqual(LineDiff.hunks(from: base, to: new),
+                               LineDiff.hunks(old: TextLines(head).lines, new: new, options: options),
+                               "\(version.debugDescription) \(options)")
+            }
+        }
+    }
 }

@@ -136,12 +136,22 @@ struct Myers {
 }
 
 /// Numbers each distinct element so that equal ones compare as equal integers.
+///
+/// `base` is a numbering made earlier and shared — a `DiffBaseline`'s — that
+/// is read and never written, so seeding from it copies nothing; what it
+/// lacks is numbered after it.
 struct Interner<Key: Hashable> {
-    private var table: [Key: Int] = [:]
+    private(set) var table: [Key: Int] = [:]
+    private let base: [Key: Int]
+
+    init(base: [Key: Int] = [:]) {
+        self.base = base
+    }
 
     mutating func id(_ key: Key) -> Int {
+        if let id = base[key] { return id }
         if let id = table[key] { return id }
-        let id = table.count
+        let id = base.count + table.count
         table[key] = id
         return id
     }
