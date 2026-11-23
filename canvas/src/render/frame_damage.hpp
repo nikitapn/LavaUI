@@ -8,7 +8,7 @@
 // the output — for a caret blink, a spinner, a clock — and that composite is
 // the part a compositor on a battery pays for. The renderer asks what it has
 // to *draw* this frame (`frameRects`, this frame against the last): the
-// multisampled attachment is stored every frame, so a partial redraw loads it
+// frame image is stored every frame, so a partial redraw loads it
 // and draws only the changed rectangles over it — see
 // `RenderWindow::recordPartialRedraw`.
 //

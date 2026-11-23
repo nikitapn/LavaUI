@@ -236,11 +236,11 @@ struct Application::Impl
       device.init("2d shenanigans!", /*presentCapable=*/false);
       deviceUp = true;
       // The sample count is worth a startup line: it is settled once, it
-      // multiplies every surface's attachments, and it comes from a config key
+      // multiplies a 3D scene's attachments, and it comes from a config key
       // the reader may not know is set.
       std::cout << "Vulkan initialized (exported, no surfaces yet), "
-                << static_cast<uint32_t>(device.getMSAASamples())
-                << "x MSAA.\n";
+                << static_cast<uint32_t>(device.spatialSamples())
+                << "x MSAA for 3D scenes, single-sampled otherwise.\n";
       return finishInitCommon(assetsRoot);
     } catch (const std::exception &ex) {
       return canvas::fail(std::string("Application::initExported: ") + ex.what());

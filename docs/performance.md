@@ -494,14 +494,14 @@ Rules of thumb:
 
 A frame draws only the part of the window that changed. `FrameDamage` hashes
 everything a frame submits per 32 px tile and compares it with the frame
-before (`frameRects`); the multisampled attachment is stored every frame
-anyway, so a frame that changed a little opens the *continue* pass (LOAD),
-clears each changed rectangle, draws the frame's batches once per rectangle
-with every scissor intersected with it (`QuadRenderer::setDamageClip` — a
-batch that misses is not recorded), and resolves only the box around them.
-The resolve target keeps the rest: the window's own resolve image, or the
-exported dma-buf itself, taken back from the compositor with its pixels
-(`recordAcquireForRead`) rather than discarded.
+before (`frameRects`); the main pass's one attachment is the frame itself,
+stored every frame, so a frame that changed a little opens the *continue*
+pass (LOAD) over the box around the changes, clears each changed rectangle,
+and draws the frame's batches once per rectangle with every scissor
+intersected with it (`QuadRenderer::setDamageClip` — a batch that misses is
+not recorded). The rest is the last frame, left where it was: the window's
+own image, or the exported dma-buf itself, taken back from the compositor with
+its pixels (`recordAcquireForRead`) rather than discarded.
 
 Drawn whole instead, and why:
 

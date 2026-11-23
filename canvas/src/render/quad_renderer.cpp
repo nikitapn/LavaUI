@@ -26,19 +26,23 @@ void QuadRenderer::init() {
   createWhiteTexture();
   setupDescriptors();
   createPipelineLayout();
-  createPipeline(device_.getRenderPass(), device_.getMSAASamples(), pipeline_);
-  createInstancePipeline(device_.getRenderPass(), device_.getMSAASamples(),
+  // The main pass is single-sampled: everything drawn in it antialiases
+  // itself. See `RenderDevice::createRenderPass`.
+  createPipeline(device_.getRenderPass(), VK_SAMPLE_COUNT_1_BIT, pipeline_);
+  createInstancePipeline(device_.getRenderPass(), VK_SAMPLE_COUNT_1_BIT,
                          instancePipeline_);
   // Same shaders, same geometry, opposite job: this one multiplies what is
   // already in the target by the shape's coverage instead of drawing over it.
   // See `Blend::Mask` and `pushCornerMask`.
-  createPipeline(device_.getRenderPass(), device_.getMSAASamples(),
+  createPipeline(device_.getRenderPass(), VK_SAMPLE_COUNT_1_BIT,
                  maskPipeline_, Blend::Mask);
-  createInstancePipeline(device_.getRenderPass(), device_.getMSAASamples(),
+  createInstancePipeline(device_.getRenderPass(), VK_SAMPLE_COUNT_1_BIT,
                          instanceMaskPipeline_, Blend::Mask);
-  createLinePipeline(device_.getRenderPass(), device_.getMSAASamples(),
+  createLinePipeline(device_.getRenderPass(), VK_SAMPLE_COUNT_1_BIT,
                      linePipeline_);
-  createSpatialPipeline(device_.getRenderPass(), device_.getMSAASamples(),
+  // Depth-tested triangles are drawn only in a 3D scene's own pass, which is
+  // where the multisampling went.
+  createSpatialPipeline(device_.spatialRenderPass(), device_.spatialSamples(),
                         spatialPipeline_, true);
   ensureBufferCapacity(kInitialVertexCapacity,
                        (kInitialVertexCapacity / 4) * 6,
@@ -1088,17 +1092,17 @@ void QuadRenderer::pushLine(vec2 p0, vec2 p1, float width, uint32_t rgba) {
 void QuadRenderer::pushPolyline(const vec2 *points, uint32_t count,
                                 uint32_t rgba) {
   if (points == nullptr || count < 2) return;
-  // A direct-draw batch must sit between the indexed batches on either side.
-  flushBatch();
-  const uint32_t first = static_cast<uint32_t>(vertices_.size());
-  vertices_.reserve(vertices_.size() + count);
-  for (uint32_t i = 0; i < count; ++i) {
-    vertices_.push_back(Vertex{.pos = points[i], .local = {0.f, 0.f},
-      .halfSize = {0.f, 0.f}, .radius = 0.f, .color = rgba,
-      .kind = static_cast<uint32_t>(Kind::Mesh)});
+  // One antialiased capsule per segment, the same SDF `pushLine` draws.
+  // It used to be a native LINE_STRIP, which has no edge of its own and was
+  // smooth only while the main pass was multisampled; at one sample it is a
+  // staircase. One pixel wide, which is what the strip was.
+  //
+  // Neighbouring capsules overlap in a round joint, so a translucent line
+  // is a shade darker at each vertex — invisible at a pixel's width, and the
+  // price of not building joins.
+  for (uint32_t i = 0; i + 1 < count; ++i) {
+    pushLine(points[i], points[i + 1], 1.0f, rgba);
   }
-  batches_.push_back(Batch{.geometry = Batch::Geometry::LineStrip,
-    .firstVertex = first, .vertexCount = count, .scissor = currentScissor_});
 }
 
 void QuadRenderer::pushSpatialTriangles(const canvas::SpatialVertex *points,
@@ -1784,8 +1788,11 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
       wanted = intoSceneTarget ? static_cast<VkPipeline>(linePipelineScene_)
                                : static_cast<VkPipeline>(linePipeline_);
     } else if (batch.geometry == Batch::Geometry::SpatialTriangles) {
+      // Outside a content blur, only in the 3D scene's own pass: the main
+      // pass has no depth to test against.
       wanted = intoSceneTarget ? static_cast<VkPipeline>(spatialPipelineScene_)
-                               : static_cast<VkPipeline>(spatialPipeline_);
+               : spatialPass_  ? static_cast<VkPipeline>(spatialPipeline_)
+                               : VK_NULL_HANDLE;
     } else if (batch.mask) {
       wanted = intoSceneTarget ? VK_NULL_HANDLE
                                : static_cast<VkPipeline>(maskPipeline_);

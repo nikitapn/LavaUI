@@ -570,9 +570,14 @@ class RenderWindow {
   /// travels with it — the rect is already baked into the composite quad that
   /// opens the following segment.
   struct Boundary {
-    enum class Kind { Backdrop, ContentBegin, ContentEnd };
+    /// `Spatial3DBegin`/`End` bracket a 3D scene's segment, which is drawn in
+    /// its own multisampled pass and composited back — see the 3D scenes note
+    /// in `replayDrawList`.
+    enum class Kind { Backdrop, ContentBegin, ContentEnd, Spatial3DBegin, Spatial3DEnd };
     Kind  kind   = Kind::Backdrop;
     float radius = 8.f;
+    /// The 3D scene's rect, in layout pixels.
+    float x = 0.f, y = 0.f, w = 0.f, h = 0.f;
   };
 
   /// Records caller-owned main content, then presents (windowed) or copies
@@ -630,9 +635,14 @@ class RenderWindow {
   void initTrace();
   void createSyncObjects();
   void createCommandBuffer();
-  void createColorResources();
+  /// A 3D scene's multisampled colour and depth, its resolve target and its
+  /// framebuffer, made the first frame one is drawn. See `spatialRenderPass`.
+  void ensureSpatialTargets();
+  bool spatialTargetsReady() const { return spatialFramebuffer_ != VK_NULL_HANDLE; }
+  /// What the main pass composites: the resolved scene.
+  VkImageView spatialResultView() const;
+  void beginSpatialPass(VkCommandBuffer commandBuffer, const Boundary &b);
   void createResolveResources();
-  void createDepthResources();
   void createStagingBuffer();
   void createFramebuffer();
 
@@ -809,6 +819,13 @@ class RenderWindow {
   /// continue (LOAD, after a backdrop blur).
   VkFramebuffer framebuffer_         = VK_NULL_HANDLE;
   VkFramebuffer framebufferContinue_ = VK_NULL_HANDLE;
+  /// The 3D scene's pass. `colorImage_` and `depthImage_` are its
+  /// multisampled attachments; this is the single-sampled image they resolve
+  /// into (none at one sample, when the colour attachment is sampled itself).
+  VkFramebuffer spatialFramebuffer_  = VK_NULL_HANDLE;
+  VkImage       spatialResolveImage_ = VK_NULL_HANDLE;
+  VmaAllocation spatialResolveAlloc_ = VK_NULL_HANDLE;
+  VkImageView   spatialResolveView_  = VK_NULL_HANDLE;
 
   // Host-visible buffer the resolve is copied into for CPU readback.
   VkBuffer      stagingBuffer_       = VK_NULL_HANDLE;

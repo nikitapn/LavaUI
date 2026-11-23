@@ -191,12 +191,11 @@ void RenderWindow::createSizedResources()
 {
   // New attachments hold nothing of the last frame.
   partialBaseline_ = false;
-  createColorResources();
-  // Not when the frame resolves into the exported buffer — that image is the
-  // resolve attachment, and a second one would only be a place to copy it to.
+  // The frame's own image — what the single-sampled main pass draws into —
+  // unless the frame lands in the exported buffer, which is then that image.
+  // Nothing multisampled and no depth here any more: those are a 3D scene's,
+  // made on demand (`ensureSpatialTargets`).
   if (!directToExport()) createResolveResources();
-  // Not when the device has one for everybody — see `setSharedDepth`.
-  if (!dev_.sharedDepth()) createDepthResources();
   // The staging buffer is allocated on demand: only a readback needs it, and
   // most windows never have one. See `ensureStagingBuffer`.
   createFramebuffer();
@@ -238,6 +237,17 @@ void RenderWindow::destroySizedResources()
     depthImageView_ = VK_NULL_HANDLE;
   }
   dev_.destroyImage(depthImage_, depthImageAlloc_);
+
+  // The 3D scene's targets, made again by the next frame that needs them.
+  if (spatialFramebuffer_ != VK_NULL_HANDLE) {
+    vkDestroyFramebuffer(dev, spatialFramebuffer_, nullptr);
+    spatialFramebuffer_ = VK_NULL_HANDLE;
+  }
+  if (spatialResolveView_ != VK_NULL_HANDLE) {
+    vkDestroyImageView(dev, spatialResolveView_, nullptr);
+    spatialResolveView_ = VK_NULL_HANDLE;
+  }
+  dev_.destroyImage(spatialResolveImage_, spatialResolveAlloc_);
 }
 
 void RenderWindow::createSwapchain()
@@ -461,34 +471,96 @@ void RenderWindow::cleanupSwapchain()
   }
 }
 
-void RenderWindow::createColorResources()
+void RenderWindow::ensureSpatialTargets()
 {
-  dev_.createImage(extent_.width,
-              extent_.height,
-              1,
-              dev_.getMSAASamples(),
-              dev_.colorFormat(),
-              VK_IMAGE_TILING_OPTIMAL,
-              // Not TRANSIENT any more: a backdrop blur ends the main pass and
-              // reopens it with LOAD_OP_LOAD, and the contents of a transient
-              // attachment are undefined between render pass instances.
-              VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-              colorImage_,
-              colorImageAlloc_,
-              canvas::GpuTag{canvas::GpuCategory::WindowColor, ownerId_,
-                             "multisampled scene attachment"});
+  if (spatialFramebuffer_ != VK_NULL_HANDLE) return;
+  // Window-sized, so a scene's triangles keep their window coordinates and
+  // the pass draws only its rect (the render area); made on the first frame
+  // that draws 3D, so a window that never does owns none of it. A resize
+  // drops them with everything else sized to the window.
+  const VkSampleCountFlagBits samples = dev_.spatialSamples();
+  const bool resolve = samples != VK_SAMPLE_COUNT_1_BIT;
+  dev_.createImage(extent_.width, extent_.height, 1, samples, dev_.colorFormat(),
+                   VK_IMAGE_TILING_OPTIMAL,
+                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                     (resolve ? 0u : VK_IMAGE_USAGE_SAMPLED_BIT),
+                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, colorImage_, colorImageAlloc_,
+                   canvas::GpuTag{canvas::GpuCategory::WindowColor, ownerId_,
+                                  "3D scene, multisampled"});
+  colorImageView_ = dev_.createImageView(colorImage_, dev_.colorFormat(),
+                                         VK_IMAGE_ASPECT_COLOR_BIT, 1);
+  const VkFormat depthFormat = dev_.findDepthFormat();
+  dev_.createImage(extent_.width, extent_.height, 1, samples, depthFormat,
+                   VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, depthImage_, depthImageAlloc_,
+                   canvas::GpuTag{canvas::GpuCategory::WindowDepth, ownerId_,
+                                  "3D scene depth"});
+  depthImageView_ = dev_.createImageView(depthImage_, depthFormat,
+                                         VK_IMAGE_ASPECT_DEPTH_BIT, 1);
+  std::vector<VkImageView> attachments{colorImageView_, depthImageView_};
+  if (resolve) {
+    dev_.createImage(extent_.width, extent_.height, 1, VK_SAMPLE_COUNT_1_BIT,
+                     dev_.colorFormat(), VK_IMAGE_TILING_OPTIMAL,
+                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, spatialResolveImage_,
+                     spatialResolveAlloc_,
+                     canvas::GpuTag{canvas::GpuCategory::WindowResolve, ownerId_,
+                                    "3D scene, resolved for compositing"});
+    spatialResolveView_ = dev_.createImageView(spatialResolveImage_, dev_.colorFormat(),
+                                               VK_IMAGE_ASPECT_COLOR_BIT, 1);
+    attachments.push_back(spatialResolveView_);
+  }
+  VkFramebufferCreateInfo info{
+    .sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+    .renderPass      = dev_.spatialRenderPass(),
+    .attachmentCount = static_cast<uint32_t>(attachments.size()),
+    .pAttachments    = attachments.data(),
+    .width           = extent_.width,
+    .height          = extent_.height,
+    .layers          = 1,
+  };
+  VR(vkCreateFramebuffer(dev_.getDevice(), &info, nullptr, &spatialFramebuffer_),
+     "failed to create the 3D scene framebuffer!");
+}
 
-  colorImageView_ = dev_.createImageView(
-    colorImage_, dev_.colorFormat(), VK_IMAGE_ASPECT_COLOR_BIT, 1);
+VkImageView RenderWindow::spatialResultView() const
+{
+  return spatialResolveView_ != VK_NULL_HANDLE ? spatialResolveView_ : colorImageView_;
+}
+
+void RenderWindow::beginSpatialPass(VkCommandBuffer commandBuffer, const Boundary &b)
+{
+  // The scene's rect, from layout to framebuffer pixels, outward.
+  const float sx = static_cast<float>(extent_.width) / static_cast<float>(logical_.width);
+  const float sy = static_cast<float>(extent_.height) / static_cast<float>(logical_.height);
+  const int32_t x0 = std::max(0, static_cast<int32_t>(std::floor(b.x * sx)));
+  const int32_t y0 = std::max(0, static_cast<int32_t>(std::floor(b.y * sy)));
+  const int32_t x1 = std::min(static_cast<int32_t>(extent_.width),
+                              static_cast<int32_t>(std::ceil((b.x + b.w) * sx)));
+  const int32_t y1 = std::min(static_cast<int32_t>(extent_.height),
+                              static_cast<int32_t>(std::ceil((b.y + b.h) * sy)));
+  std::array<VkClearValue, 2> clearValues{};
+  clearValues[0].color = {{0.f, 0.f, 0.f, 0.f}};
+  clearValues[1].depthStencil = {1.0f, 0};
+  VkRenderPassBeginInfo info{
+    .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+    .renderPass      = dev_.spatialRenderPass(),
+    .framebuffer     = spatialFramebuffer_,
+    .renderArea      = {{x0, y0},
+                        {static_cast<uint32_t>(std::max(0, x1 - x0)),
+                         static_cast<uint32_t>(std::max(0, y1 - y0))}},
+    .clearValueCount = static_cast<uint32_t>(clearValues.size()),
+    .pClearValues    = clearValues.data(),
+  };
+  vkCmdBeginRenderPass(commandBuffer, &info, VK_SUBPASS_CONTENTS_INLINE);
 }
 
 void RenderWindow::createResolveResources()
 {
-  // Single-sample target the MSAA color attachment resolves into. Unlike
-  // colorImage_ (TRANSIENT_ATTACHMENT_BIT, MSAA scratch), this one needs
-  // TRANSFER_SRC (readPixels / present blit / blur capture) and TRANSFER_DST
-  // (composite blurred region back under glass panels).
+  // The frame: what the single-sampled main pass draws into, when it is not
+  // drawing into the exported buffer. TRANSFER_SRC for the present blit, a
+  // readback and a blur capture; TRANSFER_DST for compositing a blurred
+  // region back under glass panels.
   dev_.createImage(extent_.width,
               extent_.height,
               1,
@@ -506,29 +578,6 @@ void RenderWindow::createResolveResources()
 
   resolveImageView_ = dev_.createImageView(
     resolveImage_, dev_.colorFormat(), VK_IMAGE_ASPECT_COLOR_BIT, 1);
-}
-
-void RenderWindow::createDepthResources()
-{
-  VkFormat depthFormat = dev_.findDepthFormat();
-
-  dev_.createImage(extent_.width,
-              extent_.height,
-              1,
-              dev_.getMSAASamples(),
-              depthFormat,
-              VK_IMAGE_TILING_OPTIMAL,
-              VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-              depthImage_,
-              depthImageAlloc_,
-              canvas::GpuTag{canvas::GpuCategory::WindowDepth, ownerId_,
-                             "multisampled depth attachment"});
-
-  depthImageView_ = dev_.createImageView(depthImage_, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1);
-
-  // Transition depth image to depth-stencil attachment optimal layout
-  dev_.transitionImageLayout(depthImage_, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 }
 
 void RenderWindow::ensureStagingBuffer()
@@ -619,15 +668,11 @@ void RenderWindow::rebuildFramebuffer()
 
 void RenderWindow::createFramebuffer()
 {
-  // Asking for the shared view may *grow* it, which rebuilds every other
-  // window's framebuffer — so ask before naming the attachments, not inside the
-  // array initialiser where the order is up to the compiler.
-  const VkImageView depthView =
-    dev_.sharedDepth() ? dev_.sharedDepthView(extent_.width, extent_.height)
-                       : depthImageView_;
-  VkImageView attachments[] = {colorImageView_, depthView, frameImageView()};
+  // One attachment: the frame itself. The main pass is single-sampled and has
+  // no depth — see `RenderDevice::createRenderPass`.
+  VkImageView attachments[] = {frameImageView()};
 
-  // The resolve attachment may be *larger* than the framebuffer: an exported
+  // The attachment may be *larger* than the framebuffer: an exported
   // buffer is allocated in steps so a resize can reuse it, and the frame
   // occupies its top-left corner. A framebuffer smaller than its attachments
   // is legal and is what makes the corner the render area — the same
@@ -636,7 +681,7 @@ void RenderWindow::createFramebuffer()
     VkFramebufferCreateInfo framebufferInfo {
       .sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
       .renderPass      = rp,
-      .attachmentCount = 3,
+      .attachmentCount = 1,
       .pAttachments    = attachments,
       .width           = extent_.width,
       .height          = extent_.height,
@@ -706,27 +751,10 @@ void RenderWindow::beginMainRenderPass(VkCommandBuffer commandBuffer, bool clear
                                        const VkRect2D *area)
 {
   if (!clear) {
-    // The multisampled image is about to be loaded, and what it holds was
-    // written as an attachment — by the pass before a blur, or by the last
-    // frame, which may still be on the GPU. Same queue, so a barrier is
-    // enough to order the two.
-    VkImageMemoryBarrier msaa{
-      .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-      .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-      .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
-                       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-      .oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-      .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-      .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-      .image = colorImage_,
-      .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
-    };
-    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr,
-                         0, nullptr, 1, &msaa);
-    // After a blur segment, resolve is TRANSFER_SRC; continue pass needs it
-    // as a color attachment with LOAD.
+    // Every pass leaves the frame in TRANSFER_SRC — a blur capture, a 3D
+    // scene, the last frame's blit or readback — and the continue pass loads
+    // it as a colour attachment. The colour writes before that are ordered by
+    // the pass's own dependency into TRANSFER, which this chains from.
     VkImageMemoryBarrier toColor{
       .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
       .srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT,
@@ -748,10 +776,9 @@ void RenderWindow::beginMainRenderPass(VkCommandBuffer commandBuffer, bool clear
       1, &toColor);
   }
 
-  std::array<VkClearValue, 2> clearValues {};
+  std::array<VkClearValue, 1> clearValues {};
   // Alpha 0 for a surface someone else composites; see `setTransparent`.
   clearValues[0].color = {{0.0f, 0.0f, 0.0f, transparent_ ? 0.0f : 1.0f}};
-  clearValues[1].depthStencil = {1.0f, 0};
 
   VkRenderPassBeginInfo renderPassInfo {
     .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
@@ -910,9 +937,13 @@ void RenderWindow::submitFrame(
       .image = swapImage,
       .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
     };
+    // From the stage the acquire semaphore is waited at, not TOP_OF_PIPE: the
+    // presentation engine may still be reading this image until the semaphore
+    // signals, and only a barrier that starts from the waited stage is
+    // ordered after it.
     vkCmdPipelineBarrier(
       cmd,
-      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
       VK_PIPELINE_STAGE_TRANSFER_BIT,
       0, 0, nullptr, 0, nullptr, 1, &toDst);
 
@@ -1750,8 +1781,45 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
   // Must match the slot waitForInFlightFrame() just freed / submit will use.
   quads_.begin({viewW, viewH}, currentFrameSlot());
 
+  // ─── 3D scenes ───────────────────────────────────────────────────────────
+  //
+  // Depth-tested triangles are drawn off the main pass, in a multisampled
+  // one of their own, and composited back where they stood in the list.
+  // A *run* is a stretch of `spatialTriangles` outside any content blur: it
+  // opens at the first, becomes a segment of its own between two
+  // `Spatial3D` boundaries, and closes before whatever comes next — the
+  // composite is pushed there, so everything drawn after the scene in the
+  // list is drawn over it, as it was in one pass. The rect is the scene's
+  // (`spatialBegin`) within the scissor in force; a shadow or reflection
+  // inside a `withSpatialBlur` is in a content blur and stays where it was.
+  bool spatialRunOpen = false;
+  float spatialSceneX = 0.f, spatialSceneY = 0.f;
+  float spatialSceneW = -1.f, spatialSceneH = -1.f;  // < 0: no spatialBegin yet
+  canvas::DrawCommand spatialRun{};
+  const auto closeSpatialRun = [&] {
+    if (!spatialRunOpen) return;
+    spatialRunOpen = false;
+    quads_.closeSegment();
+    outBoundaries.push_back(
+      {Boundary::Kind::Spatial3DEnd, 0.f, spatialRun.x, spatialRun.y,
+       spatialRun.w, spatialRun.h});
+    if (spatialTargetsReady()) {
+      quads_.setGlass({});
+      quads_.pushImage({spatialRun.x, spatialRun.y}, {spatialRun.w, spatialRun.h},
+                       {spatialRun.x / viewW, spatialRun.y / viewH},
+                       {(spatialRun.x + spatialRun.w) / viewW,
+                        (spatialRun.y + spatialRun.h) / viewH},
+                       0xffffffffu, spatialResultView());
+    }
+  };
+
   for (size_t cmdIndex = 0; cmdIndex < list.commandCount; ++cmdIndex) {
     const auto &cmd = list.commands[cmdIndex];
+    if (spatialRunOpen &&
+        static_cast<canvas::DrawCommandKind>(cmd.kind) !=
+          canvas::DrawCommandKind::spatialTriangles) {
+      closeSpatialRun();
+    }
     switch (static_cast<canvas::DrawCommandKind>(cmd.kind)) {
     case canvas::DrawCommandKind::beginNode: {
       OpenNode node;
@@ -2266,6 +2334,31 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
     case canvas::DrawCommandKind::spatialTriangles: {
       uint32_t first = 0, count = 0;
       if (!sideBufferRange(cmd, list.spatialVertexCount, 3, first, count)) break;
+      if (!spatialRunOpen && contentScopes.empty()) {
+        // The scene's rect, cut to the scissor in force, in whole layout
+        // pixels so the composite samples the resolved scene texel for texel.
+        const VkRect2D sc = quads_.scissor();
+        float x0 = static_cast<float>(sc.offset.x);
+        float y0 = static_cast<float>(sc.offset.y);
+        float x1 = x0 + static_cast<float>(sc.extent.width);
+        float y1 = y0 + static_cast<float>(sc.extent.height);
+        if (spatialSceneW >= 0.f) {
+          x0 = std::max(x0, std::floor(spatialSceneX));
+          y0 = std::max(y0, std::floor(spatialSceneY));
+          x1 = std::min(x1, std::ceil(spatialSceneX + spatialSceneW));
+          y1 = std::min(y1, std::ceil(spatialSceneY + spatialSceneH));
+        }
+        if (x1 <= x0 || y1 <= y0) break;  // nothing of the scene is visible
+        quads_.closeSegment();
+        spatialRun = {};
+        spatialRun.x = x0;
+        spatialRun.y = y0;
+        spatialRun.w = x1 - x0;
+        spatialRun.h = y1 - y0;
+        outBoundaries.push_back(
+          {Boundary::Kind::Spatial3DBegin, 0.f, x0, y0, x1 - x0, y1 - y0});
+        spatialRunOpen = true;
+      }
       VkImageView texture = VK_NULL_HANDLE;
       vec2 uv0{0.f, 0.f}, uv1{1.f, 1.f};
       uint32_t texId = 0;
@@ -2288,12 +2381,16 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       break;
     }
     case canvas::DrawCommandKind::spatialBegin:
-      // The rect this clears depth over moves with the node, and so do the
-      // triangles drawn into it — a `SpatialVertex` carries window pixels,
-      // the producer having already projected them, so the node's transform
-      // is a translation like any other. Clipping needs nothing special
-      // either: the triangles take the scissor an enclosing node pushed.
-      quads_.pushSpatialBegin({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h});
+      // Where the next scene's triangles land — the rect its pass is drawn
+      // in and its composite covers. It moves with the node, and so do the
+      // triangles: a `SpatialVertex` carries window pixels, the producer
+      // having already projected them, so the node's transform is a
+      // translation like any other. Depth needs no clearing here any more:
+      // each scene's pass starts from a cleared depth buffer of its own.
+      spatialSceneX = cmd.x + ox;
+      spatialSceneY = cmd.y + oy;
+      spatialSceneW = cmd.w;
+      spatialSceneH = cmd.h;
       break;
     case canvas::DrawCommandKind::image:
     case canvas::DrawCommandKind::imageSurface: {
@@ -2427,6 +2524,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
     }
     }
   }
+  closeSpatialRun();
 
   // A list that ends with nodes still open is not a protocol error to punish
   // — it is what a producer that ran out of arena mid-frame publishes. Close
@@ -2949,8 +3047,7 @@ void RenderWindow::render(const canvas::DrawList &list)
   // Each boundary below is a point where the GPU has to stop drawing the frame
   // and do something else. Segment i is drawn, boundaries[i] runs, then segment
   // i+1 — whose first quad is usually the composite of whatever the boundary
-  // produced. (Backdrop compositing must land in MSAA, not just the resolve,
-  // or the next pass's resolve wipes it.)
+  // produced: a blur's, or a 3D scene's from its own pass.
   //
   // Sizing has to happen *before* replay, not after: replay bakes the
   // composite quads' UVs, and those depend on the allocation. Reallocating
@@ -2970,9 +3067,12 @@ void RenderWindow::render(const canvas::DrawList &list)
   // sharp backdrop, which bends a window-sized capture rather than the
   // pyramid's half-size one. The same test replay makes for the radius.
   bool  anySharp     = false;
+  // A 3D scene's targets have to exist before replay, which composites them.
+  bool  anySpatial   = false;
   for (size_t cmdIndex = 0; cmdIndex < list.commandCount; ++cmdIndex) {
     const auto kind =
       static_cast<canvas::DrawCommandKind>(list.commands[cmdIndex].kind);
+    if (kind == canvas::DrawCommandKind::spatialTriangles) anySpatial = true;
     if (kind != canvas::DrawCommandKind::beginBackdropBlur &&
         kind != canvas::DrawCommandKind::beginContentBlur) {
       continue;
@@ -3046,6 +3146,8 @@ void RenderWindow::render(const canvas::DrawList &list)
     // it is the quad renderer that records the viewport.
     quads_.setSceneTargetScale(BlurPass::captureScale());
   }
+
+  if (anySpatial) ensureSpatialTargets();
 
   std::vector<Boundary> boundaries;
   const auto replayStart = std::chrono::steady_clock::now();
@@ -3128,6 +3230,30 @@ void RenderWindow::render(const canvas::DrawList &list)
       uint32_t segment = 0;
       for (const auto &b : boundaries) {
         ++segment;
+        // A 3D scene: its segment into its own multisampled pass, then the
+        // main pass again, whose next segment opens with the composite. With
+        // no targets (they could not be made) the scene draws nothing and
+        // the main pass simply carries on.
+        if (b.kind == Boundary::Kind::Spatial3DBegin) {
+          if (spatialTargetsReady()) {
+            endMainRenderPass(commandBuffer);
+            beginSpatialPass(commandBuffer, b);
+            CANVAS_GPU_ZONE(gpuTrace_, commandBuffer, "3D scene");
+            quads_.setSpatialPass(true);
+            quads_.drawSegment(commandBuffer, segment);
+            quads_.setSpatialPass(false);
+          }
+          continue;
+        }
+        if (b.kind == Boundary::Kind::Spatial3DEnd) {
+          if (spatialTargetsReady()) {
+            vkCmdEndRenderPass(commandBuffer);
+            beginMainRenderPass(commandBuffer, /*clear=*/false);
+          }
+          CANVAS_GPU_ZONE(gpuTrace_, commandBuffer, "Segment");
+          quads_.drawSegment(commandBuffer, segment);
+          continue;
+        }
         if (!blur_.ready() || !blur_.sceneReady()) {
           // No blur resources: draw the segment unblurred rather than
           // half-executing a boundary and leaving passes unbalanced.
@@ -3179,6 +3305,9 @@ void RenderWindow::render(const canvas::DrawList &list)
             quads_.drawSegment(commandBuffer, segment);
           }
           break;
+        case Boundary::Kind::Spatial3DBegin:
+        case Boundary::Kind::Spatial3DEnd:
+          break;  // handled above
         }
       }
 

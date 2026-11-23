@@ -89,7 +89,7 @@ struct OverviewPage: View {
                     Row(label: report.deviceName.isEmpty ? "no GPU device"
                                                          : report.deviceName,
                         value: "", emphasis: true)
-                    Row(label: "MSAA samples",
+                    Row(label: "MSAA samples for 3D scenes",
                         value: "\(report.samples)x",
                         detail: report.samples == report.maxSamples
                             ? "the most this device allows"

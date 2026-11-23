@@ -152,6 +152,9 @@ public final class AgentServer: @unchecked Sendable {
     private let wakeMainLoop: @Sendable () -> Void
     private let fdLock = NSLock()
     private var stopWatcher = false
+    /// A wake is posted and the main loop has not serviced the agent since.
+    /// Under `fdLock`. See `watcherLoop`.
+    private var wakePending = false
     private var watcherThread: Thread?
 
     /// Binds 127.0.0.1:`port` and starts listening.
@@ -208,6 +211,11 @@ public final class AgentServer: @unchecked Sendable {
     /// Non-blocking: accept clients and process complete request lines.
     /// Call on the UI thread after `pumpEvents` returns.
     public func poll() {
+        // Serviced: the watcher may wake the loop again for whatever is
+        // still, or newly, waiting.
+        fdLock.lock()
+        wakePending = false
+        fdLock.unlock()
         acceptIfNeeded()
         guard clientFd >= 0 else { return }
         readAvailable()
@@ -255,7 +263,27 @@ public final class AgentServer: @unchecked Sendable {
             if stopWatcher { break }
             if n > 0 {
                 // Accept pending or request bytes ready — unblock pumpEvents.
-                wakeMainLoop()
+                //
+                // Once, then not again until `poll` has run. `poll(2)` is
+                // level-triggered, and a socket stays readable until the main
+                // loop accepts or reads it — a closed connection forever, until
+                // it is closed — so waking on every return spun this thread,
+                // and each wake is a `glfwPostEmptyEvent`, which on Wayland is a
+                // `wl_display.sync`. A frame long enough to let a few hundred
+                // pile up overflowed the compositor's 4 KiB per-client buffer
+                // ("Data too big for buffer"), and libwayland disconnected the
+                // window.
+                fdLock.lock()
+                let first = !wakePending
+                wakePending = true
+                fdLock.unlock()
+                if first {
+                    wakeMainLoop()
+                } else {
+                    // Still waiting on the main loop: do not spin on a socket
+                    // that will read as ready until it gets there.
+                    usleep(2000)
+                }
             }
         }
     }

@@ -237,9 +237,9 @@ layout = us
 # click = default
 
 [render]
-# Multisampling for every surface the compositor draws: 1, 2, 4 (default) or 8,
-# clamped to what the GPU supports. A memory setting as much as a quality one —
-# see below.
+# Multisampling for 3D scenes (the switcher's shelf, a Scene3D): 1, 2, 4
+# (default) or 8, clamped to what the GPU supports. Nothing else is
+# multisampled — see below.
 # msaa = 4
 # How long a wheel scroll takes to settle, in milliseconds (default 75): the
 # time constant of the ease, so it is mostly there in that long. `off` (or 0)
@@ -269,6 +269,12 @@ position = 0,0
 2 = Work
 3 = Games
 ```
+
+**Only 3D scenes are multisampled now** (since 2026-11-23): every surface's
+main pass is single-sampled, and a `Scene3D` is drawn in a pass of its own at
+this sample count and composited back. So the cost below is paid by a surface
+that draws 3D, and only once it has — the rest of this paragraph is how the
+decision was argued.
 
 `msaa` costs about 16 MiB per surface per step at 1920x1080, and there is one
 surface per client window plus one each for its title bar, its shadow and the

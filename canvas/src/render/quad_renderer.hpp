@@ -448,6 +448,13 @@ class QuadRenderer {
   /// is not recorded at all. A partial redraw draws the frame once per
   /// damaged rectangle this way. `clearDamageClip` lifts it.
   void setDamageClip(VkRect2D rect) { damageClip_ = rect; hasDamageClip_ = true; }
+
+  /// The scissor in force for what is pushed next, in layout pixels.
+  VkRect2D scissor() const { return currentScissor_; }
+
+  /// Whether `drawSegment` is recording into a 3D scene's own pass
+  /// (`RenderDevice::spatialRenderPass`), where depth-tested triangles go.
+  void setSpatialPass(bool on) { spatialPass_ = on; }
   void clearDamageClip() { hasDamageClip_ = false; }
 
   void drawSegment(VkCommandBuffer commandBuffer, uint32_t segmentIndex,
@@ -638,6 +645,7 @@ class QuadRenderer {
   /// See `setDamageClip`.
   VkRect2D damageClip_{};
   bool hasDamageClip_ = false;
+  bool spatialPass_ = false;
   /// See `setDeviceScale`.
   float deviceScaleX_ = 1.f;
   float deviceScaleY_ = 1.f;

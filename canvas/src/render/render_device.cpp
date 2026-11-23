@@ -1119,87 +1119,71 @@ bool RenderDevice::hasStencilComponent(VkFormat format)
 
 void RenderDevice::createRenderPass()
 {
+  // The main pass: one single-sampled colour attachment, which is the frame
+  // itself — the window's resolve image or the exported dma-buf. No
+  // multisampling and no depth. Everything 2D antialiases itself (SDF quads,
+  // coverage glyphs, the fringe `pushMesh` builds, polylines drawn as
+  // capsules), so a 4× attachment bought ~0.01% of the pixels at a quarter of
+  // a window's VRAM and a resolve per frame; the one thing that needs it, a
+  // depth-tested 3D scene, gets a pass of its own (`spatialRenderPass`).
   auto makePass = [&](bool clear, VkRenderPass *out) {
-    std::array<VkAttachmentDescription, 3> attachments {
-      // colorAttachment (MSAA)
-      VkAttachmentDescription {
-        .format         = colorFormat_,
-        .samples        = msaaSamples_,
-        .loadOp         = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR
-                                : VK_ATTACHMENT_LOAD_OP_LOAD,
-        .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
-        .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .initialLayout  = clear ? VK_IMAGE_LAYOUT_UNDEFINED
-                                : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        .finalLayout    = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-      },
-      // depthAttachment
-      VkAttachmentDescription {
-        .format         = findDepthFormat(),
-        .samples        = msaaSamples_,
-        .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp        = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED,
-        .finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-      },
-      // resolve — sampleable / transferable after the pass
-      VkAttachmentDescription {
-        .format         = colorFormat_,
-        .samples        = VK_SAMPLE_COUNT_1_BIT,
-        .loadOp         = clear ? VK_ATTACHMENT_LOAD_OP_DONT_CARE
-                                : VK_ATTACHMENT_LOAD_OP_LOAD,
-        .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
-        .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .initialLayout  = clear ? VK_IMAGE_LAYOUT_UNDEFINED
-                                : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        .finalLayout    = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-      },
+    VkAttachmentDescription color {
+      .format         = colorFormat_,
+      .samples        = VK_SAMPLE_COUNT_1_BIT,
+      .loadOp         = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR
+                              : VK_ATTACHMENT_LOAD_OP_LOAD,
+      .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
+      .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+      .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+      .initialLayout  = clear ? VK_IMAGE_LAYOUT_UNDEFINED
+                              : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+      // Read after the pass: by a blur capture, the present blit, a readback.
+      .finalLayout    = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
     };
-
-    VkAttachmentReference colorAttachmentRef {
+    VkAttachmentReference colorRef {
       .attachment = 0,
       .layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
     };
-    VkAttachmentReference depthAttachmentRef {
-      .attachment = 1,
-      .layout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-    };
-    VkAttachmentReference colorAttachmentResolveRef {
-      .attachment = 2,
-      .layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-    };
-
     VkSubpassDescription subpass {
-      .pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS,
-      .colorAttachmentCount    = 1,
-      .pColorAttachments       = &colorAttachmentRef,
-      .pResolveAttachments     = &colorAttachmentResolveRef,
-      .pDepthStencilAttachment = &depthAttachmentRef,
+      .pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS,
+      .colorAttachmentCount = 1,
+      .pColorAttachments    = &colorRef,
     };
-
-    VkSubpassDependency dependency {
-      .srcSubpass    = 0,
-      .dstSubpass    = VK_SUBPASS_EXTERNAL,
-      .srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-      .dstStageMask  = VK_PIPELINE_STAGE_TRANSFER_BIT,
-      .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-      .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
-    };
-
+    std::array<VkSubpassDependency, 2> dependencies {{
+      // In: the frame image was last *read* — by the previous frame's present
+      // blit or readback, or a blur capture — and the pass is about to
+      // transition and write it. An execution dependency is all a
+      // write-after-read needs; without it the clear could overtake the blit
+      // (the synchronization validation layer's WRITE_AFTER_READ).
+      {
+        .srcSubpass    = VK_SUBPASS_EXTERNAL,
+        .dstSubpass    = 0,
+        .srcStageMask  = VK_PIPELINE_STAGE_TRANSFER_BIT |
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .srcAccessMask = 0,
+        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                         VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+      },
+      // Out: whoever reads the frame next — a blit, a copy, a blur capture.
+      {
+        .srcSubpass    = 0,
+        .dstSubpass    = VK_SUBPASS_EXTERNAL,
+        .srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .dstStageMask  = VK_PIPELINE_STAGE_TRANSFER_BIT,
+        .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+      },
+    }};
     VkRenderPassCreateInfo renderPassInfo {
       .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-      .attachmentCount = 3,
-      .pAttachments    = attachments.data(),
+      .attachmentCount = 1,
+      .pAttachments    = &color,
       .subpassCount    = 1,
       .pSubpasses      = &subpass,
-      .dependencyCount = 1,
-      .pDependencies   = &dependency,
+      .dependencyCount = static_cast<uint32_t>(dependencies.size()),
+      .pDependencies   = dependencies.data(),
     };
-
     const char *msg = clear ? "failed to create render pass!"
                             : "failed to create continue render pass!";
     VR(vkCreateRenderPass(device_, &renderPassInfo, nullptr, out), msg);
@@ -1207,6 +1191,108 @@ void RenderDevice::createRenderPass()
 
   makePass(true, &renderPass_);
   makePass(false, &renderPassContinue_);
+  createSpatialRenderPass();
+}
+
+void RenderDevice::createSpatialRenderPass()
+{
+  // A 3D scene's own pass: multisampled colour and depth, resolved into a
+  // single-sampled image the main pass then composites like any picture.
+  // Cleared to transparent, so what is composited is the scene's own
+  // silhouette, premultiplied as every pipeline here draws.
+  //
+  // At one sample — a device without MSAA, or `LAVA_MSAA=1` — there is
+  // nothing to resolve, and the colour attachment is the composited image.
+  const bool resolve = msaaSamples_ != VK_SAMPLE_COUNT_1_BIT;
+  std::vector<VkAttachmentDescription> attachments {
+    VkAttachmentDescription {
+      .format         = colorFormat_,
+      .samples        = msaaSamples_,
+      .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR,
+      .storeOp        = resolve ? VK_ATTACHMENT_STORE_OP_DONT_CARE
+                                : VK_ATTACHMENT_STORE_OP_STORE,
+      .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+      .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+      .initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED,
+      .finalLayout    = resolve ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    },
+    VkAttachmentDescription {
+      .format         = findDepthFormat(),
+      .samples        = msaaSamples_,
+      .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR,
+      .storeOp        = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+      .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+      .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+      .initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED,
+      .finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    },
+  };
+  if (resolve) {
+    attachments.push_back(VkAttachmentDescription {
+      .format         = colorFormat_,
+      .samples        = VK_SAMPLE_COUNT_1_BIT,
+      .loadOp         = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+      .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
+      .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+      .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+      .initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED,
+      .finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    });
+  }
+  VkAttachmentReference colorRef {
+    .attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+  VkAttachmentReference depthRef {
+    .attachment = 1, .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+  VkAttachmentReference resolveRef {
+    .attachment = 2, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+  VkSubpassDescription subpass {
+    .pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS,
+    .colorAttachmentCount    = 1,
+    .pColorAttachments       = &colorRef,
+    .pResolveAttachments     = resolve ? &resolveRef : nullptr,
+    .pDepthStencilAttachment = &depthRef,
+  };
+  // In: the previous scene's composite may still be sampling the image this
+  // pass is about to overwrite, and its depth writes precede these. Out: the
+  // composite that follows samples what was resolved.
+  std::array<VkSubpassDependency, 2> dependencies {{
+    {
+      .srcSubpass    = VK_SUBPASS_EXTERNAL,
+      .dstSubpass    = 0,
+      .srcStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                       VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+      .dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                       VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                       VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+      .srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
+                       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                       VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+      .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                       VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                       VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+    },
+    {
+      .srcSubpass    = 0,
+      .dstSubpass    = VK_SUBPASS_EXTERNAL,
+      .srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+      .dstStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+      .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+      .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+    },
+  }};
+  VkRenderPassCreateInfo info {
+    .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+    .attachmentCount = static_cast<uint32_t>(attachments.size()),
+    .pAttachments    = attachments.data(),
+    .subpassCount    = 1,
+    .pSubpasses      = &subpass,
+    .dependencyCount = static_cast<uint32_t>(dependencies.size()),
+    .pDependencies   = dependencies.data(),
+  };
+  VR(vkCreateRenderPass(device_, &info, nullptr, &spatialRenderPass_),
+     "failed to create the 3D scene render pass!");
 }
 
 void RenderDevice::createCommandPool()
@@ -1871,6 +1957,10 @@ void RenderDevice::cleanUp()
   if (renderPass_ != VK_NULL_HANDLE) {
     vkDestroyRenderPass(device_, renderPass_, nullptr);
     renderPass_ = VK_NULL_HANDLE;
+  }
+  if (spatialRenderPass_ != VK_NULL_HANDLE) {
+    vkDestroyRenderPass(device_, spatialRenderPass_, nullptr);
+    spatialRenderPass_ = VK_NULL_HANDLE;
   }
   if (renderPassContinue_ != VK_NULL_HANDLE) {
     vkDestroyRenderPass(device_, renderPassContinue_, nullptr);

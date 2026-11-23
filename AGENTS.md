@@ -660,7 +660,7 @@ reproducible, completely fictional bug.
 | `LAVA_IMAGE_CACHE_MB=N` | The dormant half of that — the most held on spec when there is room (default 256) |
 | `LAVA_IMAGE_SPECULATION=0`/`1` | Pins the dormant half off/on instead of following the screens. A test lever — see `Server::syncImageSpeculation` |
 | `LAVA_TEST_DROP=a:b:c` | Compositor: files that `kill -USR1` delivers as a synthetic file drop. A Wayland drag needs a real pointer press on a real device, which headless has not — see `Server::deliverTestDrop`. `LAVA_TEST_DROP_BUTTON=1` makes it a right-button drop |
-| `LAVA_MSAA=N` | Any canvas process: cap multisampling at N (1/2/4/8). Overrides `[render] msaa`; the way to A/B a session without a rebuild |
+| `LAVA_MSAA=N` | Any canvas process: the sample count of a **3D scene's own pass** (1/2/4/8; 4 by default) — the main pass is single-sampled regardless. Overrides `[render] msaa` |
 | `LAVA_SCROLL_EASING=N` | Any canvas process: how long a wheel scroll takes to settle, in ms (`off`/0: each notch lands in one frame). Overrides `[render] scroll-easing` (default 75) |
 | `LAVA_PARTIAL_REDRAW=0` | Any canvas process: draw every frame whole, as before, instead of only the tiles `FrameDamage` found changed (`RenderWindow::recordPartialRedraw`). The A/B, and the escape hatch for a stale region — a texture whose pixels changed under the same image view is the one case the tile hashes cannot see |
 | `LAVA_FULL_DAMAGE=1` | Compositor: damage a Lava surface's whole buffer on every frame, as before, instead of only the tiles whose submitted quads changed (`canvas::FrameDamage`). The A/B for stale pixels; pair with `WLR_SCENE_DEBUG_DAMAGE=highlight` to see what each frame recomposites |
@@ -899,7 +899,25 @@ a real triangle edge: `Scene3D` in the switcher, `Mesh`/`Polyline` charts, FBD
 diagrams. Set `[render] msaa` (or `LAVA_MSAA`) and look at one of those before
 concluding 2 is free.
 
-**Depth is one image for the whole device, not one per window.** It is
+**Since 2026-11-23 the main pass is not multisampled at all.** It is one
+single-sampled attachment, the frame itself (the resolve image or the exported
+dma-buf), with no depth. Of the triangle edges above, `Mesh` already had an
+analytic fringe (`pushMesh`) and `Polyline` is now a run of the same
+antialiased capsules `line` draws; a `Scene3D` is drawn in a pass of its own
+(`RenderDevice::spatialRenderPass`): each run of depth-tested triangles
+becomes a segment between `Spatial3DBegin`/`End` boundaries, drawn into a
+window-sized multisampled colour and depth pair at `[render] msaa`, resolved,
+and composited back where it stood in the list — the targets made on the first
+frame that draws 3D, so a window that never does owns none. Measured: an editor
+surface's accounted VRAM **30.4 MiB → 4.1 MiB** (the 10.2 MiB multisampled
+colour and 15.0 MiB depth gone); HelloWorld windowed differs from the MSAA
+build in 584 of 921,600 pixels, LavaEditor in 402, none of it visible at 4×
+zoom.
+
+**Depth is one image for the whole device, not one per window.** (Historical
+since the main pass lost its depth — see above. `setSharedDepth` is still
+called and still works, but nothing asks for the shared view any more; a 3D
+scene's depth is its window's own.) It is
 per-frame scratch — cleared at pass start, `DONT_CARE` at the end, and only
 `Scene3D`'s pipeline even tests it — so 34 windows meant 34 copies of a
 scratchpad, 28% of the session's VRAM. `RenderDevice::setSharedDepth` gives them

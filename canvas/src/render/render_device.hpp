@@ -245,6 +245,8 @@ class RenderDevice
   VkRenderPass                     renderPass_ = VK_NULL_HANDLE;
   /// Same attachments as renderPass_ but LOAD (continue after backdrop blur).
   VkRenderPass                     renderPassContinue_ = VK_NULL_HANDLE;
+  /// See `spatialRenderPass`.
+  VkRenderPass                     spatialRenderPass_ = VK_NULL_HANDLE;
   VkCommandPool                    commandPool_ = VK_NULL_HANDLE;
 
   /// Sample count every render pass and pipeline is built for. Device-wide,
@@ -323,6 +325,7 @@ class RenderDevice
   // Step 3: Create render pass, command pool
   /// Clear pass (first UI segment) + continue pass (LOAD after blur).
   void createRenderPass();
+  void createSpatialRenderPass();
   void createCommandPool();
   void createDescriptorPool();
   void createDescriptorSet();
@@ -545,6 +548,14 @@ class RenderDevice
   VkCommandPool                     getCommandPool() { return commandPool_; }
   VkRenderPass                      getRenderPass() { return renderPass_; }
   VkRenderPass                      renderPassContinue() const { return renderPassContinue_; }
+  /// The pass a 3D scene is drawn in, off the main pass: multisampled colour
+  /// and depth at `spatialSamples`, resolved to a picture the main pass
+  /// composites. Attachments: colour, depth, and the resolve target when
+  /// there is more than one sample.
+  VkRenderPass                      spatialRenderPass() const { return spatialRenderPass_; }
+  /// What a 3D scene is multisampled at — the old window-wide MSAA setting
+  /// (`[render] msaa`, `LAVA_MSAA`), now spent on 3D alone.
+  VkSampleCountFlagBits             spatialSamples() const noexcept { return msaaSamples_; }
   const VkPhysicalDeviceProperties &getDeviceProperties()
   {
     return physicalDeviceProperties_;
