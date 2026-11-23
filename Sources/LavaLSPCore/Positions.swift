@@ -40,6 +40,9 @@ public struct DocumentPositions: Sendable {
         var start: String.Index
         var end: String.Index
         var offset: Int
+        /// Characters on the line when it is all ASCII — then a Character is
+        /// a byte and a UTF-16 unit, and a column is an offset — else nil.
+        var asciiLength: Int?
     }
 
     public let text: String
@@ -87,7 +90,8 @@ public struct DocumentPositions: Sendable {
             }
             let start = utf8.index(utf8.startIndex, offsetBy: startByte)
             let end = utf8.index(utf8.startIndex, offsetBy: endByte)
-            lines.append(Line(start: start, end: end, offset: offset))
+            lines.append(Line(start: start, end: end, offset: offset,
+                              asciiLength: line.ascii ? endByte - startByte : nil))
             offset += line.ascii ? endByte - startByte : text[start..<end].count
             if !last { offset += 1 }
             startByte = min(line.end + 1, total)
@@ -109,6 +113,9 @@ public struct DocumentPositions: Sendable {
             }
         }
         let line = lines[low]
+        if line.asciiLength != nil {
+            return LSPPosition(line: low, character: offset - line.offset)
+        }
         let index = text.index(line.start, offsetBy: offset - line.offset)
         return LSPPosition(line: low, character: encoding.length(of: text[line.start..<index]))
     }
@@ -117,6 +124,10 @@ public struct DocumentPositions: Sendable {
     public func characterOffset(at position: LSPPosition, roundingUp: Bool = false) -> Int? {
         guard lines.indices.contains(position.line), position.character >= 0 else { return nil }
         let line = lines[position.line]
+        // Per token, per keystroke: highlighting converts every one.
+        if let length = line.asciiLength {
+            return line.offset + min(position.character, length)
+        }
         var index = line.start
         var offset = line.offset
         var units = 0

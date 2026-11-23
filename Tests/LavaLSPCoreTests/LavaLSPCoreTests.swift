@@ -42,6 +42,10 @@ import Testing
         }
         #expect(DocumentPositions("").position(atCharacterOffset: 0) == .init(line: 0, character: 0))
         #expect(DocumentPositions("x\ry").lineCount == 1)
+        let ascii = DocumentPositions("ab\r\ncd\n")
+        #expect(ascii.characterOffset(at: .init(line: 0, character: 9)) == 2)
+        #expect(ascii.characterOffset(at: .init(line: 1, character: 1)) == 4)
+        #expect(ascii.position(atCharacterOffset: 5) == .init(line: 1, character: 2))
     }
 
     /// The line table is built from bytes; every Character offset it reports

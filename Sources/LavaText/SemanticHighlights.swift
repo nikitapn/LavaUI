@@ -16,6 +16,33 @@ public struct SemanticHighlights: Sendable, Equatable {
 
     public var isEmpty: Bool { lines.isEmpty }
 
+    /// These highlights after an edit that replaced logical lines
+    /// `old.lowerBound...old.upperBound` with `old.lowerBound...newLast`:
+    /// lines above keep their spans, lines below move by the difference, and
+    /// the edited ones take `replacement`, keyed by their new line numbers.
+    ///
+    /// Spans are columns within their own line, so no other line changes —
+    /// which is what lets a keystroke convert only the tokens it touched
+    /// rather than every token in the document.
+    public func replacing(
+        _ old: ClosedRange<Int>, newLast: Int, with replacement: [Int: [HighlightSpan]]
+    ) -> SemanticHighlights {
+        let delta = newLast - old.upperBound
+        var result = SemanticHighlights()
+        result.lines.reserveCapacity(lines.count + replacement.count)
+        for (line, spans) in lines {
+            if line < old.lowerBound {
+                result.lines[line] = spans
+            } else if line > old.upperBound {
+                result.lines[line + delta] = spans
+            }
+        }
+        for (line, spans) in replacement where (old.lowerBound...newLast).contains(line) && !spans.isEmpty {
+            result.lines[line] = spans.sorted { $0.range.lowerBound < $1.range.lowerBound }
+        }
+        return result
+    }
+
     /// `base` — the lexer's spans for `line` — with this line's spans laid
     /// over it: inside a semantic span its style wins, outside it the
     /// lexer's stands, cut where the two meet.

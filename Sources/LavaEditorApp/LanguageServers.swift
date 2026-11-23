@@ -182,36 +182,61 @@ final class LanguageServers {
         _ = semanticGeneration
         guard var state = semantic[id] else { return nil }
         if state.text != text {
+            // Which logical lines the edit replaced, and what they are now.
+            var edited: (old: ClosedRange<Int>, newLast: Int)?
             if let change = IncrementalChange.between(state.text, and: text, encoding: state.encoding) {
                 state.tokens = SemanticToken.shifting(state.tokens, for: change, encoding: state.encoding)
+                let breaks = change.text.utf8.reduce(0) { $0 + ($1 == 10 ? 1 : 0) }
+                let first = change.range.start.line
+                edited = (first...change.range.end.line, first + breaks)
             }
             state.text = text
-            state.highlights = nil
+            if let edited, let previous = state.highlights {
+                // A keystroke converts the tokens on the lines it touched;
+                // every other line's spans are columns in a line it did not
+                // change, and only its number moves.
+                let touched = edited.old.lowerBound...edited.newLast
+                let positions = positions(for: id, text: text, encoding: state.encoding)
+                let spans = Self.spans(state.tokens.filter { touched.contains($0.line) },
+                                       positions: positions, style: style)
+                state.highlights = previous.replacing(edited.old, newLast: edited.newLast, with: spans)
+            } else {
+                state.highlights = nil
+            }
         }
         if state.highlights == nil {
             let positions = positions(for: id, text: text, encoding: state.encoding)
-            var lines: [Int: [HighlightSpan]] = [:]
-            var lineStarts: [Int: Int] = [:]
-            for token in state.tokens {
-                guard let styleIndex = style(token.type, token.modifiers) else { continue }
-                let lineStart: Int
-                if let known = lineStarts[token.line] {
-                    lineStart = known
-                } else if let found = positions.characterOffset(at: LSPPosition(line: token.line, character: 0)) {
-                    lineStart = found
-                    lineStarts[token.line] = found
-                } else { continue }
-                guard let lower = positions.characterOffset(at: token.range.start),
-                      let upper = positions.characterOffset(at: token.range.end, roundingUp: true),
-                      lower < upper else { continue }
-                lines[token.line, default: []].append(
-                    HighlightSpan(range: (lower - lineStart)..<(upper - lineStart), styleIndex: styleIndex)
-                )
-            }
-            state.highlights = SemanticHighlights(lines: lines)
+            state.highlights = SemanticHighlights(
+                lines: Self.spans(state.tokens, positions: positions, style: style)
+            )
         }
         semantic[id] = state
         return state.highlights
+    }
+
+    /// `tokens` as spans per line, in characters from each line's start.
+    private static func spans(
+        _ tokens: [SemanticToken], positions: DocumentPositions, style: (String, [String]) -> Int?
+    ) -> [Int: [HighlightSpan]] {
+        var lines: [Int: [HighlightSpan]] = [:]
+        var lineStarts: [Int: Int] = [:]
+        for token in tokens {
+            guard let styleIndex = style(token.type, token.modifiers) else { continue }
+            let lineStart: Int
+            if let known = lineStarts[token.line] {
+                lineStart = known
+            } else if let found = positions.characterOffset(at: LSPPosition(line: token.line, character: 0)) {
+                lineStart = found
+                lineStarts[token.line] = found
+            } else { continue }
+            guard let lower = positions.characterOffset(at: token.range.start),
+                  let upper = positions.characterOffset(at: token.range.end, roundingUp: true),
+                  lower < upper else { continue }
+            lines[token.line, default: []].append(
+                HighlightSpan(range: (lower - lineStart)..<(upper - lineStart), styleIndex: styleIndex)
+            )
+        }
+        return lines
     }
 
     /// Settings changed: tabs no server wanted may be wanted now. Servers

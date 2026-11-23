@@ -29,4 +29,22 @@ final class SemanticHighlightsTests: XCTestCase {
         XCTAssertEqual(semantic.overlay([span(3..<6, 1), span(10..<12, 3)], line: 0),
                        [span(2..<10, 5), span(10..<12, 3)])
     }
+
+    func testReplacingLinesKeepsAboveMovesBelowAndTakesTheEditedOnes() {
+        let before = SemanticHighlights(lines: [
+            0: [span(0..<3, 1)], 2: [span(1..<2, 4)], 3: [span(5..<6, 5)], 7: [span(0..<4, 6)],
+        ])
+        // Lines 2...3 became 2...5: two lines inserted.
+        let grown = before.replacing(2...3, newLast: 5, with: [
+            4: [span(6..<9, 2), span(0..<2, 3)], 9: [span(0..<1, 1)],
+        ])
+        XCTAssertEqual(grown, SemanticHighlights(lines: [
+            0: [span(0..<3, 1)], 4: [span(0..<2, 3), span(6..<9, 2)], 9: [span(0..<4, 6)],
+        ]))
+        // Lines 2...3 joined into line 2: one line removed.
+        let joined = before.replacing(2...3, newLast: 2, with: [2: [span(1..<2, 4)]])
+        XCTAssertEqual(joined, SemanticHighlights(lines: [
+            0: [span(0..<3, 1)], 2: [span(1..<2, 4)], 6: [span(0..<4, 6)],
+        ]))
+    }
 }
