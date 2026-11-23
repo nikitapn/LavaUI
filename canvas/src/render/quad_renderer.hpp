@@ -325,11 +325,25 @@ class QuadRenderer {
   /// Antialiased by a fringe: the fill is inset half a device pixel and a
   /// one-pixel band round the outline fades to transparent, so an edge has
   /// the coverage of a glyph's rather than the four samples of MSAA.
-  /// `sharedEnds` leaves the two edges that close the shape — a wedge's
-  /// straight sides — hard: a neighbour covers the other half of them, and
-  /// two fades laid over each other let the background through as a seam.
+  /// `ends` says how the two edges that close the shape — a wedge's straight
+  /// sides — meet a neighbour, as `mesh`'s flag bits (idl/drawlist.npidl):
+  ///
+  ///   2 (`kMeshHardEnds`) — both hard, unfaded and at the edge: the old
+  ///     answer, seamless but stair-stepped at one sample.
+  ///   4 / 8 (`kMeshStartUnder` / `kMeshEndUnder`) — that edge lies *under*
+  ///     a neighbour drawn later: hard, and run half a pixel past the seam,
+  ///     so the neighbour's own fade lands on this colour rather than the
+  ///     background. The neighbour feathers its side as any edge.
+  ///
+  /// Two fades laid over each other let the background through as a seam;
+  /// one fade over a fill that runs underneath it is a clean antialiased
+  /// edge, which is what ordering the wedges buys.
   void pushMesh(const vec2 *points, uint32_t count, uint32_t rgba, bool isRing,
-                bool sharedEnds = false);
+                uint32_t ends = 0);
+
+  static constexpr uint32_t kMeshHardEnds   = 2;
+  static constexpr uint32_t kMeshStartUnder = 4;
+  static constexpr uint32_t kMeshEndUnder   = 8;
 
   /// Cuts everything outside a rounded rect out of what has already been
   /// drawn: `dst *= coverage`, so the corners become transparent and the edge

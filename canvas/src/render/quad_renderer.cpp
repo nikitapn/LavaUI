@@ -1184,7 +1184,7 @@ void QuadRenderer::pushImage(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1,
 }
 
 void QuadRenderer::pushMesh(const vec2 *points, uint32_t count, uint32_t rgba,
-                            bool isRing, bool sharedEnds) {
+                            bool isRing, uint32_t ends) {
   if (points == nullptr) {
     return;
   }
@@ -1216,11 +1216,22 @@ void QuadRenderer::pushMesh(const vec2 *points, uint32_t count, uint32_t rgba,
   }
   const float outward = area2 >= 0.f ? 1.f : -1.f;
 
-  // The edges that close the shape: a fan's last-to-first pair around its
-  // pivot, a ring's two ends between the arcs.
-  const uint32_t endA = isRing ? n / 2 - 1 : 0;
-  const uint32_t endB = n - 1;
-  auto hard = [&](uint32_t k) { return sharedEnds && (k == endA || k == endB); };
+  // The edges that close the shape. A fan's outline starts at its pivot, so
+  // edge 0 (pivot to the first rim point) is the start side and the last
+  // edge (back to the pivot) the end side. A ring's runs out along the outer
+  // arc and back along the inner, so the edge between the arcs at the far
+  // end is the end side and the closing one the start side.
+  const uint32_t startEdge = isRing ? n - 1 : 0;
+  const uint32_t endEdge = isRing ? n / 2 - 1 : n - 1;
+  // Under a neighbour drawn later: run past the seam, fade nothing.
+  auto under = [&](uint32_t k) {
+    return ((ends & kMeshStartUnder) && k == startEdge) ||
+           ((ends & kMeshEndUnder) && k == endEdge);
+  };
+  // Hard at the seam: no fade and no offset.
+  auto hard = [&](uint32_t k) {
+    return !under(k) && (ends & kMeshHardEnds) && (k == startEdge || k == endEdge);
+  };
 
   // Half a device pixel each way of the true edge: the fill stops half a
   // pixel inside it, the fringe fades out half a pixel beyond, and the
@@ -1235,7 +1246,12 @@ void QuadRenderer::pushMesh(const vec2 *points, uint32_t count, uint32_t rgba,
     const float dx = b.x - a.x, dy = b.y - a.y;
     const float len = std::sqrt(dx * dx + dy * dy);
     if (len < 1e-6f) return {0.f, 0.f};
-    return {outward * dy / len, -outward * dx / len};
+    // An edge under a neighbour turns its normal round: the fill below is
+    // inset along the normal, so this pushes it half a pixel *out* past the
+    // seam — where the neighbour's fade is, so the fade has this colour
+    // underneath it and not the background.
+    const float sign = under(k) ? -1.f : 1.f;
+    return {sign * outward * dy / len, -sign * outward * dx / len};
   };
   meshOffset_.assign(count, vec2{0.f, 0.f});
   for (uint32_t k = 0; k < n; ++k) {
@@ -1306,7 +1322,7 @@ void QuadRenderer::pushMesh(const vec2 *points, uint32_t count, uint32_t rgba,
     vertex({points[i].x + o.x, points[i].y + o.y}, clear);
   }
   for (uint32_t k = 0; k < n; ++k) {
-    if (hard(k)) continue;
+    if (hard(k) || under(k)) continue;
     const uint32_t k1 = (k + 1) % n;
     const uint32_t in0 = base + meshOutline_[k], in1 = base + meshOutline_[k1];
     const uint32_t out0 = fringe + k, out1 = fringe + k1;

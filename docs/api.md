@@ -889,7 +889,9 @@ requests animation frames while a live canvas needs them.
 Application-facing `DrawList` primitives include:
 
 - `rect`, `roundedRect`, `circle`, `line`, and `polyline`
-- `polygon`, `ring`, and `pieSlice`
+- `polygon`, `ring`, and `pieSlice` — a pie drawn slice by slice passes
+  `edges:` (`.first`, `.inOrder`, `.last`) so each seam is antialiased once,
+  by the slice drawn second, over the one under it (`PieSliceEdges`)
 - `text` and `image`
 - `pushClip` / `popClip`
 - explicit backdrop/content blur scopes

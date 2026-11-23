@@ -58,7 +58,12 @@ enum DrawCommandKind: u32 {
   /// in the middle means there is no single point the whole boundary fans
   /// from). aux is a bit set: 1 is that ring layout, 2 says the two edges
   /// that end the shape — a wedge's straight sides — are shared with a
-  /// neighbour, so the renderer must not fade them (`pushMesh`).
+  /// neighbour, so the renderer must not fade them (`pushMesh`). 4 and 8
+  /// say the same of the start and end side alone, and more: that side lies
+  /// *under* a neighbour drawn later, so it runs half a pixel past the seam
+  /// for that neighbour's fade to land on. A side with neither is faded as
+  /// any edge — which, over a neighbour drawn earlier, is the seam's one
+  /// antialiased edge. See `DrawList.PieSliceEdges`.
   mesh = 12,
   /// Connected 1px line strip. param = first vertex index, w = vertex count,
   /// into the same MeshVertex side buffer used by Mesh.

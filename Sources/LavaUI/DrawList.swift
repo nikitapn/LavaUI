@@ -755,16 +755,56 @@ public final class DrawList {
         emitMesh(points, color: color, isRing: true)
     }
 
+    /// How a pie wedge's two straight sides meet the wedges beside it.
+    ///
+    /// A seam between two wedges is antialiased once, by whichever is drawn
+    /// second: that one fades its side over the first, which runs half a
+    /// pixel past the seam underneath (`underNext`). Fading both lets the
+    /// background through as a hairline; fading neither is a staircase. So
+    /// the renderer has to be told the drawing order, and for slices drawn
+    /// in a loop of increasing angle that is the same three answers every
+    /// time — `first`, `inOrder`, `last`.
+    public struct PieSliceEdges: Sendable, Equatable {
+        public enum Side: Sendable, Equatable {
+            /// Antialiased: open, or meeting a wedge drawn *before* this one.
+            case faded
+            /// Meets a wedge drawn *after* this one, which fades over it.
+            case underNext
+        }
+        public var start: Side
+        public var end: Side
+        public init(start: Side, end: Side) {
+            self.start = start
+            self.end = end
+        }
+        /// A slice between two others, drawn in order of increasing angle:
+        /// its start meets the one before, its end the one after.
+        public static let inOrder = PieSliceEdges(start: .faded, end: .underNext)
+        /// The first slice of a pie that closes: the last slice, drawn later,
+        /// meets its start.
+        public static let first = PieSliceEdges(start: .underNext, end: .underNext)
+        /// The last slice of a pie that closes, whose neighbours on both sides
+        /// are already drawn — and a slice on its own.
+        public static let last = PieSliceEdges(start: .faded, end: .faded)
+        public static let alone = last
+    }
+
     /// Filled pie or donut wedge. `innerRadius <= 0` draws a solid slice
     /// (fanned from the centre); `innerRadius > 0` draws a ring segment.
     /// `segments` defaults to a density that keeps the arc looking smooth
-    /// without over-tessellating short spans.
+    /// without over-tessellating short spans. `edges` says which neighbours
+    /// are drawn before and after it — see `PieSliceEdges`.
     public func pieSlice(
         cx: Float, cy: Float,
         innerRadius: Float, outerRadius: Float,
         startAngle: Float, endAngle: Float,
-        color: Color, segments: Int? = nil
+        color: Color, segments: Int? = nil,
+        edges: PieSliceEdges = .inOrder
     ) {
+        // `mesh`'s flags: 4 = the start side runs under the next wedge,
+        // 8 = the end side does (idl/drawlist.npidl).
+        let seams: UInt32 = (edges.start == .underNext ? 4 : 0)
+            | (edges.end == .underNext ? 8 : 0)
         let span = abs(endAngle - startAngle)
         guard span > 0.0001, outerRadius > 0 else { return }
         let n = segments ?? max(3, min(96, Int(span / 0.026)))
@@ -775,8 +815,7 @@ public final class DrawList {
                 let a = startAngle + (endAngle - startAngle) * (Float(i) / Float(n))
                 points.append((cx + cos(a) * outerRadius, cy + sin(a) * outerRadius))
             }
-            // Wedges tile a pie; their straight sides must not fade.
-            emitMesh(points, color: color, isRing: false, sharedEnds: true)
+            emitMesh(points, color: color, isRing: false, seams: seams)
         } else {
             var inner: [(x: Float, y: Float)] = []
             var outer: [(x: Float, y: Float)] = []
@@ -795,7 +834,7 @@ public final class DrawList {
                 points.append(inner[i])
                 points.append(outer[i])
             }
-            emitMesh(points, color: color, isRing: true, sharedEnds: true)
+            emitMesh(points, color: color, isRing: true, seams: seams)
         }
     }
 
@@ -803,7 +842,7 @@ public final class DrawList {
     /// meet a neighbour, so the renderer leaves them unfaded — see `mesh` in
     /// `idl/drawlist.npidl`.
     private func emitMesh(
-        _ points: [(x: Float, y: Float)], color: Color, isRing: Bool, sharedEnds: Bool = false
+        _ points: [(x: Float, y: Float)], color: Color, isRing: Bool, seams: UInt32 = 0
     ) {
         let first = UInt32(meshVertexCount)
         if meshVertexCount + points.count > meshVertexCapacity {
@@ -817,7 +856,7 @@ public final class DrawList {
         }
         append(
             kind: .mesh, x: 0, y: 0, w: Float(points.count), h: 0,
-            color: color, param: first, aux: Float((isRing ? 1 : 0) | (sharedEnds ? 2 : 0))
+            color: color, param: first, aux: Float((isRing ? 1 : 0) | seams)
         )
     }
 

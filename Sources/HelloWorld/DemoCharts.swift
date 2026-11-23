@@ -86,6 +86,10 @@ struct PieChart: View {
                     color: Color(r: 0.08, g: 0.09, b: 0.14).opacity(0.9))
 
         var angle: Float = -.pi / 2  // start at top
+        // Drawn in order of increasing angle, so each seam is antialiased by
+        // the slice drawn second — see `DrawList.PieSliceEdges`. The pie
+        // closes, so the first slice goes under the last as well.
+        let drawn = slices.filter { $0.value > 0 }
         for slice in slices {
             let span = max(0, slice.value) / total * (.pi * 2)
             let selected = slice.id == selectedId
@@ -94,7 +98,10 @@ struct PieChart: View {
                 cx: cx, cy: cy,
                 innerRadius: inner, outerRadius: rr,
                 startAngle: angle, endAngle: angle + span,
-                color: slice.color
+                color: slice.color,
+                edges: drawn.count < 2 ? .alone
+                    : slice.id == drawn.first?.id ? .first
+                    : slice.id == drawn.last?.id ? .last : .inOrder
             )
             if selected {
                 // Highlight rim: a thin ring segment flush with the wedge's
@@ -107,7 +114,8 @@ struct PieChart: View {
                     cx: cx, cy: cy,
                     innerRadius: rr, outerRadius: rr + 2.5,
                     startAngle: angle, endAngle: angle + span,
-                    color: slice.color.lightened(0.35)
+                    color: slice.color.lightened(0.35),
+                    edges: .alone  // nothing beside it to meet
                 )
             }
             angle += span
