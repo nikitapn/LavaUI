@@ -189,6 +189,8 @@ void RenderWindow::createWindowSurface()
 /// is how a resize leaks an attachment.
 void RenderWindow::createSizedResources()
 {
+  // New attachments hold nothing of the last frame.
+  partialBaseline_ = false;
   createColorResources();
   // Not when the frame resolves into the exported buffer — that image is the
   // resolve attachment, and a second one would only be a place to copy it to.
@@ -584,6 +586,10 @@ VkImageView RenderWindow::frameImageView() const
 
 void RenderWindow::syncResolveTarget()
 {
+  // The frame is about to land somewhere else; whatever is there was not
+  // drawn by the last frame. (The blurred frame that switches it is drawn
+  // whole anyway — this is for the frame after.)
+  partialBaseline_ = false;
   const bool direct = directToExport();
   if (direct && resolveImage_ != VK_NULL_HANDLE) {
     if (resolveImageView_ != VK_NULL_HANDLE) {
@@ -696,9 +702,29 @@ void RenderWindow::createPresentSyncObjects()
   }
 }
 
-void RenderWindow::beginMainRenderPass(VkCommandBuffer commandBuffer, bool clear)
+void RenderWindow::beginMainRenderPass(VkCommandBuffer commandBuffer, bool clear,
+                                       const VkRect2D *area)
 {
   if (!clear) {
+    // The multisampled image is about to be loaded, and what it holds was
+    // written as an attachment — by the pass before a blur, or by the last
+    // frame, which may still be on the GPU. Same queue, so a barrier is
+    // enough to order the two.
+    VkImageMemoryBarrier msaa{
+      .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+      .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+      .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+      .oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+      .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .image = colorImage_,
+      .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+    };
+    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr,
+                         0, nullptr, 1, &msaa);
     // After a blur segment, resolve is TRANSFER_SRC; continue pass needs it
     // as a color attachment with LOAD.
     VkImageMemoryBarrier toColor{
@@ -731,7 +757,7 @@ void RenderWindow::beginMainRenderPass(VkCommandBuffer commandBuffer, bool clear
     .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
     .renderPass      = clear ? dev_.getRenderPass() : dev_.renderPassContinue(),
     .framebuffer     = clear ? framebuffer_ : framebufferContinue_,
-    .renderArea      = {.offset = {0, 0}, .extent = extent_},
+    .renderArea      = area != nullptr ? *area : VkRect2D{.offset = {0, 0}, .extent = extent_},
     .clearValueCount = static_cast<uint32_t>(clearValues.size()),
     .pClearValues    = clearValues.data(),
   };
@@ -813,6 +839,11 @@ void RenderWindow::submitFrame(
   // reset fence leaves the slot stuck unsignalled forever.
   waitForInFlightFrame();
 
+  // Until this frame is submitted, nothing promises the attachments hold the
+  // last frame drawn: a stale swapchain returns below without drawing, and a
+  // failure throws. Either way the next frame has to be drawn whole.
+  partialBaseline_ = false;
+
   const uint32_t frame = currentFrame_;
   VkCommandBuffer cmd = commandBuffers_[frame];
   VkFence fence = inFlightFences_[frame];
@@ -853,9 +884,13 @@ void RenderWindow::submitFrame(
   CANVAS_GPU_ZONE(gpuTrace_, cmd, "Frame");
 
   // Taken back from the consumer before anything writes it, because the render
-  // pass is about to resolve into it. Contents discarded — every frame covers
-  // the whole render area.
-  if (directToExport()) exportTarget_->recordAcquireForRendering(cmd);
+  // pass is about to resolve into it. Contents discarded when the frame covers
+  // the whole render area; kept when it is a partial redraw, which resolves
+  // only the damaged rectangles over the frame already in the buffer.
+  if (directToExport()) {
+    if (partialFrame_) exportTarget_->recordAcquireForRead(cmd);
+    else exportTarget_->recordAcquireForRendering(cmd);
+  }
 
   // Main UI — callback owns begin/end of main pass(es) for blur interrupts.
   mainCallback(cmd, imageIndex);
@@ -1030,6 +1065,9 @@ void RenderWindow::submitFrame(
     std::lock_guard queueLock(*queueMutex_);
     VR(vkQueueSubmit(queue_, 1, &submitInfo, fence),
        "failed to submit draw command buffer!");
+    // The frame is on its way to every attachment it names, so the next one
+    // may start from it. See `partialBaseline_`.
+    partialBaseline_ = true;
 
     if (windowed_) {
     VkPresentInfoKHR presentInfo {
@@ -1471,6 +1509,7 @@ void RenderWindow::setExportTarget(canvas::DmabufImage *target)
   exportTarget_ = target;
   // A new buffer holds none of what the last frame drew.
   damage_.invalidate();
+  partialBaseline_ = false;
   // Which image the frame lands in has just changed, and with it whether this
   // window owns one at all.
   syncResolveTarget();
@@ -2800,6 +2839,91 @@ bool RenderWindow::advanceSceneAnimations(
   return animating;
 }
 
+bool RenderWindow::choosePartialRects()
+{
+  std::vector<canvas::DamageRect> tiles;
+  // False: the frame could not be compared — blurred, sampled a live
+  // surface, drew 3D, zoomed, resized — and is drawn whole.
+  if (!damage_.frameRects(tiles)) return false;
+
+  // Tiles are layout pixels; the pass is in framebuffer pixels. Outward, so a
+  // scaled edge never leaves half a pixel of the old frame behind.
+  const float sx = static_cast<float>(extent_.width) / static_cast<float>(logical_.width);
+  const float sy = static_cast<float>(extent_.height) / static_cast<float>(logical_.height);
+  partialRects_.clear();
+  uint64_t area = 0;
+  for (const auto &t : tiles) {
+    const int32_t x0 = std::max(0, static_cast<int32_t>(std::floor(t.x * sx)));
+    const int32_t y0 = std::max(0, static_cast<int32_t>(std::floor(t.y * sy)));
+    const int32_t x1 = std::min(static_cast<int32_t>(extent_.width),
+                                static_cast<int32_t>(std::ceil((t.x + t.width) * sx)));
+    const int32_t y1 = std::min(static_cast<int32_t>(extent_.height),
+                                static_cast<int32_t>(std::ceil((t.y + t.height) * sy)));
+    if (x1 <= x0 || y1 <= y0) continue;
+    partialRects_.push_back(
+      {{x0, y0}, {static_cast<uint32_t>(x1 - x0), static_cast<uint32_t>(y1 - y0)}});
+    area += static_cast<uint64_t>(x1 - x0) * static_cast<uint64_t>(y1 - y0);
+  }
+  // Past half the window a partial frame saves little and costs a load of
+  // the old one — and each rectangle records the frame's batches again.
+  const uint64_t whole = static_cast<uint64_t>(extent_.width) * extent_.height;
+  if (area * 2 > whole) return false;
+  // Many small rectangles: one box around them, drawn once.
+  if (partialRects_.size() > kMaxPartialRects) {
+    int32_t x0 = INT32_MAX, y0 = INT32_MAX, x1 = 0, y1 = 0;
+    for (const auto &r : partialRects_) {
+      x0 = std::min(x0, r.offset.x);
+      y0 = std::min(y0, r.offset.y);
+      x1 = std::max(x1, r.offset.x + static_cast<int32_t>(r.extent.width));
+      y1 = std::max(y1, r.offset.y + static_cast<int32_t>(r.extent.height));
+    }
+    partialRects_.assign(
+      1, {{x0, y0}, {static_cast<uint32_t>(x1 - x0), static_cast<uint32_t>(y1 - y0)}});
+  }
+  return true;
+}
+
+void RenderWindow::recordPartialRedraw(VkCommandBuffer commandBuffer)
+{
+  // Nothing changed: the frame already there is this frame. Nothing to load,
+  // draw or resolve.
+  if (partialRects_.empty()) return;
+
+  // One pass over the box around every rectangle, so it resolves exactly
+  // that; inside it, each rectangle is cleared and drawn on its own, and
+  // what lies between them is the old frame, loaded and resolved unchanged.
+  int32_t x0 = INT32_MAX, y0 = INT32_MAX, x1 = 0, y1 = 0;
+  for (const auto &r : partialRects_) {
+    x0 = std::min(x0, r.offset.x);
+    y0 = std::min(y0, r.offset.y);
+    x1 = std::max(x1, r.offset.x + static_cast<int32_t>(r.extent.width));
+    y1 = std::max(y1, r.offset.y + static_cast<int32_t>(r.extent.height));
+  }
+  const VkRect2D box{{x0, y0},
+                     {static_cast<uint32_t>(x1 - x0), static_cast<uint32_t>(y1 - y0)}};
+  beginMainRenderPass(commandBuffer, /*clear=*/false, &box);
+  {
+    CANVAS_GPU_ZONE(gpuTrace_, commandBuffer, "Partial redraw");
+    // The same clear the whole frame starts with, so a translucent window
+    // composites over nothing in the redrawn part rather than over itself.
+    VkClearAttachment clear{
+      .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+      .colorAttachment = 0,
+      .clearValue = {.color = {{0.0f, 0.0f, 0.0f, transparent_ ? 0.0f : 1.0f}}},
+    };
+    for (const VkRect2D &rect : partialRects_) {
+      VkClearRect clearRect{.rect = rect, .baseArrayLayer = 0, .layerCount = 1};
+      vkCmdClearAttachments(commandBuffer, 1, &clear, 1, &clearRect);
+      quads_.setDamageClip(rect);
+      quads_.drawSegment(commandBuffer, 0);
+    }
+    quads_.clearDamageClip();
+  }
+  endMainRenderPass(commandBuffer);
+  VkRect2D fullScissor{.offset = {0, 0}, .extent = getExtent()};
+  vkCmdSetScissor(commandBuffer, 0, 1, &fullScissor);
+}
+
 double RenderWindow::blinkClock()
 {
   using namespace std::chrono;
@@ -2965,7 +3089,14 @@ void RenderWindow::render(const canvas::DrawList &list)
 #else
   constexpr bool tallyForTrace = false;
 #endif
-  if ((!windowed_ && exportTarget_ != nullptr) || tallyForTrace) {
+  //
+  // And every window counts it when partial redraw is on, which is the
+  // default: it is what says which part of the frame to draw.
+  static const bool partialRedraw = [] {
+    const char *v = std::getenv("LAVA_PARTIAL_REDRAW");
+    return v == nullptr || std::strcmp(v, "0") != 0;
+  }();
+  if ((!windowed_ && exportTarget_ != nullptr) || tallyForTrace || partialRedraw) {
     ZoneScopedN("Frame damage");
     // Counted in layout pixels, which is what the batches were recorded in;
     // `takeDamage` hands it out in buffer pixels.
@@ -2975,10 +3106,16 @@ void RenderWindow::render(const canvas::DrawList &list)
     damage_.end();
     TracyPlot(damagePlotName_.c_str(), damage_.changedFraction() * 100.0);
   }
+  partialFrame_ = partialRedraw && partialBaseline_ && choosePartialRects();
 
   submitFrame(
     [&](VkCommandBuffer commandBuffer, u32 /*imageIndex*/) {
       const auto extent = getExtent();
+
+      if (partialFrame_) {
+        recordPartialRedraw(commandBuffer);
+        return;
+      }
 
       // Always open the clear pass so an empty first segment still clears the
       // framebuffer before a leading blur.

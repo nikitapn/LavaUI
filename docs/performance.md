@@ -490,6 +490,52 @@ Rules of thumb:
 - **Tracy** — a timeline rather than a sum: which frame, which stage, what
   the GPU was doing at the time. Below.
 
+### Partial redraw
+
+A frame draws only the part of the window that changed. `FrameDamage` hashes
+everything a frame submits per 32 px tile and compares it with the frame
+before (`frameRects`); the multisampled attachment is stored every frame
+anyway, so a frame that changed a little opens the *continue* pass (LOAD),
+clears each changed rectangle, draws the frame's batches once per rectangle
+with every scissor intersected with it (`QuadRenderer::setDamageClip` — a
+batch that misses is not recorded), and resolves only the box around them.
+The resolve target keeps the rest: the window's own resolve image, or the
+exported dma-buf itself, taken back from the compositor with its pixels
+(`recordAcquireForRead`) rather than discarded.
+
+Drawn whole instead, and why:
+
+| When | Because |
+|---|---|
+| The first frame, a resize, a new export buffer, the blur switching the resolve target | `partialBaseline_` is false: the attachments do not hold the last frame |
+| A frame that blurs, samples a live surface, draws 3D, or is zoomed | `FrameDamage::markAll` — the tiles cannot say what those touch |
+| More than half the window changed | a partial frame would save little and cost the load |
+| A submit that did not happen (stale swapchain, a Vulkan error) | the next frame would be drawn over a frame that never landed |
+
+More than eight rectangles become the one box around them, since each costs
+a pass over the batches. A frame identical to the last records no pass at
+all.
+
+Measured on LavaEditor typing one key every 80 ms in client mode, the
+compositor's GPU time for the editor surface: **611 µs → 115 µs a frame**,
+47 of 58 frames partial. CPU time did not move (1.8 ms in a debug build), and
+will not: replay and the damage tally still walk the whole draw list. The
+tally runs for windowed apps now too, where nothing needed it before —
+~0.38 ms a frame in a debug build.
+
+Verified by running the same scripted session — clicks, typing, Enter, arrow
+keys, Home/End, scrolling — with and without `LAVA_PARTIAL_REDRAW=0` and
+comparing the composited output after every step: identical in every pixel
+in client mode, and in windowed mode except for one step where the language
+server's diagnostics had arrived in one session and not yet the other (the
+next step matched).
+
+The one thing the tiles cannot see is a texture whose pixels change under the
+same image view — the hash is of the view handle, not the pixels. Video does
+not hit it (three buffers in rotation, so consecutive frames name different
+views); anything new that updates a texture in place has to change what the
+frame submits, or call `markAll`. `LAVA_PARTIAL_REDRAW=0` is the A/B.
+
 ### Tracy
 
 A build-time switch, so a normal build carries none of it — no thread, no

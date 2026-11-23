@@ -443,6 +443,13 @@ class QuadRenderer {
   /// Draw batches belonging to segment `segmentIndex` (0-based).
   /// Descriptor write cursor continues across calls within one begin/end frame.
   /// `intoSceneTarget` picks the pipeline built for the content-blur pass.
+  /// Confines what `drawSegment` records to `rect`, in framebuffer pixels:
+  /// every batch's scissor is intersected with it, and a batch that misses it
+  /// is not recorded at all. A partial redraw draws the frame once per
+  /// damaged rectangle this way. `clearDamageClip` lifts it.
+  void setDamageClip(VkRect2D rect) { damageClip_ = rect; hasDamageClip_ = true; }
+  void clearDamageClip() { hasDamageClip_ = false; }
+
   void drawSegment(VkCommandBuffer commandBuffer, uint32_t segmentIndex,
                    bool intoSceneTarget = false);
 
@@ -628,6 +635,9 @@ class QuadRenderer {
   vec2 viewportSize_{800.0f, 600.0f};
   /// See `setSceneTargetScale`.
   float sceneTargetScale_ = 1.f;
+  /// See `setDamageClip`.
+  VkRect2D damageClip_{};
+  bool hasDamageClip_ = false;
   /// See `setDeviceScale`.
   float deviceScaleX_ = 1.f;
   float deviceScaleY_ = 1.f;

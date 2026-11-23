@@ -582,7 +582,19 @@ class RenderWindow {
   /// interrupt for backdrop blur (end → capture/blur → begin LOAD → continue).
   void submitFrame(std::function<void(VkCommandBuffer, u32)> mainCallback);
 
-  void beginMainRenderPass(VkCommandBuffer commandBuffer, bool clear);
+  /// Turns this frame's damage into `partialRects_`; false when the frame
+  /// should be drawn whole instead.
+  bool choosePartialRects();
+  /// Draws `partialRects_` over the frame already in the attachments.
+  void recordPartialRedraw(VkCommandBuffer commandBuffer);
+  /// More rectangles than this are drawn as the one box around them: each
+  /// costs a pass over the frame's batches.
+  static constexpr size_t kMaxPartialRects = 8;
+
+  /// `area`, when given, limits the pass — and with it the resolve — to that
+  /// rectangle of the framebuffer; a partial redraw's bounding box.
+  void beginMainRenderPass(VkCommandBuffer commandBuffer, bool clear,
+                           const VkRect2D *area = nullptr);
   void endMainRenderPass(VkCommandBuffer commandBuffer);
 
   /// Replays the draw list into one ordered batch stream in *index order*,
@@ -688,6 +700,15 @@ class RenderWindow {
 
   /// Per-tile tally of what each exported frame submitted. See `takeDamage`.
   canvas::FrameDamage damage_;
+  /// Whether the attachments hold the last frame drawn, whole — which is
+  /// what lets the next frame draw only what changed. Cleared whenever an
+  /// attachment is rebuilt or replaced, and before every submit; set by a
+  /// submit that went through.
+  bool partialBaseline_ = false;
+  /// This frame is a partial redraw of `partialRects_`, in framebuffer
+  /// pixels. Decided in `render`, read by `submitFrame`.
+  bool partialFrame_ = false;
+  std::vector<VkRect2D> partialRects_;
   /// This window's GPU track in Tracy, and the name of its damage plot —
   /// a member because Tracy keys a plot by the address of its name. Both
   /// inert unless the build has TRACY_ENABLE.

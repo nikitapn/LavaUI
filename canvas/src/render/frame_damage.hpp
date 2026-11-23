@@ -2,13 +2,15 @@
 
 // Which part of a window changed between two frames, from what was submitted.
 //
-// A LavaUI window is redrawn whole every frame, and that stays true: the
-// client has no idea what changed, and with MSAA the renderer could not keep
-// last frame's samples to draw over anyway. What *can* be narrowed is what the
-// compositor does with the result. Handing wlroots the whole buffer as damage
-// makes it recomposite the window's entire rectangle on the output — for a
-// caret blink, a spinner, a clock — and that composite is the part a compositor
-// on a battery pays for.
+// Two users, with two different questions. The compositor asks what it has to
+// recomposite since it last looked (`take`, accumulated): handing wlroots the
+// whole buffer as damage makes it recomposite the window's entire rectangle on
+// the output — for a caret blink, a spinner, a clock — and that composite is
+// the part a compositor on a battery pays for. The renderer asks what it has
+// to *draw* this frame (`frameRects`, this frame against the last): the
+// multisampled attachment is stored every frame, so a partial redraw loads it
+// and draws only the changed rectangles over it — see
+// `RenderWindow::recordPartialRedraw`.
 //
 // So the renderer keeps a hash per tile of everything it submitted that
 // touches that tile, in submission order, and compares against the previous
@@ -66,6 +68,15 @@ class FrameDamage {
     pendingAll_ = true;
   }
 
+  /// What changed between the frame `end` just compared and the one before
+  /// it, as rectangles — the regions a renderer that kept the previous
+  /// frame's pixels has to draw again. Unlike `take` it is about this frame
+  /// alone and consumes nothing.
+  ///
+  /// False means "all of it": the frame could not be compared. True with an
+  /// empty `out` means it is identical to the last.
+  bool frameRects(std::vector<DamageRect> &out) const;
+
   /// Of the tiles in the frame `end` just compared, the share that differed
   /// from the frame before: 1 for one that could not be compared (blur, a
   /// resize, the first). What a partial redraw would have had to draw.
@@ -76,6 +87,11 @@ class FrameDamage {
   static uint64_t hashBytes(const void *data, size_t size, uint64_t seed);
 
  private:
+  /// Tiles → rectangles: runs per row, merged downward while the next row
+  /// has the identical run, so a caret is one tall rectangle.
+  void rectsOf(const std::vector<uint8_t> &tiles, std::vector<DamageRect> &out) const;
+
+ private:
   uint32_t width_ = 0, height_ = 0;
   uint32_t cols_ = 0, rows_ = 0;
   std::vector<uint64_t> current_;
@@ -84,6 +100,9 @@ class FrameDamage {
   std::vector<uint8_t> pending_;
   bool havePrevious_ = false;
   bool frameAll_ = false;
+  /// `end`'s verdict on this frame alone, for `frameRects`.
+  bool frameWhole_ = true;
+  std::vector<uint8_t> frameChanged_;
   float changedFraction_ = 1.f;
   /// Nothing has been taken yet, so the first frame is reported whole.
   bool pendingAll_ = true;

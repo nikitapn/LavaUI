@@ -1747,6 +1747,21 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
     VkRect2D sc = toTarget((z == 1.f && viewPanX_ == 0.f && viewPanY_ == 0.f)
                              ? batch.scissor
                              : mapScissor(batch.scissor));
+    if (hasDamageClip_) {
+      // A partial redraw: only what falls in the damaged rectangle, and a
+      // batch that misses it is never recorded — most of a frame, for a caret.
+      const int32_t x0 = std::max(sc.offset.x, damageClip_.offset.x);
+      const int32_t y0 = std::max(sc.offset.y, damageClip_.offset.y);
+      const int32_t x1 = std::min(sc.offset.x + static_cast<int32_t>(sc.extent.width),
+                                  damageClip_.offset.x +
+                                    static_cast<int32_t>(damageClip_.extent.width));
+      const int32_t y1 = std::min(sc.offset.y + static_cast<int32_t>(sc.extent.height),
+                                  damageClip_.offset.y +
+                                    static_cast<int32_t>(damageClip_.extent.height));
+      if (x1 <= x0 || y1 <= y0) continue;
+      sc = VkRect2D{{x0, y0},
+                    {static_cast<uint32_t>(x1 - x0), static_cast<uint32_t>(y1 - y0)}};
+    }
     if (sc.extent.width == 0 || sc.extent.height == 0) continue;
     if (batch.geometry == Batch::Geometry::SpatialBegin) {
       VkClearAttachment attachment{.aspectMask=VK_IMAGE_ASPECT_DEPTH_BIT,

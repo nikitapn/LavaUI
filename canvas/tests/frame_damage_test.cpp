@@ -191,6 +191,42 @@ void takeDrains() {
   CHECK(out.empty());
 }
 
+/// The rectangles a partial redraw draws are this frame against the last
+/// one only — unlike `take`, nothing accumulates and nothing is consumed.
+/// The caret moved from 100 to 400 and then stayed: the first frame redraws
+/// both places, the second redraws nothing, though `take` still owes both.
+void frameRectsAreThisFrameOnly() {
+  FrameDamage d;
+  std::vector<DamageRect> out;
+  frame(d, 640, 480, true, 100);
+  CHECK(!d.frameRects(out));  // nothing to compare with: draw it whole
+  d.take(out);                // the consumer takes the whole first frame
+
+  frame(d, 640, 480, true, 400);
+  CHECK(d.frameRects(out));
+  CHECK(covers(out, 100, 50));
+  CHECK(covers(out, 400, 50));
+  CHECK(!covers(out, 250, 50));
+  CHECK(d.frameRects(out));  // asking twice is the same answer
+  CHECK(covers(out, 100, 50));
+
+  frame(d, 640, 480, true, 400);
+  CHECK(d.frameRects(out));
+  CHECK(out.empty());          // identical: nothing to draw
+  CHECK(d.take(out));
+  CHECK(covers(out, 100, 50));  // but the consumer is still owed both
+  CHECK(covers(out, 400, 50));
+
+  d.begin(640, 480);
+  d.add(0, 0, 640, 480, 1);
+  d.markAll();
+  d.end();
+  CHECK(!d.frameRects(out));  // a frame that cannot be compared: whole
+
+  frame(d, 320, 240, true);
+  CHECK(!d.frameRects(out));  // a resize: whole
+}
+
 } // namespace
 
 int main()
@@ -205,6 +241,7 @@ int main()
   mergesAndClamps();
   invalidateIsWhole();
   takeDrains();
+  frameRectsAreThisFrameOnly();
 
   if (failures != 0) {
     std::fprintf(stderr, "%d check(s) failed\n", failures);

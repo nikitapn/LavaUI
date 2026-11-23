@@ -79,7 +79,9 @@ void FrameDamage::end()
     pending_.assign(current_.size(), 0);
     pendingAll_ = true;
   }
-  if (frameAll_ || !sameGrid) {
+  frameChanged_.assign(current_.size(), 0);
+  frameWhole_ = frameAll_ || !sameGrid;
+  if (frameWhole_) {
     pendingAll_ = true;
     changedFraction_ = 1.f;
   } else {
@@ -89,6 +91,7 @@ void FrameDamage::end()
     for (size_t i = 0; i < current_.size(); ++i) {
       if (current_[i] != previous_[i]) {
         ++changed;
+        frameChanged_[i] = 1;
         if (!pendingAll_) pending_[i] = 1;
       }
     }
@@ -110,6 +113,23 @@ bool FrameDamage::take(std::vector<DamageRect> &out)
     return false;
   }
   if (pending_.size() != static_cast<size_t>(cols_) * rows_) return true;
+  rectsOf(pending_, out);
+  std::fill(pending_.begin(), pending_.end(), 0);
+  return true;
+}
+
+bool FrameDamage::frameRects(std::vector<DamageRect> &out) const
+{
+  out.clear();
+  if (frameWhole_) return false;
+  if (frameChanged_.size() != static_cast<size_t>(cols_) * rows_) return false;
+  rectsOf(frameChanged_, out);
+  return true;
+}
+
+void FrameDamage::rectsOf(const std::vector<uint8_t> &tiles,
+                          std::vector<DamageRect> &out) const
+{
 
   // Runs per row, merged downward while the next row has the identical run:
   // a caret is one tall rectangle, not one per row of tiles.
@@ -131,7 +151,7 @@ bool FrameDamage::take(std::vector<DamageRect> &out)
     next.clear();
     for (auto &o : open) o.extended = false;
     if (r < rows_) {
-      const uint8_t *row = pending_.data() + static_cast<size_t>(r) * cols_;
+      const uint8_t *row = tiles.data() + static_cast<size_t>(r) * cols_;
       uint32_t c = 0;
       while (c < cols_) {
         if (!row[c]) {
@@ -156,8 +176,6 @@ bool FrameDamage::take(std::vector<DamageRect> &out)
     }
     open.swap(next);
   }
-  std::fill(pending_.begin(), pending_.end(), 0);
-  return true;
 }
 
 } // namespace canvas
