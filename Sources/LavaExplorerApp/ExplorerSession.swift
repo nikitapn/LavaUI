@@ -173,6 +173,7 @@ final class ExplorerSession: @unchecked Sendable {
         gridColumns = [:]
         paneFrames = [:]
         tabFrames = [:]
+        cardFrames = [:]
         columnRoom = [:]
         selectAfterFetch = [:]
         ownDrag = []
@@ -648,6 +649,9 @@ final class ExplorerSession: @unchecked Sendable {
     /// from them directly.
     @ObservationIgnored var paneFrames: [Int: PaneRect] = [:]
     @ObservationIgnored private(set) var tabFrames: [Int: PaneRect] = [:]
+    /// Each pane's card, for the tab strip to draw the active pane's ring
+    /// from: see `ExplorerTabs`.
+    @ObservationIgnored private(set) var cardFrames: [Int: CanvasFrame] = [:]
 
     /// Each pane's width, observed: what the pane drops when it is narrow —
     /// the Size column, the time, the middle of its address — is decided in
@@ -659,6 +663,10 @@ final class ExplorerSession: @unchecked Sendable {
     func notePaneFrame(_ paneID: Int, _ frame: CanvasFrame) {
         paneFrames[paneID] = PaneRect(x: frame.x, y: frame.y, w: frame.w, h: frame.h)
         if abs((paneWidths[paneID] ?? -1) - frame.w) >= 1 { paneWidths[paneID] = frame.w }
+    }
+
+    func noteCardFrame(_ paneID: Int, _ frame: CanvasFrame) {
+        cardFrames[paneID] = frame
     }
 
     func noteTabFrame(_ tabID: Int, _ frame: CanvasFrame) {
@@ -697,6 +705,7 @@ final class ExplorerSession: @unchecked Sendable {
                 // stale frame the next time a tab is dragged.
                 let livePanes = Set(layout.panes.map(\.id))
                 paneFrames = paneFrames.filter { livePanes.contains($0.key) }
+                cardFrames = cardFrames.filter { livePanes.contains($0.key) }
                 let liveTabs = Set(layout.panes.flatMap { $0.tabs.tabs.map(\.id) })
                 tabFrames = tabFrames.filter { liveTabs.contains($0.key) }
             }

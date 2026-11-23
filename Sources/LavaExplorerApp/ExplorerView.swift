@@ -188,7 +188,7 @@ private struct PaneView: View {
             if let pane {
                 ExplorerTabs(session: session, pane: pane, ringed: ringed, outlineInset: outlineInset)
                 VStack(flexGrow: 1, padding: 0, spacing: 0) {
-                    PaneCard(session: session, pane: pane, ringed: ringed) {
+                    PaneCard(session: session, pane: pane) {
                         Toolbar(session: session, paneID: paneID, tab: pane.tabs.current)
                         if let draft = session.bulkRenameDraft, draft.tabID == pane.tabs.current.id {
                             BulkRenamePane(session: session, draft: draft)
@@ -497,6 +497,23 @@ private struct ExplorerTabs: View {
                 .frame(height: .pt(Self.height), minWidth: 48)
                 .windowDrag()
         }
+        .underlay {
+            // The active pane's ring, drawn here rather than by the card so
+            // that it is under the tabs: where the current tab meets the
+            // card, the tab's own fill covers the ring's top edge, and moves
+            // with the tab when the renderer scrolls the strip. A join drawn
+            // by the card stayed where the tab had been laid out.
+            Canvas(label: "pane-ring", width: .pct(100), height: .pct(100)) { list, _ in
+                guard ringed, let card = session.cardFrames[pane.id] else { return }
+                let edge = PaneChrome.outlineWidth, r = PaneCard<EmptyView>.radius
+                list.roundedRect(x: card.x - edge, y: card.y - edge, w: card.w + 2 * edge,
+                                 h: card.h + 2 * edge, color: look.accent300, radius: r + edge)
+                if pane.tabs.tabs.first?.id == pane.tabs.currentID {
+                    list.rect(x: card.x - edge, y: card.y - edge, w: r + edge, h: r + edge,
+                              color: look.accent300)
+                }
+            }
+        }
     }
 
     /// A tab: a folder, the name, a close button. The current one is the
@@ -565,25 +582,21 @@ private struct ExplorerTabs: View {
 private struct PaneCard<Content: View>: View {
     @Bindable var session: ExplorerSession
     let pane: ExplorerPane
-    let ringed: Bool
     let content: Content
 
     static var radius: Float { 20 }
 
-    init(session: ExplorerSession, pane: ExplorerPane, ringed: Bool,
+    init(session: ExplorerSession, pane: ExplorerPane,
          @ViewBuilder content: () -> Content) {
         self.session = session
         self.pane = pane
-        self.ringed = ringed
         self.content = content()
     }
 
     var body: some View {
         let look = ExplorerLook.current
-        let card = look.card, ring = look.accent300
+        let card = look.card
         let firstIsCurrent = pane.tabs.tabs.first?.id == pane.tabs.currentID
-        let edge = PaneChrome.outlineWidth
-        let currentTab = pane.tabs.currentID
         return VStack(flexGrow: 1, padding: 0, spacing: 0) {
             content
         }
@@ -591,31 +604,15 @@ private struct PaneCard<Content: View>: View {
         .cornerRadius(Self.radius)
         .clipped()
         .underlay {
+            // Square at the top left while the first tab is current. The
+            // ring round an active pane is the tab strip's: see `ExplorerTabs`.
             Canvas(label: "pane-card", width: .pct(100), height: .pct(100)) { list, frame in
-                let r = Self.radius
-                if ringed {
-                    list.roundedRect(x: frame.x - edge, y: frame.y - edge, w: frame.w + 2 * edge,
-                                     h: frame.h + 2 * edge, color: ring, radius: r + edge)
-                    if firstIsCurrent {
-                        list.rect(x: frame.x - edge, y: frame.y - edge, w: r + edge, h: r + edge,
-                                  color: ring)
-                    }
-                }
                 if firstIsCurrent {
-                    list.rect(x: frame.x, y: frame.y, w: r, h: r, color: card)
+                    list.rect(x: frame.x, y: frame.y, w: Self.radius, h: Self.radius, color: card)
                 }
             }
         }
-        .overlayLayer {
-            // Where the current tab joins the card the outline is not drawn:
-            // the two are one shape.
-            Canvas(label: "pane-join", width: .pct(100), height: .pct(100)) { list, frame in
-                guard ringed, let tab = session.tabFrames[currentTab] else { return }
-                // The rounded fill antialiases one pixel past the top edge.
-                let joinHeight = edge + 1
-                list.rect(x: tab.x, y: frame.y - joinHeight, w: tab.w, h: joinHeight, color: card)
-            }
-        }
+        .onFrame { session.noteCardFrame(pane.id, $0) }
     }
 }
 
