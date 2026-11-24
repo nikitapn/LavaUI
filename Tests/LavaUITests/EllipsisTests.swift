@@ -116,4 +116,27 @@ final class EllipsisTests: XCTestCase {
         }
         return nil
     }
+
+    /// The cut is estimated from the full text's advances and confirmed by
+    /// shaping, instead of shaping every prefix; it must land on exactly the
+    /// string trying every prefix did, at every width a drag sweeps through.
+    func testTheEstimatedCutMatchesTryingEveryPrefix() throws {
+        let font = try font()
+        let texts = samples + [
+            "  padded   name with   runs of spaces  ", "office ffi fl ligatures.txt",
+            "Ångström café naïve résumé.docx", "e\u{301}e\u{301}e\u{301} combining.txt",
+            "👩‍👩‍👧 family 🇸🇮 flag.png", "AVATAR WAVE To.ttf", "x",
+        ]
+        for text in texts {
+            var width = font.shapedRun(text).width + 4
+            while width >= 0 {
+                XCTAssertEqual(
+                    font.ellipsizedUncached(text, availWidth: width),
+                    font.ellipsizedOneByOne(text, availWidth: width),
+                    "\(text) at \(width)"
+                )
+                width -= 0.5
+            }
+        }
+    }
 }

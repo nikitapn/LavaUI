@@ -822,18 +822,70 @@ public final class UIFont: @unchecked Sendable {
         return result
     }
 
+    /// The longest prefix that fits with "…" after it, trailing spaces
+    /// dropped — the answer `ellipsizedOneByOne` gives, found differently.
+    ///
+    /// That one shaped every candidate, one character shorter each time: a
+    /// whole HarfBuzz pass and grapheme table per character removed, so a
+    /// name cut in half cost as many shapes as it had characters. The cache
+    /// above cannot help while a divider is being dragged, because the width
+    /// is in its key — and measured in LavaExplorer, this loop was 80% of
+    /// layout during such a drag. So the cut is read off the full text's own
+    /// advances instead, and shaping only confirms it: a candidate's real
+    /// width can differ from the sum (kerning across the cut, a ligature it
+    /// breaks), so a couple past the estimate are tried first and anything
+    /// over is stepped down from, exactly as before.
     private func trimmedToWidth(_ text: String, availWidth: Float) -> String {
         let suffix = "…"
         // A text that fits is not shortened. Returning it with "…" appended,
         // as this once did, printed a whole name and then claimed it was cut.
-        guard shapedRun(text).width > availWidth else { return text }
+        guard advanceWidth(text) > availWidth else { return text }
+        let base = text.trimmingCharacters(in: .whitespaces)
+        let characters = Array(base)
+        let advances = shapedRun(base).characterAdvances
+        guard !characters.isEmpty, advances.count == characters.count else {
+            return ellipsizedOneByOne(text, availWidth: availWidth)
+        }
+        let room = availWidth - advanceWidth(suffix)
+        // The first candidate is one character short, as it always was.
+        var k = characters.count - 1
+        var width = advances[..<k].reduce(0, +)
+        while k > 0, width > room {
+            k -= 1
+            width -= advances[k]
+        }
+        k = min(characters.count - 1, k + 2)
+        while k > 0 {
+            let result = String(characters[..<k]).trimmingCharacters(in: .whitespaces) + suffix
+            if advanceWidth(result) <= availWidth { return result }
+            k -= 1
+        }
+        return suffix
+    }
+
+    /// The reference: try every prefix, longest first. Kept for the rare
+    /// text whose characters and advances do not line up, and as what the
+    /// fast path is tested against.
+    func ellipsizedOneByOne(_ text: String, availWidth: Float) -> String {
+        let suffix = "…"
+        guard advanceWidth(text) > availWidth else { return text }
         var candidate = text.trimmingCharacters(in: .whitespaces)
         while !candidate.isEmpty {
             candidate.removeLast()
             let result = candidate.trimmingCharacters(in: .whitespaces) + suffix
-            if shapedRun(result).width <= availWidth { return result }
+            if advanceWidth(result) <= availWidth { return result }
         }
         return suffix
+    }
+
+    /// `shapedRun(text).width` without the grapheme table nothing here reads.
+    private func advanceWidth(_ text: String) -> Float {
+        shape(text).reduce(0) { $0 + $1.advance }
+    }
+
+    /// Uncached `trimmedToWidth`, for tests.
+    func ellipsizedUncached(_ text: String, availWidth: Float) -> String {
+        trimmedToWidth(text, availWidth: availWidth)
     }
 }
 
