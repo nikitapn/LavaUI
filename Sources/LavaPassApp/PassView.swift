@@ -4,7 +4,14 @@ import LavaUI
 
 struct PassView: View {
     @Bindable var session: PassSession
-    var body: some View {
+    let fonts: PassFonts
+
+    @ViewBuilder var body: some View {
+        if let font = fonts.body { vaultWindow.font(font) }
+        else { vaultWindow }
+    }
+
+    private var vaultWindow: some View {
         VStack(flexGrow: 1, padding: 0, spacing: 0) {
             toolbar
             if let vault = session.snapshot {
@@ -18,10 +25,10 @@ struct PassView: View {
                     }
                     .background(Theme.current.panel)
                 }
-                HSplitView(initialFraction: 0.2, minLeading: 150, minTrailing: 560) {
+                HSplitView(initialFraction: 0.196, minLeading: 164, minTrailing: 640) {
                     sidebar(vault)
                 } trailing: {
-                    HSplitView(initialFraction: 0.43, minLeading: 220, minTrailing: 320) {
+                    HSplitView(initialFraction: 0.333, minLeading: 220, minTrailing: 320) {
                         entryList
                     } trailing: {
                         details
@@ -30,189 +37,345 @@ struct PassView: View {
             } else {
                 unlockScreen
             }
-            HStack(padding: 10, alignment: .center, spacing: 10) {
-                Text(session.busy ? "Working…" : (session.notice ?? (session.snapshot == nil ? "Vault locked" : "Changes save directly to your encrypted vault")),
-                     color: Theme.current.textDim, lineLimit: 2)
+            HStack(height: .pt(34), padding: 0, alignment: .center, spacing: 10) {
+                statusDot(session.snapshot == nil ? PassLook.accent : PassLook.sage)
+                Text(session.busy ? "Working…" : (session.notice ?? (session.snapshot == nil
+                    ? "Vault locked" : "Changes save directly to your encrypted vault")),
+                     color: PassLook.soft, font: fonts.caption, lineLimit: 1)
                     .flexShrink(1)
                 Spacer()
                 if let vault = session.snapshot {
-                    Text("\(vault.entries.filter { !$0.recycled }.count) entries", color: Theme.current.textDim)
+                    Text("\(vault.entries.filter { !$0.recycled }.count) entries", color: PassLook.soft, font: fonts.caption)
+                } else {
+                    Text("KeePass · KDBX", color: PassLook.soft, font: fonts.caption)
                 }
             }
-            .background(Theme.current.panel)
+            .padding(EdgeInsets(top: 0, leading: 22, bottom: 0, trailing: 18))
+            .background(PassLook.surface)
         }
-        .background(Theme.current.background)
+        .background(PassLook.card)
         .onAnyPress { _ in session.activity() }
     }
 
     private var toolbar: some View {
-        HStack(height: .pt(48), padding: 8, alignment: .center, spacing: 8) {
-            if WindowBridge.drawsOwnChrome { WindowControls(beforeClose: { session.lock() }) }
-            Text(session.isDemo ? "Vault · Demo" : "Vault", color: Theme.current.textPrimary)
+        HStack(height: .pt(50), padding: 0, alignment: .center, spacing: 12) {
+            if WindowBridge.drawsOwnChrome {
+                WindowControls(style: WindowControlsStyle(
+                    size: 13, close: PassLook.accent, minimize: Color(rgb24: 0xf6_a0_6b),
+                    maximize: PassLook.sage
+                ), beforeClose: { session.lock() })
+            }
+            Text(session.isDemo ? "Vault · Demo" : "Vault", color: PassLook.text, font: fonts.strong)
             if let vault = session.snapshot {
-                Text("/  \(vault.name)", color: Theme.current.textDim, lineLimit: 1).flexShrink(1)
+                PassIcon(symbol: "chevron", color: PassLook.muted, size: 12)
+                Text(vault.name, color: PassLook.soft, lineLimit: 1).flexShrink(1)
+                Text("Unlocked", color: PassLook.sageInk, font: fonts.caption)
+                    .padding(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8))
+                    .background(PassLook.sagePale)
+                    .cornerRadius(14)
             }
             Spacer()
-            iconAction("folder", "Open vault", id: "open-vault", enabled: !session.busy && !session.isDemo) { session.chooseVault() }
+            action("Open vault", id: "open-vault", icon: "folder", style: .icon,
+                   enabled: !session.busy && !session.isDemo) { session.chooseVault() }
             if session.snapshot != nil {
-                iconAction("plus", "New entry", id: "new-entry", enabled: session.writable && session.draft == nil) { session.newEntry() }
-                iconAction("lock", "Lock vault", id: "lock-vault") { session.lock() }
+                action("New entry", id: "new-entry", icon: "plus", style: .icon,
+                       enabled: session.writable && session.draft == nil) { session.newEntry() }
+                action("Lock", id: "lock-vault", icon: "lock", style: .warm, height: 30) { session.lock() }
             }
         }
-        .background(Theme.current.panel)
+        .padding(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 12))
+        .background(PassLook.surface)
         .windowDrag()
     }
 
     private var unlockScreen: some View {
         ScrollView(.vertical) {
-            VStack(padding: 16, alignment: .center, spacing: 12) {
-                HStack(padding: 0, alignment: .center, spacing: 12) {
-                    VaultMark(size: 28, color: Theme.current.accent)
-                        .padding(10)
-                        .background(Theme.current.panel)
-                        .cornerRadius(12)
-                    VStack(padding: 0, spacing: 4) {
-                        Text(session.creating ? "Create an encrypted vault" : "Your passwords. Your vault.", color: Theme.current.textPrimary)
-                        Text("KeePass-compatible. Encrypted and stored on your disk.", color: Theme.current.textSecondary)
+            VStack(padding: 0, alignment: .center, spacing: 18) {
+                VStack(padding: 0, alignment: .center, spacing: 7) {
+                    HStack(width: .pt(64), height: .pt(64), padding: 0, alignment: .center) {
+                        Spacer()
+                        PassIcon(symbol: "shield", color: PassLook.orange, size: 30)
+                        Spacer()
                     }
-                    Spacer()
+                    .background(PassLook.peach)
+                    .cornerRadius(22)
+                    Text(session.creating ? "Create an encrypted vault" : "Your passwords. Your vault.",
+                         color: PassLook.text, font: fonts.hero, align: .center)
+                    Text("KeePass-compatible. Encrypted and stored on your disk.", color: PassLook.soft)
                 }
-                .frame(width: .pt(840))
-                HStack(padding: 0, alignment: .start, spacing: 20) {
-                    if !session.creating && !session.recentVaults.isEmpty {
-                        recentVaults
-                            .frame(width: .pt(270))
-                    }
-                    unlockForm
-                        .frame(width: .pt(550))
+                HStack(width: .pt(840), padding: 0, alignment: .start, spacing: 20) {
+                    if session.creating { Spacer() }
+                    else { recentVaults.frame(width: .pt(328)) }
+                    unlockForm.frame(width: .pt(492))
+                    if session.creating { Spacer() }
                 }
-                Text("Locks after 5 minutes of inactivity. Copied passwords clear after 30 seconds.", color: Theme.current.textDim)
+                HStack(padding: 0, alignment: .center, spacing: 7) {
+                    PassIcon(symbol: "clock", color: PassLook.muted, size: 14)
+                    Text("Locks after 5 minutes of inactivity. Copied passwords clear after 30 seconds.",
+                         color: PassLook.soft, font: fonts.caption)
+                }
             }
+            .padding(EdgeInsets(top: 24, leading: 0, bottom: 16, trailing: 0))
         }
+        .agentId("unlock-scroll")
     }
 
     private var recentVaults: some View {
-        VStack(padding: 0, spacing: 8) {
+        VStack(padding: 0, spacing: 6) {
             HStack(padding: 0, alignment: .center, spacing: 8) {
-                Text("Recent vaults", color: Theme.current.textSecondary)
+                kicker("Recent vaults")
                 Spacer()
-                iconAction("trash", "Clear recent vaults", id: "clear-recent-vaults", enabled: !session.busy) { session.clearRecentVaults() }
-            }
-            ScrollView(.vertical, showsIndicator: false) {
-                VStack(padding: 0, spacing: 4) {
-                    ForEach(Array(session.recentVaults.enumerated()), id: \.offset) { item in
-                        let path = item.element
-                        HStack(padding: 8, alignment: .center, spacing: 8,
-                               onClick: { if !session.busy { session.openRecentVault(path) } }) {
-                            VaultMark(size: 24, color: Theme.current.accent)
-                            VStack(padding: 0, spacing: 2) {
-                                Text((path as NSString).lastPathComponent, color: Theme.current.textPrimary, lineLimit: 1)
-                                Text((path as NSString).deletingLastPathComponent, color: Theme.current.textSecondary, lineLimit: 1)
-                            }
-                        }
-                        .background(session.vaultPath == path ? Theme.current.selectionFill : Color.clear)
-                        .hoverBackground(Theme.current.hover)
-                        .cornerRadius(6)
-                        .cursor(.pointer)
-                        .agentId("recent-vault-\(item.offset)")
-                    }
+                if !session.recentVaults.isEmpty {
+                    action("Clear list", id: "clear-recent-vaults", style: .ghost, height: 26,
+                           enabled: !session.busy) { session.clearRecentVaults() }
                 }
             }
-            .frame(height: .pt(300))
+            .padding(EdgeInsets(top: 0, leading: 8, bottom: 4, trailing: 4))
+            if session.recentVaults.isEmpty {
+                Text("No recent vaults. Open a .kdbx file to start.", color: PassLook.soft,
+                     font: fonts.caption, align: .center)
+                    .padding(14)
+                    .frame(width: .pct(100), height: .pt(60))
+                    .border(PassLook.faint)
+                    .cornerRadius(18)
+            }
+            ForEach(Array(session.recentVaults.enumerated()), id: \.element) { item in
+                let path = item.element
+                let selected = session.vaultPath == path
+                HStack(height: .pt(58), padding: 0, alignment: .center, spacing: 2) {
+                    HStack(padding: 10, alignment: .center, spacing: 12,
+                           onClick: { if !session.busy { session.openRecentVault(path) } }) {
+                        iconTile("vault", size: 38, color: selected ? PassLook.orange : PassLook.sageInk,
+                                 fill: selected ? PassLook.peachHover : PassLook.sagePale)
+                        VStack(padding: 0, spacing: 2) {
+                            Text((path as NSString).lastPathComponent, color: PassLook.text,
+                                 font: fonts.strong, lineLimit: 1)
+                            Text((path as NSString).deletingLastPathComponent, color: PassLook.soft,
+                                 font: fonts.caption, lineLimit: 1)
+                        }
+                        .flexShrink(1)
+                        Spacer()
+                    }
+                    .flexGrow(1).flexShrink(1)
+                    .hoverBackground(selected ? PassLook.peachHover : PassLook.well)
+                    .cornerRadius(18)
+                    .cursor(.pointer)
+                    .agentId("recent-vault-\(item.offset)")
+                    action("Remove from recent vaults", id: "remove-recent-vault-\(item.offset)", icon: "close",
+                           style: .icon, enabled: !session.busy) { session.removeRecentVault(path) }
+                        .padding(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 6))
+                }
+                .background(selected ? PassLook.peach : PassLook.surface)
+                .cornerRadius(18)
+            }
+            HStack(padding: 0, alignment: .center) {
+                action("New vault…", id: "create-vault", icon: "plus", style: .ghost,
+                       enabled: !session.busy && !session.isDemo) { session.newVault() }
+                Spacer()
+            }
         }
     }
 
     private var unlockForm: some View {
-        VStack(padding: 14, spacing: 8) {
-            Text(session.creating ? "New vault" : "Unlock your vault", color: Theme.current.textPrimary)
-            Text("Vault file", color: Theme.current.textSecondary)
-            TextField(text: $session.vaultPath, placeholder: "Choose an existing .kdbx file")
-                .agentId("vault-path")
+        VStack(padding: 20, spacing: 10) {
+            Text(session.creating ? "New vault" : "Unlock your vault",
+                 color: PassLook.text, font: fonts.heading)
+            labeled("Vault file") {
+                inputPill("file", focused: session.vaultPathFocused) {
+                    TextField(text: $session.vaultPath, placeholder: "Choose a .kdbx file",
+                              focusRing: FocusRingStyle.none, restingOutline: false)
+                        .flexGrow(1).flexShrink(1)
+                        .focused($session.vaultPathFocused)
+                        .agentId("vault-path")
+                    action("Browse…", id: "browse-vault", height: 30,
+                           enabled: !session.busy && !session.isDemo) { session.chooseVault() }
+                }
+            }
             if !session.creating {
-                HStack(padding: 0, alignment: .center, spacing: 8) {
-                    iconAction("key", "Choose key file", id: "choose-key-file", label: "Key file", enabled: !session.busy && !session.isDemo) { session.chooseKeyFile() }
-                    Text(session.keyFilePath.isEmpty ? "Optional" : (session.keyFilePath as NSString).lastPathComponent,
-                         color: Theme.current.textDim, lineLimit: 1).flexShrink(1)
-                    if !session.keyFilePath.isEmpty {
-                        iconAction("trash", "Remove key file", id: "remove-key-file", enabled: !session.busy) { session.keyFilePath = "" }
+                labeled("Key file · optional") {
+                    inputPill("key") {
+                        Text(session.keyFilePath.isEmpty ? "No key file" : session.keyFilePath,
+                             color: session.keyFilePath.isEmpty ? PassLook.muted : PassLook.text,
+                             lineLimit: 1)
+                            .flexGrow(1).flexShrink(1)
+                        if !session.keyFilePath.isEmpty {
+                            action("Remove key file", id: "remove-key-file", icon: "close", style: .icon,
+                                   enabled: !session.busy) { session.keyFilePath = "" }
+                        }
+                        action("Choose…", id: "choose-key-file", height: 30,
+                               enabled: !session.busy && !session.isDemo) { session.chooseKeyFile() }
                     }
                 }
             }
-            Text("Master password", color: Theme.current.textSecondary)
-            TextField(text: $session.masterPassword, placeholder: "Master password", secure: true,
-                      onSubmit: { session.unlock() })
-                .agentId("master-password")
-            if session.creating {
-                TextField(text: $session.confirmation, placeholder: "Confirm master password", secure: true,
-                          onSubmit: { session.unlock() })
-                    .agentId("master-confirmation")
+            labeled("Master password") {
+                inputPill("lock", focused: session.masterPasswordFocused, error: session.unlockError != nil) {
+                    TextField(text: $session.masterPassword, placeholder: "Enter master password",
+                              autoFocus: true, focusRing: FocusRingStyle.none,
+                              restingOutline: false,
+                              secure: !session.showMasterPassword, onSubmit: { session.unlock() })
+                        .flexGrow(1).flexShrink(1)
+                        .focused($session.masterPasswordFocused)
+                        .agentId("master-password")
+                    action(session.showMasterPassword ? "Hide password" : "Show password",
+                           id: "reveal-master-password", icon: session.showMasterPassword ? "eye-off" : "eye",
+                           style: .icon, enabled: !session.busy) { session.toggleMasterPasswordVisibility() }
+                }
+                Text(session.unlockError ?? "", color: PassLook.brown, font: fonts.caption, lineLimit: 1)
+                    .padding(EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 4))
+                    .frame(height: .pt(18))
+                    .agentId("unlock-error")
             }
-            Toggle("Remember master password in desktop keyring", isOn: $session.rememberMaster, isEnabled: !session.isDemo && !session.busy)
+            if session.creating {
+                labeled("Confirm master password") {
+                    inputPill("lock", focused: session.confirmationFocused) {
+                        TextField(text: $session.confirmation, placeholder: "Repeat master password",
+                                  focusRing: FocusRingStyle.none, restingOutline: false, secure: true,
+                                  onSubmit: { session.unlock() })
+                            .flexGrow(1).flexShrink(1)
+                            .focused($session.confirmationFocused)
+                            .agentId("master-confirmation")
+                    }
+                }
+            }
+            Toggle("Remember in desktop keyring", isOn: $session.rememberMaster,
+                   style: ToggleStyle(trackWidth: 42, trackHeight: 24, knobInset: 3,
+                                      offTrack: PassLook.faint, onTrack: PassLook.sage, knob: .white,
+                                      disabledTrack: PassLook.faint, disabledKnob: PassLook.card,
+                                      labelGap: 12, duration: 0.15),
+                   isEnabled: !session.isDemo && !session.busy)
             HStack(padding: 0, alignment: .center, spacing: 8) {
-                iconAction("plus", "Create a new vault", id: "create-vault", enabled: !session.busy && !session.isDemo) { session.newVault() }
                 Spacer()
                 if !session.creating {
-                    iconAction("key", "Unlock with desktop keyring", id: "keyring-unlock", label: "Use keyring", enabled: !session.busy && !session.vaultPath.isEmpty && !session.isDemo) {
+                    action("Use keyring", id: "keyring-unlock", icon: "key",
+                           enabled: !session.busy && !session.vaultPath.isEmpty && !session.isDemo) {
                         session.unlock(fromKeyring: true)
                     }
                 }
-                iconAction("lock", session.creating ? "Create vault" : "Unlock vault", id: "unlock-vault", label: session.creating ? "Create vault" : "Unlock", primary: true, enabled: !session.busy && !session.vaultPath.isEmpty) {
+                action(session.creating ? "Create vault" : "Unlock", id: "unlock-vault", icon: "lock",
+                       style: .primary, enabled: !session.busy && !session.vaultPath.isEmpty) {
                     session.unlock()
                 }
             }
-            if !session.creating && !session.vaultPath.isEmpty {
-                HStack(padding: 0, alignment: .center, spacing: 8) {
-                    Text("Desktop keyring", color: Theme.current.textSecondary)
+            if !session.creating {
+                Divider()
+                HStack(padding: 0, alignment: .center, spacing: 10) {
+                    statusDot(PassLook.muted)
+                    Text("Desktop keyring", color: PassLook.soft, font: fonts.caption)
                     Spacer()
-                    iconAction("trash", "Forget remembered password", id: "forget-password", enabled: !session.busy && !session.isDemo) { session.forgetMaster() }
+                    action("Forget", id: "forget-password", style: .ghost, height: 26,
+                           enabled: !session.busy && !session.vaultPath.isEmpty && !session.isDemo) {
+                        session.forgetMaster()
+                    }
                 }
+                .padding(EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 0))
             }
         }
-        .background(Theme.current.panel)
-        .cornerRadius(12)
+        .background(PassLook.surface)
+        .cornerRadius(28)
+        .underlay {
+            Canvas(width: .pct(100), height: .pct(100)) { list, box in
+                list.shadow(x: box.x, y: box.y, w: box.w, h: box.h,
+                            cornerRadius: 28, blur: 3, color: PassLook.text.opacity(0.14), offsetY: 1)
+            }
+        }
+        .shake(trigger: session.unlockShake)
+        .agentId("unlock-card")
     }
 
-    private func iconAction(_ icon: String, _ title: String, id: String,
-                            label: String? = nil, primary: Bool = false,
-                            enabled: Bool = true, action: @escaping () -> Void) -> some View {
-        HStack(padding: 10, alignment: .center, spacing: 8,
-               onClick: { if enabled { action() } }) {
-            PassIcon(symbol: icon, color: enabled ? (primary ? .white : Theme.current.textPrimary) : Theme.current.textDim)
-            if let label { Text(label, color: enabled ? (primary ? .white : Theme.current.textPrimary) : Theme.current.textDim) }
+    private func labeled<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(padding: 0, spacing: 4) {
+            Text(label, color: PassLook.soft, font: fonts.strong)
+                .padding(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 0))
+            content()
         }
-        .background(primary && enabled ? Color(r: 0.20, g: 0.38, b: 0.72) : Color.clear)
-        .hoverBackground(enabled ? (primary ? Color(r: 0.25, g: 0.45, b: 0.80) : Theme.current.hover) : Color.clear)
-        .cornerRadius(7)
+    }
+
+    private func inputPill<Content: View>(
+        _ icon: String, focused: Bool = false, error: Bool = false, fill: Color = PassLook.card,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        HStack(height: .pt(40), padding: 0, alignment: .center, spacing: 6) {
+            PassIcon(symbol: icon, color: PassLook.muted, size: 15)
+            content()
+        }
+        .padding(EdgeInsets(top: 0, leading: 14, bottom: 0, trailing: 6))
+        .background(fill)
+        .border(error ? PassLook.orange : focused ? PassLook.accent : PassLook.divider,
+                width: error || focused ? 1.5 : 1)
+        .cornerRadius(20)
+    }
+
+    private enum ActionStyle { case plain, primary, ghost, icon, warm }
+
+    private func action(_ title: String, id: String, icon: String? = nil,
+                        style: ActionStyle = .plain, height: Float = 36,
+                        enabled: Bool = true, run: @escaping () -> Void) -> some View {
+        let ink = !enabled ? PassLook.muted : style == .primary ? PassLook.card
+            : style == .ghost || style == .warm ? PassLook.orange : PassLook.text
+        let fill: Color = switch style {
+        case .primary: enabled ? PassLook.orange : PassLook.faint
+        case .plain: PassLook.card
+        case .warm: PassLook.peach
+        case .ghost, .icon: .clear
+        }
+        let hover = style == .primary ? PassLook.brown
+            : style == .warm ? PassLook.peachHover : PassLook.well
+        let h: Float = style == .icon ? 30 : height
+        let inset: Float = style == .icon ? 0 : style == .primary ? 18 : 12
+        return HStack(width: style == .icon ? .pt(h) : .auto, height: .pt(h), padding: 0,
+                      alignment: .center, spacing: 7, onClick: enabled ? run : nil) {
+            if style == .icon { Spacer() }
+            if let icon { PassIcon(symbol: icon, color: ink, size: style == .icon ? 16 : 14) }
+            if style != .icon { Text(title, color: ink, font: fonts.strong).flexShrink(0) }
+            if style == .icon { Spacer() }
+        }
+        .padding(EdgeInsets(top: 0, leading: inset, bottom: 0, trailing: inset))
+        .background(fill)
+        .border(style == .plain ? PassLook.divider : .clear)
+        .hoverBackground(enabled ? hover : .clear)
+        .cornerRadius(h / 2)
         .cursor(enabled ? .pointer : .arrow)
         .tooltip(title)
         .agentId(id)
     }
 
+    private func kicker(_ title: String) -> some View {
+        Text(title.uppercased(), color: PassLook.muted, font: fonts.kicker)
+    }
+
+    private func statusDot(_ color: Color) -> some View {
+        Canvas(width: .pt(8), height: .pt(8)) { list, box in
+            list.circle(cx: box.x + 4, cy: box.y + 4, radius: 4, color: color)
+        }
+    }
+
+    private func iconTile(_ symbol: String, size: Float, color: Color, fill: Color) -> some View {
+        HStack(width: .pt(size), height: .pt(size), padding: 0, alignment: .center, spacing: 0) {
+            Spacer()
+            PassIcon(symbol: symbol, color: color, size: 17)
+            Spacer()
+        }
+        .background(fill)
+        .cornerRadius(size / 3)
+    }
+
     private func sidebar(_ vault: VaultSnapshot) -> some View {
-        VStack(flexGrow: 1, padding: 8, spacing: 6) {
-            Text("GROUPS", color: Theme.current.textDim).padding(8)
-            HStack(padding: 10, alignment: .center, onClick: { session.selectGroup(nil) }) {
-                Text("All Entries", color: Theme.current.textPrimary)
-            }
-            .background(session.selectedGroup == nil ? Theme.current.selectionFill : Color.clear)
-            .hoverBackground(Theme.current.hover)
-            .cornerRadius(5)
-            .agentId("all-entries")
+        let counts = Dictionary(grouping: vault.entries, by: \.groupID).mapValues(\.count)
+        let activeCount = vault.entries.filter { !$0.recycled }.count
+        return VStack(flexGrow: 1, padding: 10, spacing: 6) {
+            kicker("Groups").padding(8)
             ScrollView(.vertical) {
                 VStack(padding: 0, spacing: 2) {
+                    groupRow("All Entries", id: "all-entries", icon: "list",
+                             count: activeCount, selected: session.selectedGroup == nil) {
+                        session.selectGroup(nil)
+                    }
                     ForEach(vault.groups) { group in
-                        HStack(padding: 0, alignment: .center, spacing: 8,
-                               onClick: { session.selectGroup(group.id) }) {
-                            VaultMark(size: 16, color: Theme.current.textDim)
-                            Text(group.name, color: Theme.current.textSecondary, lineLimit: 1).flexShrink(1)
-                            Spacer()
+                        groupRow(group.name, id: "group-\(group.id)", icon: group.recycleBin ? "trash" : "folder",
+                                 count: counts[group.id, default: 0], selected: session.selectedGroup == group.id,
+                                 indent: Float(min(group.depth, 5) * 10)) {
+                            session.selectGroup(group.id)
                         }
-                        .padding(EdgeInsets(top: 9, leading: Float(10 + group.depth * 12), bottom: 9, trailing: 6))
-                        .background(session.selectedGroup == group.id ? Theme.current.selectionFill : Color.clear)
-                        .hoverBackground(Theme.current.hover)
-                        .cornerRadius(5)
-                        .cursor(.pointer)
-                        .agentId("group-\(group.id)")
                     }
                 }
             }
@@ -220,199 +383,440 @@ struct PassView: View {
                 TextField(text: Binding(get: { session.groupName ?? "" }, set: { session.groupName = $0 }),
                           placeholder: "Group name", autoFocus: true, onSubmit: { session.addGroup() })
                     .agentId("group-name")
-                HStack(padding: 0, spacing: 6) {
-                    Button("Cancel") { session.groupName = nil }
-                    Button("Add", isEnabled: session.writable) { session.addGroup() }
+                HStack(padding: 0, alignment: .center, spacing: 6) {
+                    action("Cancel", id: "cancel-group", style: .ghost) { session.groupName = nil }
+                    Spacer()
+                    action("Add", id: "add-group", style: .primary, enabled: session.writable) { session.addGroup() }
                 }
             } else {
-                Button("New Group", isEnabled: session.writable && session.draft == nil) { session.groupName = "" }
-                    .agentId("new-group")
+                HStack(padding: 0, alignment: .center) {
+                    Spacer()
+                    action("New group", id: "new-group", icon: "plus",
+                           enabled: session.writable && session.draft == nil) { session.groupName = "" }
+                    Spacer()
+                }
             }
         }
-        .background(Theme.current.panel)
+        .background(PassLook.surface)
+    }
+
+    private func groupRow(_ title: String, id: String, icon: String, count: Int?,
+                          selected: Bool, indent: Float = 0, run: @escaping () -> Void) -> some View {
+        HStack(height: .pt(34), padding: 0, alignment: .center, spacing: 9, onClick: run) {
+            PassIcon(symbol: icon, color: selected ? PassLook.orange : PassLook.soft, size: 15)
+            Text(title, color: selected ? PassLook.brown : PassLook.text, font: fonts.strong, lineLimit: 1)
+                .flexShrink(1)
+            Spacer()
+            if let count { Text(String(count), color: PassLook.soft, font: fonts.caption) }
+        }
+        .padding(EdgeInsets(top: 0, leading: 12 + indent, bottom: 0, trailing: 12))
+        .background(selected ? PassLook.peach : .clear)
+        .hoverBackground(selected ? PassLook.peachHover : PassLook.well)
+        .cornerRadius(17)
+        .cursor(.pointer)
+        .agentId(id)
     }
 
     private var entryList: some View {
-        VStack(flexGrow: 1, padding: 8, spacing: 8) {
-            TextField(text: $session.search, placeholder: "Search entries…")
-                .agentId("search-entries")
+        VStack(flexGrow: 1, padding: 10, spacing: 8) {
+            inputPill("search", focused: session.searchFocused, fill: PassLook.well) {
+                TextField(text: $session.search, placeholder: "Search entries",
+                          focusRing: FocusRingStyle.none, restingOutline: false)
+                    .background(.clear)
+                    .flexGrow(1)
+                    .focused($session.searchFocused)
+                    .agentId("search-entries")
+                Text("Ctrl+F", color: PassLook.soft, font: fonts.caption)
+                    .padding(5)
+                    .background(PassLook.card)
+                    .cornerRadius(10)
+            }
             ScrollView(.vertical) {
-                VStack(padding: 0, spacing: 3) {
+                VStack(padding: 0, spacing: 2) {
                     ForEach(session.visibleEntries) { entry in
-                        VStack(padding: 10, spacing: 4, onClick: { session.selectEntry(entry.id) }) {
-                            Text(entry.title.isEmpty ? "Untitled" : entry.title,
-                                 color: Theme.current.textPrimary, lineLimit: 1)
-                            Text(entry.username.isEmpty ? entry.group : entry.username,
-                                 color: Theme.current.textDim, lineLimit: 1)
-                        }
-                        .background(session.selectedEntry == entry.id ? Theme.current.selectionFill : Color.clear)
-                        .hoverBackground(Theme.current.hover)
-                        .cornerRadius(6)
-                        .cursor(.pointer)
-                        .agentId("entry-\(entry.id)")
+                        entryRow(entry)
                     }
                     if session.visibleEntries.isEmpty {
-                        Text(session.search.isEmpty ? "No entries yet" : "No matching entries", color: Theme.current.textDim)
+                        Text(session.search.isEmpty ? "No entries yet" : "No matching entries",
+                             color: PassLook.soft, align: .center)
                             .padding(16)
                     }
                 }
             }
         }
+        .background(PassLook.card)
     }
 
-    @ViewBuilder private var details: some View {
-        if session.draft != nil {
-            VStack(flexGrow: 1, padding: 0, spacing: 0) {
-                ScrollView(.vertical) {
-                    VStack(padding: 20, spacing: 10) {
-                        Text(session.draft?.id == nil ? "New Entry" : "Edit Entry", color: Theme.current.textPrimary)
-                        field("Title", key: \.title, id: "entry-title")
-                        field("Username", key: \.username, id: "entry-username")
-                        Text("Password", color: Theme.current.textDim)
-                        TextField(text: draftBinding(\.password), placeholder: "Password", secure: !session.showPassword)
-                            .agentId("entry-password")
-                        HStack(padding: 0, alignment: .center, spacing: 6) {
-                            Button(session.showPassword ? "Hide" : "Reveal") { session.showPassword.toggle() }
-                            Button("Generate", isEnabled: !session.busy) { session.generatePassword() }
-                                .agentId("generate-password")
-                            Button("−") { session.generatedLength = max(12, session.generatedLength - 4) }
-                            Text("\(session.generatedLength)", color: Theme.current.textDim)
-                            Button("+") { session.generatedLength = min(64, session.generatedLength + 4) }
-                        }
-                        field("URL", key: \.url, id: "entry-url")
-                        Text("Notes", color: Theme.current.textDim)
-                        EditorView(text: draftBinding(\.notes), showLineNumbers: false, wraps: true, visibleLines: 8)
-                            .frame(height: .pt(180))
-                            .agentId("entry-notes")
-                        Text("Group", color: Theme.current.textDim)
-                        ForEach((session.snapshot?.groups ?? []).filter { !$0.recycleBin }) { group in
-                            HStack(padding: 6, alignment: .center, spacing: 8,
-                                   onClick: { session.draft?.groupID = group.id }) {
-                                Text(session.draft?.groupID == group.id ? "●" : "○", color: Theme.current.textDim)
-                                Text(group.name, color: Theme.current.textSecondary, lineLimit: 1)
-                            }
-                            .hoverBackground(Theme.current.hover)
-                            .cornerRadius(4)
-                        }
-                    }
-                }
-                HStack(padding: 16, alignment: .center, spacing: 8) {
-                    Button("Cancel", isEnabled: !session.busy) { session.draft = nil; session.showPassword = false }
-                    Spacer()
-                    Button("Save Entry", isEnabled: session.writable) { session.saveEntry() }
-                        .agentId("save-entry")
-                }
-                .background(Theme.current.panel)
+    private func entryRow(_ entry: VaultEntry) -> some View {
+        let selected = session.selectedEntry == entry.id
+        return HStack(padding: 9, alignment: .center, spacing: 12,
+                      onClick: { session.selectEntry(entry.id) }) {
+            entryTile(entry, size: 36)
+            VStack(padding: 0, spacing: 2) {
+                Text(entry.title.isEmpty ? "Untitled" : entry.title,
+                     color: selected ? PassLook.brown : PassLook.text, font: fonts.strong, lineLimit: 1)
+                Text(entry.username.isEmpty ? entry.group : entry.username, color: PassLook.soft,
+                     font: fonts.caption, lineLimit: 1)
             }
-        } else if let entry = session.selected {
-            entryDetails(entry)
-        } else {
-            VStack(flexGrow: 1, padding: 24, alignment: .center, spacing: 14) {
-                Spacer()
-                Text("Select an entry", color: Theme.current.textSecondary)
-                Text("Copy a password, or edit its details", color: Theme.current.textDim)
-                Button("New Entry", isEnabled: session.writable) { session.newEntry() }
-                Spacer()
+            .flexShrink(1)
+            Spacer()
+        }
+        .background(selected ? PassLook.peach : .clear)
+        .hoverBackground(selected ? PassLook.peachHover : PassLook.well)
+        .cornerRadius(16)
+        .cursor(.pointer)
+        .agentId("entry-\(entry.id)")
+    }
+
+    private func entryTile(_ entry: VaultEntry, size: Float) -> some View {
+        let palettes: [(Color, Color)] = [
+            (PassLook.peach, PassLook.brown), (PassLook.sagePale, PassLook.sageInk),
+            (PassLook.faint, PassLook.soft), (PassLook.orange, PassLook.card)
+        ]
+        let (fill, ink) = palettes[Int(entry.id.uuid.0) % palettes.count]
+        return Text(entry.title.first.map { String($0).uppercased() } ?? "?", color: ink,
+                    font: size > 40 ? fonts.detail : fonts.heading, align: .center)
+            .frame(width: .pt(size), height: .pt(size))
+            .background(fill)
+            .cornerRadius(size / 3)
+    }
+
+    private var details: some View {
+        VStack(flexGrow: 1, padding: 0, spacing: 0) {
+            if session.draft != nil {
+                editDetails
+            } else if let details = session.entryDetails {
+                entryDetails(details)
+            } else if session.selectedEntry == nil {
+                VStack(flexGrow: 1, padding: 24, alignment: .center, spacing: 8) {
+                    Spacer()
+                    Text("Nothing selected", color: PassLook.text, font: fonts.heading)
+                    Text("Pick an entry on the left, or add a new one.", color: PassLook.soft)
+                    Spacer()
+                }
+            }
+            if let message = session.clipboardNotice {
+                HStack(padding: 0, alignment: .center) {
+                    Spacer()
+                    HStack(padding: 0, alignment: .center, spacing: 6) {
+                        PassIcon(symbol: "check", color: PassLook.sagePale, size: 14)
+                        Text(message, color: PassLook.card, font: fonts.caption, lineLimit: 1)
+                            .flexShrink(1)
+                        Text("Clear now", color: PassLook.card, font: fonts.strong, hoverFill: PassLook.soft,
+                             align: .center, onClick: { session.clearClipboard() })
+                            .padding(6)
+                            .cornerRadius(14)
+                            .cursor(.pointer)
+                    }
+                    .padding(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 6))
+                    .background(PassLook.text)
+                    .cornerRadius(18)
+                    .agentId("clipboard-toast")
+                    Spacer()
+                }
+                .padding(8)
             }
         }
+        .background(PassLook.card)
     }
 
-    private func entryDetails(_ entry: VaultEntry) -> some View {
+    private var editDetails: some View {
         VStack(flexGrow: 1, padding: 0, spacing: 0) {
             ScrollView(.vertical) {
-                VStack(padding: 20, spacing: 14) {
-                    Text(entry.title, color: Theme.current.textPrimary)
-                    Text(entry.group, color: Theme.current.textDim, lineLimit: 2)
-                    Divider()
-                    Text("Username", color: Theme.current.textDim)
-                    Text(entry.username.isEmpty ? "—" : entry.username, color: Theme.current.textPrimary)
+                VStack(padding: 22, spacing: 14) {
                     HStack(padding: 0, alignment: .center, spacing: 8) {
-                        Button("Copy Username", isEnabled: !entry.username.isEmpty && !session.busy) { session.copyField(entry.username) }
-                        Button("Copy Password", isEnabled: !session.busy) { session.copyPassword() }
-                            .agentId("copy-password")
-                    }
-                    Text("Password", color: Theme.current.textDim)
-                    Text("••••••••••••", color: Theme.current.textPrimary)
-                    if !entry.url.isEmpty {
-                        Text("URL", color: Theme.current.textDim)
-                        Text(entry.url, color: Theme.current.textSecondary)
-                        Button("Copy URL", isEnabled: !session.busy) { session.copyField(entry.url) }
-                    }
-                    Divider()
-                    Text("Notes", color: Theme.current.textDim)
-                    if let content = session.entryContent, content.entryID == entry.id {
-                        Text(content.notes.isEmpty ? "No notes" : content.notes,
-                             color: content.notes.isEmpty ? Theme.current.textDim : Theme.current.textPrimary)
-                            .agentId("entry-notes-display")
-                        if !content.notes.isEmpty {
-                            Button("Copy Notes", isEnabled: !session.busy) { session.copyField(content.notes) }
-                                .agentId("copy-notes")
-                        }
-                        Divider()
-                        HStack(padding: 0, alignment: .center, spacing: 8) {
-                            Text("Attachments (\(content.attachments.count))", color: Theme.current.textDim)
-                            Spacer()
-                            Button("Add File…", isEnabled: session.writable) { session.addAttachment() }
-                                .agentId("add-attachment")
-                        }
-                        ForEach(content.attachments) { attachment in
-                            attachmentRow(attachment)
-                        }
-                        if content.attachments.isEmpty {
-                            Text("No attachments", color: Theme.current.textDim)
-                        }
-                    } else {
-                        Text("Loading entry…", color: Theme.current.textDim)
-                    }
-                    if entry.customFieldCount > 0 {
-                        Text("\(entry.customFieldCount) custom fields preserved", color: Theme.current.textDim)
-                    }
-                }
-            }
-            VStack(padding: 16, spacing: 8) {
-                if session.confirmRecycle {
-                    Text("Move this entry to the Recycle Bin?", color: Theme.current.textSecondary)
-                    HStack(padding: 0, spacing: 8) {
-                        Button("Cancel") { session.confirmRecycle = false }
-                        Button("Move to Bin", isEnabled: session.writable) { session.recycleEntry() }
-                    }
-                } else {
-                    HStack(padding: 0, alignment: .center, spacing: 8) {
-                        Button(entry.recycled ? "Edit / Restore" : "Edit", isEnabled: session.writable) { session.editEntry() }
-                            .agentId("edit-entry")
-                        if !entry.recycled {
-                            Button("Recycle", isEnabled: session.writable) { session.confirmRecycle = true }
-                        }
+                        Text(session.draft?.id == nil ? "New entry" : "Edit entry",
+                             color: PassLook.text, font: fonts.detail)
                         Spacer()
+                        Text("Unsaved", color: PassLook.brown, font: fonts.caption)
+                            .padding(6).background(PassLook.peach).cornerRadius(12)
+                    }
+                    field("Title", key: \.title, id: "entry-title")
+                    field("Username", key: \.username, id: "entry-username")
+                    labeled("Password") {
+                        strengthMeter(PasswordStrength(password: session.draft?.password ?? ""))
+                        inputPill("lock") {
+                            TextField(text: draftBinding(\.password), placeholder: "Password",
+                                      focusRing: .rounded, restingOutline: false, secure: !session.showPassword)
+                                .flexGrow(1).flexShrink(1)
+                                .agentId("entry-password")
+                            action(session.showPassword ? "Hide password" : "Show password",
+                                   id: "reveal-draft-password", icon: session.showPassword ? "eye-off" : "eye",
+                                   style: .icon) { session.showPassword.toggle() }
+                        }
+                        HStack(padding: 0, alignment: .center, spacing: 6, wraps: true) {
+                            action("Generate", id: "generate-password", icon: "key", height: 30,
+                                   enabled: !session.busy) { session.generatePassword() }
+                            HStack(padding: 0, alignment: .center, spacing: 4) {
+                                action("Shorter", id: "password-shorter", icon: "minus", style: .icon,
+                                       enabled: session.generatedLength > 12) { session.generatedLength -= 1 }
+                                Text("\(session.generatedLength) chars", color: PassLook.text, font: fonts.caption)
+                                action("Longer", id: "password-longer", icon: "plus", style: .icon,
+                                       enabled: session.generatedLength < 64) { session.generatedLength += 1 }
+                            }
+                            .background(PassLook.well)
+                            .cornerRadius(15)
+                            generatorOption("ABC", id: "uppercase", option: .uppercase)
+                            generatorOption("abc", id: "lowercase", option: .lowercase)
+                            generatorOption("123", id: "numbers", option: .numbers)
+                            generatorOption("#$%", id: "symbols", option: .symbols)
+                        }
+                    }
+                    field("Website", key: \.url, id: "entry-url")
+                    labeled("Notes") {
+                        EditorView(text: draftBinding(\.notes), showLineNumbers: false, wraps: true, visibleLines: 8)
+                            .frame(height: .pt(114))
+                            .background(PassLook.well)
+                            .border(PassLook.divider)
+                            .cornerRadius(18)
+                            .agentId("entry-notes")
+                    }
+                    labeled("Group") {
+                        ForEach((session.snapshot?.groups ?? []).filter { !$0.recycleBin }) { group in
+                            groupRow(group.name, id: "draft-group-\(group.id)", icon: "folder",
+                                     count: nil, selected: session.draft?.groupID == group.id,
+                                     indent: Float(min(group.depth, 5) * 10)) {
+                                session.draft?.groupID = group.id
+                            }
+                        }
                     }
                 }
             }
-            .background(Theme.current.panel)
+            Divider()
+            HStack(padding: 12, alignment: .center, spacing: 8) {
+                Text("Saved to the encrypted vault file.", color: PassLook.soft, font: fonts.caption)
+                    .flexShrink(1)
+                Spacer()
+                action("Cancel", id: "cancel-entry", enabled: !session.busy) {
+                    session.draft = nil; session.showPassword = false
+                }
+                action("Save entry", id: "save-entry", icon: "check", style: .primary, enabled: session.writable) {
+                    session.saveEntry()
+                }
+            }
         }
     }
 
-    private func attachmentRow(_ attachment: VaultAttachment) -> some View {
+    private func generatorOption(_ title: String, id: String, option: PasswordGenerator.Characters) -> some View {
+        action(title, id: "password-\(id)", style: session.generatedCharacters.contains(option) ? .warm : .plain,
+               height: 28) {
+            let next = session.generatedCharacters.symmetricDifference(option)
+            if !next.isEmpty { session.generatedCharacters = next }
+        }
+    }
+
+    private func entryDetails(_ details: PassSession.EntryDetails) -> some View {
+        let entry = details.entry
+        let content = details.content
+        return ScrollView(.vertical) {
+            VStack(padding: 22, spacing: 10) {
+                HStack(padding: 0, alignment: .center, spacing: 12) {
+                    entryTile(entry, size: 52)
+                    VStack(padding: 0, spacing: 3) {
+                        Text(entry.title.isEmpty ? "Untitled" : entry.title, color: PassLook.text,
+                             font: fonts.detail, lineLimit: 1)
+                        Text(entry.group, color: PassLook.soft, font: fonts.caption, lineLimit: 1)
+                    }
+                    .flexShrink(1)
+                    Spacer()
+                    action(entry.recycled ? "Restore…" : "Edit", id: "edit-entry", icon: "edit",
+                           enabled: session.writable,
+                           run: entryAction(details) { session.editEntry() })
+                    if !entry.recycled {
+                        action("Move to Recycle Bin", id: "recycle-entry", icon: "trash", style: .icon,
+                               enabled: session.writable,
+                               run: entryAction(details) { session.confirmRecycle = true })
+                    }
+                }
+                .padding(EdgeInsets(top: 0, leading: 0, bottom: 10, trailing: 0))
+                if session.confirmRecycle {
+                    detailCard {
+                        Text("Move this entry to the Recycle Bin?", color: PassLook.brown)
+                            .flexShrink(1)
+                        Spacer()
+                        action("Cancel", id: "cancel-recycle", style: .ghost,
+                               run: entryAction(details) { session.confirmRecycle = false })
+                        action("Move to bin", id: "confirm-recycle", style: .primary, enabled: session.writable,
+                               run: entryAction(details) { session.recycleEntry() })
+                    }
+                }
+                detailCard {
+                    valueLabel("Username", value: entry.username.isEmpty ? "—" : entry.username)
+                    Spacer()
+                    action("Copy", id: "copy-username", icon: "copy", height: 32,
+                           enabled: !entry.username.isEmpty && !session.busy,
+                           run: entryAction(details) { session.copyField(entry.username) })
+                }
+                detailCard {
+                    VStack(padding: 0, spacing: 3) {
+                        HStack(padding: 0, alignment: .center, spacing: 8, wraps: true) {
+                            kicker("Password")
+                            if let content {
+                                strengthMeter(content.passwordStrength)
+                            }
+                        }
+                        Text(session.revealedPassword ?? "••••••••••••", color: PassLook.text, lineLimit: 1)
+                    }
+                    .flexShrink(1)
+                    Spacer()
+                    action(session.revealedPassword == nil ? "Show password" : "Hide password",
+                           id: "reveal-entry-password", icon: session.revealedPassword == nil ? "eye" : "eye-off",
+                           style: .icon, enabled: !session.busy,
+                           run: entryAction(details) { session.toggleEntryPassword() })
+                    action("Copy", id: "copy-password", icon: "copy", style: .primary,
+                           height: 32, enabled: !session.busy,
+                           run: entryAction(details) { session.copyPassword() })
+                }
+                if !entry.url.isEmpty {
+                    let link = websiteURL(entry.url)
+                    detailCard {
+                        VStack(padding: 0, spacing: 4) {
+                            kicker("Website")
+                            if let link {
+                                Text(entry.url, color: PassLook.orange, hoverColor: PassLook.brown, lineLimit: 1,
+                                     onClick: entryAction(details) { session.openWebsite(link) })
+                                    .cursor(.pointer)
+                                    .tooltip("Open website")
+                            } else {
+                                Text(entry.url, color: PassLook.text, lineLimit: 1)
+                            }
+                        }
+                        .flexShrink(1)
+                        Spacer()
+                        action("Copy", id: "copy-url", icon: "copy", height: 32,
+                               run: entryAction(details) { session.copyField(entry.url) })
+                    }
+                }
+                if let content {
+                    notesCard(content, details: details)
+                    attachmentCard(content, details: details)
+                    if let modified = content.modified {
+                        Text("Modified \(modified.formatted(date: .abbreviated, time: .omitted))",
+                             color: PassLook.soft, font: fonts.caption)
+                    }
+                } else {
+                    Text("Could not load entry details.", color: PassLook.soft, font: fonts.caption)
+                }
+                if entry.customFieldCount > 0 {
+                    Text("\(entry.customFieldCount) custom fields preserved", color: PassLook.soft, font: fonts.caption)
+                }
+            }
+        }
+    }
+
+    /// A retained panel can still receive a press while another entry loads.
+    private func entryAction(_ details: PassSession.EntryDetails, _ run: @escaping () -> Void) -> () -> Void {
+        {
+            guard session.canAct(on: details) else { return }
+            run()
+        }
+    }
+
+    private func detailCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        HStack(padding: 12, alignment: .center, spacing: 8, content: content)
+            .background(PassLook.surface)
+            .cornerRadius(20)
+    }
+
+    private func valueLabel(_ label: String, value: String) -> some View {
+        VStack(padding: 0, spacing: 4) {
+            kicker(label)
+            Text(value, color: PassLook.text, lineLimit: 1)
+        }
+        .flexShrink(1)
+    }
+
+    private func websiteURL(_ value: String) -> URL? {
+        guard let url = URL(string: value),
+              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              let host = url.host, !host.isEmpty,
+              url.user == nil, url.password == nil else { return nil }
+        return url
+    }
+
+    private func notesCard(_ content: VaultEntryContent, details: PassSession.EntryDetails) -> some View {
+        VStack(padding: 14, spacing: 6) {
+            HStack(padding: 0, alignment: .center) {
+                kicker("Notes")
+                Spacer()
+                if !content.notes.isEmpty {
+                    action("Copy", id: "copy-notes", icon: "copy", height: 30,
+                           run: entryAction(details) { session.copyField(content.notes) })
+                }
+            }
+            Text(content.notes.isEmpty ? "No notes" : content.notes,
+                 color: content.notes.isEmpty ? PassLook.soft : PassLook.text)
+                .agentId("entry-notes-display")
+        }
+        .background(PassLook.surface)
+        .cornerRadius(20)
+    }
+
+    private func attachmentCard(_ content: VaultEntryContent, details: PassSession.EntryDetails) -> some View {
+        VStack(padding: 12, spacing: 8) {
+            HStack(padding: 0, alignment: .center, spacing: 10) {
+                PassIcon(symbol: "attachment", color: PassLook.muted, size: 16)
+                VStack(padding: 0, spacing: 3) {
+                    Text("Attachments", color: PassLook.text, font: fonts.strong)
+                    Text(content.attachments.isEmpty ? "No files attached. Drop a file here or add one."
+                         : "\(content.attachments.count) attached", color: PassLook.soft, font: fonts.caption)
+                }
+                .flexShrink(1)
+                Spacer()
+                action("Add file…", id: "add-attachment", height: 32,
+                       enabled: session.writable, run: entryAction(details) { session.addAttachment() })
+            }
+            ForEach(content.attachments) { attachment in
+                attachmentRow(attachment, details: details)
+            }
+        }
+        .border(PassLook.faint)
+        .cornerRadius(20)
+        .onDrop { files in
+            guard session.canAct(on: details), let file = files.first else { return }
+            session.importAttachment(file)
+        }
+    }
+
+    private func strengthMeter(_ strength: PasswordStrength) -> some View {
+        HStack(padding: 0, alignment: .center, spacing: 4) {
+            Canvas(width: .pt(68), height: .pt(5)) { list, box in
+                for bar in 0..<4 {
+                    let fill = bar < strength.rawValue ? (strength.rawValue > 2 ? PassLook.sage : PassLook.accent) : PassLook.faint
+                    list.roundedRect(x: box.x + Float(bar) * 17, y: box.y, w: 14, h: 4, color: fill, radius: 2)
+                }
+            }
+            Text(strength.label, color: strength.rawValue > 2 ? PassLook.sageInk : PassLook.brown, font: fonts.caption)
+        }
+        .tooltip("Estimate based on length and character variety")
+    }
+
+    private func attachmentRow(_ attachment: VaultAttachment, details: PassSession.EntryDetails) -> some View {
         VStack(padding: 10, spacing: 8) {
             Text(attachment.name, color: Theme.current.textPrimary)
                 .agentId("attachment-name-\(attachment.id)")
             Text(ByteCountFormatter.string(fromByteCount: Int64(attachment.size), countStyle: .file),
                  color: Theme.current.textDim)
             HStack(padding: 0, alignment: .center, spacing: 6) {
-                Button("Open", isEnabled: !session.busy) { session.openAttachment(attachment) }
+                Button("Open", isEnabled: !session.busy,
+                       action: entryAction(details) { session.openAttachment(attachment) })
                     .tooltip("Open a private temporary copy; removed when the vault locks")
                     .agentId("open-attachment-\(attachment.id)")
-                Button("Save As…", isEnabled: !session.busy) { session.saveAttachment(attachment) }
+                Button("Save As…", isEnabled: !session.busy,
+                       action: entryAction(details) { session.saveAttachment(attachment) })
                     .agentId("save-attachment-\(attachment.id)")
                 Spacer()
-                Button("Remove", isEnabled: session.writable) { session.attachmentPendingRemoval = attachment }
+                Button("Remove", isEnabled: session.writable,
+                       action: entryAction(details) { session.attachmentPendingRemoval = attachment })
                     .agentId("remove-attachment-\(attachment.id)")
             }
             if session.attachmentPendingRemoval?.id == attachment.id {
                 Text("Remove this attachment? The previous copy remains in entry history.", color: Theme.current.textSecondary)
                 HStack(padding: 0, alignment: .center, spacing: 6) {
-                    Button("Cancel") { session.attachmentPendingRemoval = nil }
+                    Button("Cancel", action: entryAction(details) { session.attachmentPendingRemoval = nil })
                     Spacer()
-                    Button("Remove Attachment", isEnabled: session.writable) { session.removeAttachment() }
+                    Button("Remove Attachment", isEnabled: session.writable,
+                           action: entryAction(details) { session.removeAttachment() })
                         .agentId("confirm-remove-attachment")
                 }
             }
@@ -425,60 +829,49 @@ struct PassView: View {
         Binding(get: { session.draft?[keyPath: key] ?? "" }, set: { session.draft?[keyPath: key] = $0 })
     }
     private func field(_ label: String, key: WritableKeyPath<CredentialDraft, String>, id: String) -> some View {
-        VStack(padding: 0, spacing: 6) {
-            Text(label, color: Theme.current.textDim)
-            TextField(text: draftBinding(key), placeholder: label).agentId(id)
+        labeled(label) {
+            inputPill(key == \.url ? "link" : "file") {
+                TextField(text: draftBinding(key), placeholder: label,
+                          focusRing: .rounded, restingOutline: false)
+                    .flexGrow(1)
+                    .agentId(id)
+            }
         }
     }
 }
 
-private struct VaultMark: View {
-    var size: Float
-    var color: Color
-    var body: some View {
-        Canvas(label: "Vault", width: .pt(size), height: .pt(size)) { list, frame in
-            let u = size / 24
-            list.strokedRect(x: frame.x + 3 * u, y: frame.y + 10 * u,
-                             w: 18 * u, h: 12 * u, color: color, radius: 2 * u, width: 1.5 * u)
-            list.line(x1: frame.x + 7 * u, y1: frame.y + 10 * u,
-                      x2: frame.x + 7 * u, y2: frame.y + 6 * u, color: color, width: 1.5 * u)
-            list.line(x1: frame.x + 7 * u, y1: frame.y + 6 * u,
-                      x2: frame.x + 17 * u, y2: frame.y + 6 * u, color: color, width: 1.5 * u)
-            list.line(x1: frame.x + 17 * u, y1: frame.y + 6 * u,
-                      x2: frame.x + 17 * u, y2: frame.y + 10 * u, color: color, width: 1.5 * u)
-            list.circle(cx: frame.x + 12 * u, cy: frame.y + 15 * u, radius: 1.5 * u, color: color)
-            list.line(x1: frame.x + 12 * u, y1: frame.y + 15 * u,
-                      x2: frame.x + 12 * u, y2: frame.y + 18 * u, color: color, width: 1.5 * u)
-        }
-    }
-}
-
-/// Small vector marks that stay sharp at the window's scale.
 private struct PassIcon: View {
     let symbol: String
     let color: Color
+    var size: Float = 18
+
     var body: some View {
-        Canvas(label: symbol, width: .pt(18), height: .pt(18)) { list, f in
-            func line(_ x: Float, _ y: Float, _ x2: Float, _ y2: Float) {
-                list.line(x1: f.x + x, y1: f.y + y, x2: f.x + x2, y2: f.y + y2, color: color, width: 1.5)
-            }
-            switch symbol {
-            case "plus":
-                line(9, 3, 9, 15); line(3, 9, 15, 9)
-            case "folder":
-                line(2, 5, 2, 15); line(2, 15, 16, 15); line(16, 15, 16, 6)
-                line(16, 6, 8, 6); line(8, 6, 6, 3); line(6, 3, 2, 3); line(2, 3, 2, 5)
-            case "trash":
-                line(3, 5, 15, 5); line(7, 2, 11, 2); line(5, 5, 6, 16)
-                line(6, 16, 12, 16); line(12, 16, 13, 5); line(8, 8, 8, 13); line(10, 8, 10, 13)
-            case "key":
-                list.strokedRect(x: f.x + 2, y: f.y + 2, w: 7, h: 7, color: color, radius: 3.5, width: 1.5)
-                line(8, 8, 15, 15); line(12, 12, 14, 10); line(14, 14, 16, 12)
-            default:
-                list.strokedRect(x: f.x + 3, y: f.y + 8, w: 12, h: 8, color: color, radius: 2, width: 1.5)
-                line(5, 8, 5, 3); line(5, 3, 13, 3); line(13, 3, 13, 8)
-                line(9, 11, 9, 13)
-            }
+        Icon(path, size: size, color: color, strokeWidth: 2)
+    }
+
+    private var path: String {
+        switch symbol {
+        case "plus": "M12 5v14M5 12h14"
+        case "minus": "M5 12h14"
+        case "check": "M5 12l4 4L19 6"
+        case "link": "M10 13a4 4 0 0 0 6 0l3-3a4.2 4.2 0 0 0-6-6l-2 2M14 11a4 4 0 0 0-6 0l-3 3a4.2 4.2 0 0 0 6 6l2-2"
+        case "folder": "M3 7a2 2 0 0 1 2-2h4.2l2 2.2H19a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"
+        case "trash": "M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"
+        case "key": "M15.5 7.5 19 4M21 2l-2 2 3 3-3.5 3.5-3-3M14.2 9.8a5 5 0 1 1-7 7 5 5 0 0 1 7-7Z"
+        case "file": "M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7ZM14 2v4a2 2 0 0 0 2 2h4"
+        case "vault": "M4 7h16v13H4zM8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M12 12v3"
+        case "shield": "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10ZM10 11V9.5a2 2 0 0 1 4 0V11M9 11h6v4.5H9z"
+        case "clock": "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM12 7v5l3 2"
+        case "close": "M6 6l12 12M18 6 6 18"
+        case "chevron": "m9 6 6 6-6 6"
+        case "search": "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16ZM21 21l-4.4-4.4"
+        case "list": "M3 5h18M3 12h18M3 19h18"
+        case "copy": "M9 9h11v11H9zM5 15H4V4h11v1"
+        case "edit": "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"
+        case "attachment": "m21 11-8.5 8.5a4.5 4.5 0 0 1-6.4-6.4l8-8a3 3 0 0 1 4.2 4.2l-8 8a1.5 1.5 0 0 1-2.1-2.1l7-7"
+        case "eye": "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12ZM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"
+        case "eye-off": "M3 3l18 18M10.6 5.1A9.8 9.8 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a9.6 9.6 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2"
+        default: "M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4"
         }
     }
 }

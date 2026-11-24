@@ -1619,7 +1619,7 @@ public final class DrawList {
         ox: Float, oy: Float
     ) {
         if let box = node as? YogaBoxNode, let yref = box.yoga {
-            let x = ox + YGNodeLayoutGetLeft(yref)
+            let x = ox + YGNodeLayoutGetLeft(yref) + box.visualOffsetX
             let y = oy + YGNodeLayoutGetTop(yref)
             let w = YGNodeLayoutGetWidth(yref)
             let h = YGNodeLayoutGetHeight(yref)

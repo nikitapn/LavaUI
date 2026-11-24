@@ -181,6 +181,8 @@ class YogaBoxNode: AnyViewNode {
     var isScrollable = false
     /// Appear/disappear animation, if `.transition()` was applied.
     var transitionState: TransitionState?
+    /// Transient presentation offset shared by paint and pointer routing.
+    var visualOffsetX: Float = 0
     /// Backdrop blur radius from `.backdropBlur(radius:)`. Emitted as Begin/End
     /// BackdropBlur around this node's paint (see DrawList).
     var backdropBlurRadius: Float?
@@ -2611,7 +2613,7 @@ public final class LayoutHost {
             return nil
         }
 
-        let nx = ox + YGNodeLayoutGetLeft(yref)
+        let nx = ox + YGNodeLayoutGetLeft(yref) + box.visualOffsetX
         let ny = oy + YGNodeLayoutGetTop(yref)
         let nw = YGNodeLayoutGetWidth(yref)
         let nh = YGNodeLayoutGetHeight(yref)
@@ -2753,7 +2755,7 @@ public final class LayoutHost {
             return nil
         }
         if let box = node as? YogaBoxNode, let yref = box.yoga {
-            let nx = ox + YGNodeLayoutGetLeft(yref)
+            let nx = ox + YGNodeLayoutGetLeft(yref) + box.visualOffsetX
             let ny = oy + YGNodeLayoutGetTop(yref)
             let nw = YGNodeLayoutGetWidth(yref)
             let nh = YGNodeLayoutGetHeight(yref)
@@ -2822,7 +2824,7 @@ public final class LayoutHost {
             return false
         }
         if let box = node as? YogaBoxNode, let yref = box.yoga {
-            let nx = ox + YGNodeLayoutGetLeft(yref)
+            let nx = ox + YGNodeLayoutGetLeft(yref) + box.visualOffsetX
             let ny = oy + YGNodeLayoutGetTop(yref)
             let nw = YGNodeLayoutGetWidth(yref)
             let nh = YGNodeLayoutGetHeight(yref)
@@ -2878,7 +2880,7 @@ public final class LayoutHost {
             return nil
         }
         if let box = node as? YogaBoxNode, let yref = box.yoga {
-            let nx = ox + YGNodeLayoutGetLeft(yref)
+            let nx = ox + YGNodeLayoutGetLeft(yref) + box.visualOffsetX
             let ny = oy + YGNodeLayoutGetTop(yref)
             let nw = YGNodeLayoutGetWidth(yref)
             let nh = YGNodeLayoutGetHeight(yref)

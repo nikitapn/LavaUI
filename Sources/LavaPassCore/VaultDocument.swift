@@ -64,6 +64,8 @@ public struct VaultEntryContent: Sendable {
     public var entryID: UUID
     public var notes: String
     public var attachments: [VaultAttachment]
+    public var modified: Date?
+    public var passwordStrength: PasswordStrength
 }
 
 public struct CredentialDraft: Equatable, Sendable {
@@ -159,7 +161,9 @@ public final class VaultDocument {
         let attachments = try entry.binaries.enumerated().map { index, binary in
             VaultAttachment(id: index, name: binary.key, size: try binaryData(binary).count)
         }
-        return VaultEntryContent(entryID: id, notes: field(entry, "Notes"), attachments: attachments)
+        return VaultEntryContent(entryID: id, notes: field(entry, "Notes"), attachments: attachments,
+                                 modified: entry.times?.lastModificationTime,
+                                 passwordStrength: PasswordStrength(password: field(entry, "Password")))
     }
 
     public func attachmentData(entryID: UUID, attachmentID: Int) throws -> Data {

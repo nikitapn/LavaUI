@@ -10,9 +10,14 @@ struct LavaPassApp {
         let demo = CommandLine.arguments.contains("--demo")
         if !demo { unsetenv("LAVA_AGENT_PORT") }
         AppSettings.configure(appName: demo ? "LavaPassDemo" : "LavaPass")
-        Theme.current = .nebula
-        guard let editor = LavaHost.open(title: "LavaPass", width: 960, height: 620) else { return }
+        Theme.current = PassLook.theme
+        guard let editor = LavaHost.open(title: "LavaPass", width: 1120, height: 700) else { return }
+        // Client startup reads the compositor's theme. Keep the vault's
+        // palette for its own controls and for the in-window menu.
+        Theme.current = PassLook.theme
+        Theme.onSystemUpdate = { _ in Theme.current = PassLook.theme }
         LavaHost.setMinimumSize(editor: editor, width: 900, height: 560)
+        let fonts = PassFonts(editor: editor)
         let path = CommandLine.arguments.dropFirst().first { !$0.hasPrefix("-") }
         let session = PassSession(path: path, demo: demo)
         if demo { FrameTasks.after { session.unlock() } }
@@ -45,18 +50,26 @@ struct LavaPassApp {
                 }
                 Menu("Entry", id: "entry") {
                     MenuItem("New Entry", id: "entry.new", shortcut: KeyShortcut(KeyCode.n, .primary), isEnabled: session.writable) { session.newEntry() }
-                    MenuItem("Edit", id: "entry.edit", isEnabled: session.writable && session.selectedEntry != nil) { session.editEntry() }
-                    MenuItem("Copy Password", id: "entry.copy", isEnabled: session.selectedEntry != nil && !session.busy) { session.copyPassword() }
+                    MenuItem("Edit", id: "entry.edit", isEnabled: session.writable && session.actionableEntryID != nil) { session.editEntry() }
+                    MenuItem("Copy Password", id: "entry.copy", isEnabled: session.actionableEntryID != nil && !session.busy) { session.copyPassword() }
                 }
             }
         }, onRawKey: { event in
             session.activity()
+            if event.x > 0, event.button == KeyCode.f, event.mods == KeyMods.control,
+               session.snapshot != nil {
+                session.searchFocused = true
+                return true
+            }
             if event.x > 0, event.button == KeyCode.escape {
                 session.draft = nil; session.showPassword = false; session.groupName = nil
+                session.showMasterPassword = false; session.hideEntryPassword()
                 session.confirmRecycle = false; FocusManager.clear(); return true
             }
             return false
-        }, makeRoot: { PassView(session: session) })
+        }, makeRoot: {
+            PassView(session: session, fonts: fonts)
+        })
         session.lock()
     }
 }

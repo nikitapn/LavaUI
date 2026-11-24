@@ -11,7 +11,8 @@ LAVA_CLIENT=1 swift run LavaPass /path/to/passwords.kdbx
 ```
 
 Open an existing vault, enter its master password and optional key file, and
-choose Unlock. New Vault creates a KDBX 4.1 file with the library's Argon2id
+choose Unlock. If the vault rejects the credentials, the card shakes and the
+password field shows an inline error. New Vault creates a KDBX 4.1 file with the library's Argon2id
 default and AES-256 encryption. A new vault never overwrites an existing file.
 
 The start page and **Vault → Most Recent** list the ten most recently unlocked
@@ -19,12 +20,14 @@ vaults, newest first, and retain the list across restarts. Select one to return
 to its unlock form; switching locks the previous vault and clears its password
 and key-file selection. Full paths distinguish files with the same name.
 **Clear Recent Vaults** removes the list without deleting files or keyring secrets.
-Only vault paths are stored in the recent list.
+Only vault paths are stored in the recent list. Each recent row also has a
+remove button.
 
 Groups appear at the left; search matches titles, usernames, URLs, and group
 names. New Entry and Edit support title, username, password, URL, notes, and
 group. Notes is optional multiline text: it is visible in the entry details,
-can be copied without editing, and can be changed in Edit Entry. The generator produces a 24-character password by default; its length
+can be copied without editing, and can be changed in Edit Entry. The generator
+produces a 24-character password by default. Its length and character sets
 can be adjusted. Save Entry writes immediately. Recycle moves entries into a
 reversible Recycle Bin; Edit / Restore moves them back by choosing another
 group. Attachments, custom fields, auto-type configuration, and entry history
@@ -34,6 +37,7 @@ are retained when standard fields are edited.
 
 The entry details list each attachment's filename and size. **Add File…**
 imports a file into the encrypted KDBX vault (up to 128 MiB per new attachment).
+In client mode you can also drop a file onto the attachments card.
 **Save As…** exports the original bytes to a new owner-only file; existing
 files and the vault itself are never overwritten. **Open** uses the desktop's
 default application with a private temporary copy (0600 file in a 0700 directory).
@@ -76,8 +80,9 @@ off the frame loop so they cannot stall locking or clipboard expiry. Copy
 Password clears its clipboard value after thirty seconds, on lock, and before
 closing from the app controls or Quit, provided the clipboard still contains that value. Another
 application's newer clipboard value is left alone. Force-killing a process or the compositor destroying its surface first cannot
-reliably clear a compositor-owned clipboard selection. Master-password and entry-password fields use LavaUI's
-secure input, which masks text and disables copy, cut, and undo.
+reliably clear a compositor-owned clipboard selection. The copy notice also
+offers **Clear now**. Passwords are masked by default and can be explicitly
+revealed. Masked fields disable copy, cut and undo.
 
 The development agent is disabled for real vaults. `--demo` is a separate
 mode that generates public test credentials, cannot open a real vault, and
