@@ -1,13 +1,5 @@
-.DS_Store
 .build
-/Packages
-/*.xcodeproj
-xcuserdata/
-DerivedData/
-.swiftpm/config/registries.json
-.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
-.netrc
-swift-cross-ui
+.build-tracy-full
 .claude
 
 # Compositor (meson). `.vm` is the QEMU disk from scripts/vm-init

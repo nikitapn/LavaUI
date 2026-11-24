@@ -66,8 +66,6 @@ struct SourceControlPanel: View {
             Text("Source Control", color: .primary, font: session.fonts.tabSelected, lineLimit: 1)
                 .flexShrink(1)
             Spacer()
-            BranchChip(session: session, project: project, appearance: appearance)
-                .agentId("scm-branch")
             iconButton(Glyph.refresh, tooltip: "Refresh", id: "scm-refresh", theme: theme) {
                 project.refreshStatus()
             }

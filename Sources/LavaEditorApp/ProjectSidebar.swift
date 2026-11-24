@@ -79,16 +79,18 @@ struct ProjectSidebar: View {
     /// The window's buttons and somewhere to drag it by, at the height of
     /// the tab strip beside it so the two read as one bar.
     private var titleStrip: some View {
-        HStack(height: .pt(EditorTabs.stripHeight), padding: 0, alignment: .end, spacing: 0) {
+        HStack(alignment: .center, spacing: 0) {
             if WindowBridge.drawsOwnChrome {
                 WindowControls(style: appearance.windowControls)
-                    .padding(EdgeInsets(top: 0, leading: 20, bottom: 15, trailing: 14))
-                    .flexShrink(0)
+                .flexShrink(0)
             }
             Spacer()
-                .frame(height: .pt(EditorTabs.stripHeight), minWidth: 16)
-                .windowDrag()
+                .frame(minWidth: 32)
+            BranchChip(session: session, project: project, appearance: appearance)
+                .agentId("project-branch")
         }
+        .padding(EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14))
+        .windowDrag()
     }
 }
 
@@ -122,11 +124,7 @@ struct ProjectExplorer: View {
             // window's contents — and the folder otherwise.
             Text(session.workspaceName ?? project.name, color: .primary,
                  font: session.fonts.tabSelected, lineLimit: 1)
-                .flexShrink(1)
                 .agentId("project-name")
-            Spacer()
-            BranchChip(session: session, project: project, appearance: appearance)
-                .agentId("project-branch")
         }
         .padding(EdgeInsets(top: 10, leading: 14, bottom: 8, trailing: 10))
     }
@@ -217,7 +215,7 @@ struct BranchChip: View {
     let project: ProjectSession
     let appearance: EditorAppearance
 
-    @ViewBuilder var body: some View {
+    var body: some View {
         if project.isInRepository {
             let session = self.session
             Text(project.branch ?? "detached", color: appearance.languageText, font: session.fonts.status,
