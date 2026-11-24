@@ -33,6 +33,10 @@ struct LavaExplorerApp {
         // this process has nothing left to do. See `ExplorerInstance`.
         if chooser == nil, ExplorerInstance.handOff(paths, profile: profile.id) { exit(0) }
 
+        // Use Nebula locally. In client mode, open reads the compositor's
+        // theme synchronously so the first frame can use it.
+        Theme.current = .nebula
+
         // A picker is a dialog: a little smaller, named for what it asks, and
         // opened as a dialog of the window that asked — so the compositor
         // centres it there and neither gives it the explorer's remembered
@@ -49,7 +53,6 @@ struct LavaExplorerApp {
         )
         // Figtree and Caprasimo, as `File Explorer.dc.html` sets them.
         explorerFonts = ExplorerFonts.load(into: editor)
-        Theme.current = .nebula
 
         let session = ExplorerSession(
             paths: paths,

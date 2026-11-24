@@ -2252,6 +2252,16 @@ struct ClientSurface {
   /// Covers the output, including the panel. Distinct from maximize: a
   /// maximized window leaves the work area, a fullscreen one does not.
   bool fullscreen = false;
+  /// Keep displaying the old rectangle until the client presents a layout
+  /// that has seen the proposed size. Only then move it and hide the shell.
+  struct FullscreenRequest {
+    bool on;
+    uint32_t width;
+    uint32_t height;
+    uint32_t serial;
+    std::chrono::steady_clock::time_point deadline;
+  };
+  std::optional<FullscreenRequest> pendingFullscreen;
   bool deferredWhileOccluded = false;
   /// The client published a frame that has not been drawn yet, and the
   /// newest input serial among those it presented since the last one that
@@ -2893,8 +2903,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (placementTimer_ != nullptr) {
       wl_event_source_timer_update(placementTimer_, kPlacementFlushMs);
     }
-    // Armed on demand — a window holding its first frame is the only thing
-    // this has to wake for. See `sweepRevealDeadlines`.
+    // Armed on demand for a first frame or a fullscreen geometry change.
     revealTimer_ = wl_event_loop_add_timer(loop, on_reveal_timer, this);
   }
 
@@ -7407,6 +7416,10 @@ class SurfaceRegistry : public lava::CompositorHost {
     bool again = false;
     for (auto &surface : surfaces_) {
       if (!surface->canvas) continue;
+      // Keep the already rendered pixels while a fullscreen resize waits
+      // for its layout. A video client may have moved on from the textures
+      // that the old draw list references.
+      if (surface->pendingFullscreen) continue;
       if (fullyOccluded(*surface)) {
         if (surface->canvas->takeInternalRepaint()) {
           surface->deferredWhileOccluded = true;
@@ -7511,11 +7524,13 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (surface == nullptr || !surface->canvas) return;
     if (!surface->presentPending) {
       surface->presentMark = surface->canvas->arenaFramesTaken();
+      surface->presentSerial = serial;
+    } else {
+      // Detached sends can arrive out of order. Keep the newest input
+      // serial among the notifications for the arena frames we coalesce.
+      surface->presentSerial = std::max(surface->presentSerial, serial);
     }
     surface->presentPending = true;
-    // Newest wins, as the frames do: the one drawn is the newest, and this is
-    // the input it was laid out with.
-    surface->presentSerial = serial;
     animate();
   }
 
@@ -7557,6 +7572,18 @@ class SurfaceRegistry : public lava::CompositorHost {
     ClientSurface *surface = &surfaceRef;
     const uint32_t id = surface->id;
     if (!surface->canvas) return;
+    if (surface->pendingFullscreen) {
+      const auto request = *surface->pendingFullscreen;
+      if (serial < request.serial) return;
+      const auto [width, height] = fullscreenSize(*surface, request.on);
+      if (width != request.width || height != request.height) {
+        // The output or work area changed while the client was laying out.
+        setSurfaceFullscreen(id, request.on);
+        return;
+      }
+      if (surface->canvas->consumeArena()) commitFullscreen(*surface);
+      return;
+    }
     if (fullyOccluded(*surface)) {
       if (surface->canvas->consumeArena()) surface->deferredWhileOccluded = true;
       return;
@@ -7685,7 +7712,19 @@ class SurfaceRegistry : public lava::CompositorHost {
   void sweepRevealDeadlines() {
     const auto now = std::chrono::steady_clock::now();
     int soonestMs = 0;
+    std::vector<ClientSurface *> fullscreenDue;
+    const auto trackDeadline = [&](auto deadline) {
+      const int left = std::max<int>(
+          1, static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                 deadline - now).count()));
+      soonestMs = soonestMs == 0 ? left : std::min(soonestMs, left);
+    };
     for (const auto &surface : surfaces_) {
+      if (surface->pendingFullscreen) {
+        const auto deadline = surface->pendingFullscreen->deadline;
+        if (now >= deadline) fullscreenDue.push_back(surface.get());
+        else trackDeadline(deadline);
+      }
       // Every window still holding, not only those still short of an ack: the
       // ack can land while the frame it was supposed to vouch for has not
       // been drawn yet, and that wait needs the same ceiling over it.
@@ -7707,11 +7746,13 @@ class SurfaceRegistry : public lava::CompositorHost {
                 kRevealHoldMs);
         continue;
       }
-      const int left = std::max<int>(
-          1, static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                 surface->revealDeadline - now)
-                                  .count()));
-      soonestMs = soonestMs == 0 ? left : std::min(soonestMs, left);
+      trackDeadline(surface->revealDeadline);
+    }
+    // Applying fullscreen can raise a window and reorder surfaces_.
+    for (auto *surface : fullscreenDue) {
+      wlr_log(WLR_INFO, "window %u: fullscreen layout wait timed out",
+              surface->id);
+      commitFullscreen(*surface);
     }
     if (soonestMs > 0 && revealTimer_ != nullptr) {
       wl_event_source_timer_update(revealTimer_, soonestMs);
@@ -7919,8 +7960,64 @@ class SurfaceRegistry : public lava::CompositorHost {
     return path;
   }
 
+  std::pair<uint32_t, uint32_t> fullscreenSize(const ClientSurface &surface,
+                                               bool on) const {
+    if (surface.fullscreen == on) return {surface.width, surface.height};
+    if (on) {
+      int x = primaryX_, y = primaryY_;
+      uint32_t width = primaryWidth_, height = primaryHeight_;
+      outputBoxAt(surfaceCenterX(surface), surfaceCenterY(surface), x, y,
+                  width, height);
+      return {width, height};
+    }
+    if (surface.maximized) {
+      const auto area = workAreaAt(surfaceCenterX(surface), surfaceCenterY(surface));
+      return {area.width, area.height};
+    }
+    return {surface.restoreW, surface.restoreH};
+  }
+
+  void commitFullscreen(ClientSurface &surface) {
+    const bool on = surface.pendingFullscreen->on;
+    surface.pendingFullscreen.reset();
+    if (surface.fullscreen == on) {
+      if (surface.canvas->redraw()) damage(surface);
+      return;
+    }
+    setFullscreen(surface, on);
+  }
+
   void setSurfaceFullscreen(uint32_t surfaceId, bool on) override {
-    if (ClientSurface *surface = find(surfaceId)) setFullscreen(*surface, on);
+    ClientSurface *surface = find(surfaceId);
+    if (surface == nullptr || surface->furniture()) return;
+    if (!surface->canvas || !control_ || !frameShown(*surface)) {
+      setFullscreen(*surface, on);
+      return;
+    }
+    const auto [width, height] = fullscreenSize(*surface, on);
+    const auto &pending = surface->pendingFullscreen;
+    if (pending && pending->on == on && pending->width == width &&
+        pending->height == height) return;
+    if (!pending && surface->fullscreen == on) {
+      setFullscreen(*surface, on);
+      return;
+    }
+    if (width == 0 || height == 0) return;
+
+    // Configure the client without resizing its exported canvas yet. The
+    // previous frame keeps its buffer, chrome and position while it waits.
+    const uint32_t serial = control_->postInput(
+        surfaceId, static_cast<uint32_t>(canvas::InputEventKind::resize),
+        width, height, 0, 0);
+    if (serial == 0) {
+      surface->pendingFullscreen.reset();
+      setFullscreen(*surface, on);
+      return;
+    }
+    surface->pendingFullscreen = ClientSurface::FullscreenRequest{
+        on, width, height, serial, std::chrono::steady_clock::now() +
+                                      std::chrono::milliseconds(kRevealHoldMs)};
+    sweepRevealDeadlines();
   }
 
   void forgetWindowPoster(uint32_t id) override { forgetPosters(id); }

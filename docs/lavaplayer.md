@@ -75,6 +75,11 @@ space — so showing and hiding it never resizes the video, which would make mpv
 render at a new size every time the pointer moved. It is at most 1000 pt wide,
 centred, so the seek track is long without being edge to edge.
 
+For a client-requested fullscreen resize, the compositor keeps the old window
+in place until a draw list arrives for the new size. It applies the move,
+resize and panel visibility together. LavaPlayer can draw the last video
+texture in the new layout while mpv renders at the new size.
+
 The bar and the pointer hide together after 2.5 s without movement, never
 while paused, never while the pointer rests on the bar (`.onHover` on the bar
 as a whole, children included), and never while a track menu is open. While
