@@ -253,11 +253,20 @@ public protocol BodyRecomputable: AnyObject {
     /// *write* is therefore the wrong answer; the one at the moment of the
     /// *mount* is the right one. `nil` falls back to ambient.
     var invalidationScope: WindowScope? { get }
+
+    /// Whether something this node's `body` read has changed since the body
+    /// last ran. A coarse rebuild uses it to find the dirty nodes it did not
+    /// reach: an `Equatable` view handed an equal value is not re-evaluated,
+    /// and neither is anything below it, so a change three levels under one
+    /// is still owed a recompute after the root has been rebuilt.
+    var bodyIsStale: Bool { get }
 }
 
 extension BodyRecomputable {
     /// No scope of its own: fall back to the ambient window.
     public var invalidationScope: WindowScope? { nil }
+    /// Nothing to go by: assume the worst.
+    public var bodyIsStale: Bool { true }
 }
 
 /// "Something changed; do at least this much work again."
@@ -341,13 +350,51 @@ public enum ViewInvalidation {
     /// nothing has been targeted yet (first frame) or `.body` was raised by
     /// something that could not name the node responsible.
     public static func consumeDirtyBodyNodes() -> [any BodyRecomputable]? {
+        let work = consumeBodyWork()
+        return work.coarse ? nil : work.nodes
+    }
+
+    /// Both halves of the pending body work: whether the root has to be
+    /// rebuilt, and the nodes that were named. A coarse rebuild still needs
+    /// the names — see `BodyRecomputable.bodyIsStale`.
+    static func consumeBodyWork() -> (coarse: Bool, nodes: [any BodyRecomputable]) {
         let scope = WindowScope.currentOrMain
         defer {
             scope.coarseBodyDirty = false
             scope.dirtyBodyNodes.removeAll()
         }
-        guard !scope.coarseBodyDirty else { return nil }
-        return Array(scope.dirtyBodyNodes.values)
+        return (scope.coarseBodyDirty, Array(scope.dirtyBodyNodes.values))
+    }
+
+    /// Does the current window's pending body work: `rebuildRoot` when it is
+    /// coarse (or `forceRoot`), each named node otherwise.
+    ///
+    /// A rebuild from the root does not reach below an `Equatable` view that
+    /// was handed an equal value — see `CompositeNode.update` — so whatever
+    /// was named dirty under one is still owed its recompute afterwards.
+    /// Anything the rebuild did reach ran again and is no longer stale.
+    static func runBodyWork(forceRoot: Bool = false, rebuildRoot: () -> Void) {
+        let work = consumeBodyWork()
+        if forceRoot || work.coarse {
+            rebuildRoot()
+            for node in work.nodes where node.bodyIsStale { node.recomputeBody() }
+        } else {
+            for node in work.nodes { node.recomputeBody() }
+        }
+    }
+
+    /// Bumped by changes to state every body may read without observing it
+    /// — `Theme.current` is the one — so that an `Equatable` view handed an
+    /// equal value still runs again: its inputs did not change, the world
+    /// they are drawn in did. See `CompositeNode.update`.
+    nonisolated(unsafe) public private(set) static var globalEpoch = 0
+
+    /// Says that something every view may read, and none observes, has
+    /// changed: the next pass re-evaluates every body, `Equatable` or not.
+    /// Raises a coarse `.body` as `markDirty()` does.
+    public static func markGlobalsChanged() {
+        globalEpoch &+= 1
+        raiseCoarse()
     }
 
     /// Whether the current window has any invalidation pending.

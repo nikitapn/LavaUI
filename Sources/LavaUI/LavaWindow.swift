@@ -525,13 +525,7 @@ public final class LavaWindow {
             // program. `update` already reports whether the platform-facing
             // model actually changed, so pay for the root only then.
             let menuChanged = refreshMenuModel()
-            if menuChanged {
-                installRootImpl()
-            } else if let dirtyNodes = ViewInvalidation.consumeDirtyBodyNodes() {
-                for node in dirtyNodes { node.recomputeBody() }
-            } else {
-                installRootImpl()
-            }
+            ViewInvalidation.runBodyWork(forceRoot: menuChanged) { installRootImpl() }
             reresolvePointerState()
         }
         bodyZone?.end()

@@ -54,6 +54,17 @@ public enum Environment {
     /// live globals, not a captured copy of them.
     static var stackSnapshot: [EnvironmentValues] { overrides }
 
+    /// Whether two snapshots override the same things. A font is compared
+    /// by identity: two `UIFont`s are the same face only if they are the
+    /// same object.
+    static func same(_ a: [EnvironmentValues], _ b: [EnvironmentValues]) -> Bool {
+        guard a.count == b.count else { return false }
+        for (x, y) in zip(a, b) where x.theme != y.theme || x.font !== y.font {
+            return false
+        }
+        return true
+    }
+
     /// Runs `body` as if `stack` were the live override stack, then puts
     /// back whatever was there. Used by `CompositeNode.recomputeBody` so a
     /// targeted rebuild still sees the `.font()` / `.theme()` that wrapped

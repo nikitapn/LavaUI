@@ -472,7 +472,9 @@ private struct ExplorerTabs: View {
                        clipOutsetBottom: PaneCard<EmptyView>.radius) {
                 HStack(height: .pt(Self.height), padding: 0, alignment: .end, spacing: 4) {
                     ForEach(pane.tabs.tabs) { tab in
-                        item(tab, look: look)
+                        TabItem(session: session, paneID: pane.id, tabID: tab.id,
+                                title: tab.title, on: tab.id == pane.tabs.currentID,
+                                ringed: ringed)
                     }
                 }
                 // The scroll viewport clips the first and last tab's outline.
@@ -516,34 +518,56 @@ private struct ExplorerTabs: View {
             }
         }
     }
+}
 
-    /// A tab: a folder, the name, a close button. The current one is the
-    /// card's own colour and runs into it, square at the bottom.
-    private func item(_ tab: ExplorerTab, look: ExplorerLook) -> some View {
+/// A tab: a folder, the name, a close button. The current one is the card's
+/// own colour and runs into it, square at the bottom.
+///
+/// `Equatable` on what it shows, so a pass that changes nothing about a tab
+/// does not rebuild it (see `CompositeNode.update`): with eighty tabs open,
+/// rebuilding the strip was most of every body pass in the window. What else
+/// `body` reads is observed (`dropHover`) or read when it draws (`cardFrames`).
+/// A new input belongs in `==`.
+private struct TabItem: View, Equatable {
+    static func == (a: TabItem, b: TabItem) -> Bool {
+        a.session === b.session && a.paneID == b.paneID && a.tabID == b.tabID
+            && a.title == b.title && a.on == b.on && a.ringed == b.ringed
+    }
+
+    @Bindable var session: ExplorerSession
+    let paneID: Int
+    let tabID: Int
+    let title: String
+    /// The pane's current tab.
+    let on: Bool
+    /// The pane draws the active ring: see `ExplorerTabs`.
+    let ringed: Bool
+
+    var body: some View {
+        let look = ExplorerLook.current
         let fonts = explorerFonts
-        let on = tab.id == pane.tabs.currentID
-        let aimedAt = session.dropHover == .tab(tab.id)
+        let aimedAt = session.dropHover == .tab(tabID)
         let font = on ? fonts?.bodySemi : fonts?.body
-        let width = min(200, font?.measure(tab.title).width ?? 120)
+        let width = min(200, font?.measure(title).width ?? 120)
         let ringed = ringed && on
         let card = look.card, ring = look.paneRing
         return HStack(padding: 0, alignment: .center, spacing: 2) {
             HStack(padding: 0, alignment: .center, spacing: 8,
-                   onClick: { session.selectTab(id: tab.id) }) {
+                   onClick: { session.selectTab(id: tabID) }) {
                 Icon([.fill(ExplorerGlyphs.folder)], size: 14,
                      color: on ? look.sage600 : look.faint)
-                Text(tab.title, color: on ? look.text : look.soft, font: font, lineLimit: 1)
+                Text(title, color: on ? look.text : look.soft, font: font, lineLimit: 1)
                     .frame(width: .pt(width))
             }
             .padding(EdgeInsets(top: 9, leading: 10, bottom: 11, trailing: 4))
             HStack(width: .pt(22), height: .pt(22), padding: 0, alignment: .center, spacing: 0,
-                   onClick: { session.closeTab(id: tab.id) }) {
+                   onClick: { session.closeTab(id: tabID) }) {
                 Icon([.path(ExplorerGlyphs.cross)], size: 12, color: on ? look.text : look.soft,
                      strokeWidth: 2.75, box: 22)
             }
             .hoverBackground(look.accent200)
             .cornerRadius(11)
-            .agentId("close-tab-\(tab.id)")
+            .agentId("close-tab-\(tabID)")
         }
         .padding(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 6))
         // The current tab's fill is `tab-join`'s, below: it has to stop at
@@ -551,7 +575,7 @@ private struct ExplorerTabs: View {
         // hover anyway.
         .background(aimedAt ? look.accent300 : Color.clear)
         .hoverBackground(on ? Color.clear : look.press.opacity(0.5))
-        .cornerRadius(Self.radius)
+        .cornerRadius(ExplorerTabs.radius)
         .underlay {
             // Square at the bottom where the current tab meets the card, and
             // the active pane's outline round its other three sides.
@@ -566,30 +590,30 @@ private struct ExplorerTabs: View {
                     // The lower corners beyond the clip, so the sides stay
                     // straight all the way down.
                     list.roundedRect(x: frame.x - edge, y: frame.y - edge, w: frame.w + 2 * edge,
-                                     h: frame.h + below + Self.radius + 2 * edge,
-                                     color: ring, radius: Self.radius + edge)
+                                     h: frame.h + below + ExplorerTabs.radius + 2 * edge,
+                                     color: ring, radius: ExplorerTabs.radius + edge)
                 }
                 // The fill stops at the card's left edge wherever the strip
                 // has scrolled, so a tab pushed past it leaves the ring's
                 // column outside the card showing: the card's side running
                 // on up the tab's cut edge. A clip that scrolled with the tab
                 // would cut nothing.
-                let cardX = session.cardFrames[pane.id]?.x ?? frame.x
+                let cardX = session.cardFrames[paneID]?.x ?? frame.x
                 list.pushClip(x: cardX, y: 0, w: 1_000_000, h: 1_000_000, fixedToWindow: true)
                 list.roundedRect(x: frame.x, y: frame.y, w: frame.w,
-                                 h: frame.h + below + Self.radius, color: card,
-                                 radius: Self.radius)
+                                 h: frame.h + below + ExplorerTabs.radius, color: card,
+                                 radius: ExplorerTabs.radius)
                 list.popClip()
             }
         }
         .cursor(.pointer)
-        .onFrame { session.noteTabFrame(tab.id, $0) }
-        .onDragGesture { session.dragTab(tab.id, $0) }
+        .onFrame { session.noteTabFrame(tabID, $0) }
+        .onDragGesture { session.dragTab(tabID, $0) }
         .onDrop(
-            targeted: { session.setDropHover(.tab(tab.id), $0) },
-            springLoaded: { session.selectTab(id: tab.id) }
-        ) { session.dropOnTab(id: tab.id, $0) }
-        .agentId("tab-\(tab.id)")
+            targeted: { session.setDropHover(.tab(tabID), $0) },
+            springLoaded: { session.selectTab(id: tabID) }
+        ) { session.dropOnTab(id: tabID, $0) }
+        .agentId("tab-\(tabID)")
     }
 }
 
@@ -1546,7 +1570,19 @@ private struct FileGlyph: View {
     }
 }
 
-private struct FileRow: View {
+/// `Equatable`, so a pass that hands a mounted row the same values does not
+/// run its body again (see `CompositeNode.update`) — which every pass that
+/// reaches the list used to do, for every row on screen. That holds only
+/// while everything else `body` reads is observed: the session's state is,
+/// and the look follows `Theme.current`, which says when it changes. A new
+/// input belongs in `==`.
+private struct FileRow: View, Equatable {
+    static func == (a: FileRow, b: FileRow) -> Bool {
+        a.session === b.session && a.paneID == b.paneID && a.tabID == b.tabID
+            && a.entry == b.entry && a.selected == b.selected && a.tile == b.tile
+            && a.activePane == b.activePane && a.columns == b.columns
+    }
+
     @Bindable var session: ExplorerSession
     let paneID: Int
     let tabID: Int

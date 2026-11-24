@@ -67,6 +67,18 @@ drives itself, a timed dismiss — wants `FrameScheduler.requestRedraw(in:)`,
 which also marks the frame due. The difference is invisible while the pointer
 is moving and freezes the instant it stops.
 
+**An `Equatable` view handed an equal value runs no body**, and nothing below
+it is reconciled (`CompositeNode.update`). Most `.body` passes rebuild from the
+root, so a list row or a tab that is not opted in pays for its whole subtree
+on every keystroke anywhere in the window. In LavaExplorer with 80 tabs, that
+was most of a 13 ms body pass and 62% of layout (`FileRow`, `TabItem`).
+Opting in is a promise: `==` covers every stored input, and everything else
+`body` reads is either observed or a global that announces its own changes
+(`Theme.current` → `ViewInvalidation.markGlobalsChanged`). A skipped
+subtree's own observed changes still land; a coarse pass re-runs whatever it
+did not reach (`BodyRecomputable.bodyIsStale`). Nothing is skipped unless the
+type conforms.
+
 ### The shared renderer (scene tree) — read this before touching scroll or hover
 
 The compositor's canvas is not a dumb blitter. A draw list carries **scene

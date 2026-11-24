@@ -2052,6 +2052,8 @@ final class CompositeNode<V: View>: FragmentNode, BodyRecomputable, @unchecked S
     }
 
     func update(_ newView: V) {
+        let environment = Environment.stackSnapshot
+        if canSkip(newView, environment: environment) { return }
         // The parent handed us a freshly built struct, so its `@State` is new.
         // Re-attach the storage the old copy owned before anything reads it —
         // reading `newView.body` first would observe reset state.
@@ -2059,9 +2061,41 @@ final class CompositeNode<V: View>: FragmentNode, BodyRecomputable, @unchecked S
         view = newView
         // Parent reconcile runs inside whatever `.font()` / `.theme()`
         // wrapped us this pass; keep that, not the stack from last time.
-        capturedEnvironmentStack = Environment.stackSnapshot
+        capturedEnvironmentStack = environment
         reconcileBody()
     }
+
+    /// Whether `newView` would build exactly what is already here, so that
+    /// neither its body nor anything below it needs to run.
+    ///
+    /// Only for a view that says so by being `Equatable`: an equal value, in
+    /// the same environment, with nothing its body read having changed since
+    /// (`bodyIsStale`), and no unobserved global either (`globalEpoch`). The
+    /// rows of a lazy list are what this is for — every pass that reached
+    /// the list used to rebuild each mounted row, re-measure its text and
+    /// re-run its body, all to arrive at the tree it already had. Measured in
+    /// LavaExplorer: 62% of a 13–35 ms layout pass.
+    ///
+    /// The old value is kept, not the new one: it is equal, and it is the one
+    /// whose `@State` storage is attached.
+    private func canSkip(_ newView: V, environment: [EnvironmentValues]) -> Bool {
+        guard let old = view as? any Equatable,
+              registration?.fired == false,
+              bodyEpoch == ViewInvalidation.globalEpoch,
+              Environment.same(environment, capturedEnvironmentStack)
+        else { return false }
+        return Self.equal(old, newView)
+    }
+
+    private static func equal<E: Equatable>(_ old: E, _ new: V) -> Bool {
+        guard let new = new as? E else { return false }
+        return old == new
+    }
+
+    /// `ViewInvalidation.globalEpoch` when the body last ran.
+    private var bodyEpoch = 0
+
+    var bodyIsStale: Bool { registration?.fired ?? true }
 
     /// Re-evaluates `body` against the `view` already stored — no new value
     /// from a parent, because nothing about *it* changed; only some
@@ -2102,6 +2136,7 @@ final class CompositeNode<V: View>: FragmentNode, BodyRecomputable, @unchecked S
     ///   that skips `computeBody()` would silently unsubscribe that node.
     private func computeBody() -> V.Body {
         retireObservation()
+        bodyEpoch = ViewInvalidation.globalEpoch
         var body: V.Body!
         let invalidation = BodyInvalidationToken(self)
         let retirement = self.retirement

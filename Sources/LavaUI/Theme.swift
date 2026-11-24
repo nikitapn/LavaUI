@@ -317,7 +317,7 @@ public struct Theme: Equatable, Sendable {
     /// `.theme(_:)` no longer has to go through here at all.
     nonisolated(unsafe) public static var current: Theme = .dark {
         didSet {
-            if current != oldValue { ViewInvalidation.markDirty() }
+            if current != oldValue { ViewInvalidation.markGlobalsChanged() }
         }
     }
 
