@@ -37,6 +37,22 @@ let haveNprpc = FileManager.default.fileExists(atPath: nprpcPath + "/Package.swi
 
 let interopCxx: [SwiftSetting] = [.interoperabilityMode(.Cxx)]
 
+// Use the host parser already shipped by compatible Swift toolchains.
+let swiftSyntaxHost: String = {
+    let search = (ProcessInfo.processInfo.environment["PATH"] ?? "").components(separatedBy: ":")
+    let compiler = ProcessInfo.processInfo.environment["SWIFT_EXEC"]
+        ?? search.map { $0 + "/swiftc" }.first(where: FileManager.default.isExecutableFile(atPath:))
+        ?? "/usr/bin/swiftc"
+    return URL(fileURLWithPath: compiler).resolvingSymlinksInPath().deletingLastPathComponent()
+        .appendingPathComponent("../lib/swift/host").standardizedFileURL.path
+}()
+let haveSwiftParser = ["SwiftParser", "SwiftSyntax"].allSatisfy {
+    FileManager.default.fileExists(atPath: swiftSyntaxHost + "/" + $0 + ".swiftmodule")
+}
+let syntaxSettings: [SwiftSetting] = haveSwiftParser ? [.unsafeFlags(["-I", swiftSyntaxHost])] : []
+let syntaxLinker: [LinkerSetting] = haveSwiftParser
+    ? [.unsafeFlags(["-L", swiftSyntaxHost, "-Xlinker", "-rpath", "-Xlinker", swiftSyntaxHost])] : []
+
 // ── Tracy ──────────────────────────────────────────────────────────────────
 // `LAVA_TRACY=1 swift build` (or `=full`). canvas/Package.swift reads the
 // same variable and compiles Tracy's client into CTracy; this side only lets
@@ -49,6 +65,14 @@ let lavaUISwiftSettings: [SwiftSetting] = interopCxx
 var packageDependencies: [Package.Dependency] = [
     .package(path: "canvas"),
     .package(url: "https://github.com/shadone/KDBXKit.git", exact: "1.3.0"),
+    .package(url: "https://github.com/tree-sitter/tree-sitter", exact: "0.25.10"),
+    // Python 0.23.6 explicitly compiles its indentation scanner. The 0.25.0
+    // manifest looks for the scanner relative to the caller's working directory.
+    // Match these grammar releases' bindings URL; GitHub redirects to tree-sitter.
+    .package(url: "https://github.com/ChimeHQ/SwiftTreeSitter", exact: "0.10.0"),
+    .package(url: "https://github.com/tree-sitter/tree-sitter-python.git", exact: "0.23.6"),
+    .package(url: "https://github.com/tree-sitter/tree-sitter-c.git", exact: "0.23.6"),
+    .package(url: "https://github.com/tree-sitter/tree-sitter-cpp.git", exact: "0.23.4"),
 ]
 if haveNprpc {
     packageDependencies.append(.package(path: nprpcPath))
@@ -542,12 +566,25 @@ var targets: [Target] = [
         dependencies: [
             "CExtensionHost",
             "LavaUI", "LavaHost", "LavaText", "LavaDiffCore", "LavaGitCore", "LavaProjectCore", "LavaAgentCore",
-            "LavaExplorerCore", "LavaLSPCore", "LavaEditorSettings", "LavaTerminal",
+            "LavaExplorerCore", "LavaLSPCore", "LavaEditorSettings", "LavaTerminal", "LavaEditorIndentation",
         ] + (haveNprpc ? [Target.Dependency("LavaClient"), "LavaEditorExtensionAPI",
                            .product(name: "NPRPC", package: "nprpc_swift")] : []),
         resources: [.copy("Resources")],
         swiftSettings: interopCxx
     ),
+    .target(
+        name: "LavaEditorIndentation",
+        dependencies: [
+            .product(name: "TreeSitter", package: "tree-sitter"),
+            .product(name: "SwiftTreeSitter", package: "SwiftTreeSitter"),
+            .product(name: "TreeSitterPython", package: "tree-sitter-python"),
+            .product(name: "TreeSitterC", package: "tree-sitter-c"),
+            .product(name: "TreeSitterCPP", package: "tree-sitter-cpp"),
+        ],
+        swiftSettings: syntaxSettings + [.enableExperimentalFeature("CheckImplementationOnly")],
+        linkerSettings: syntaxLinker
+    ),
+    .testTarget(name: "LavaEditorIndentationTests", dependencies: ["LavaEditorIndentation"]),
     // A terminal as a view: the PTY, the session and the grid, no window.
     // LavaTerm wraps it in chrome; LavaEditor puts it in a panel.
     .target(
@@ -641,26 +678,13 @@ var targets: [Target] = [
 
 if haveNprpc {
     products.append(.library(name: "LavaEditorExtensionAPI", targets: ["LavaEditorExtensionAPI"]))
-    // SwiftParser and SwiftSyntax ship together in the active Linux toolchain.
-    let search = (ProcessInfo.processInfo.environment["PATH"] ?? "").components(separatedBy: ":")
-    let compiler = ProcessInfo.processInfo.environment["SWIFT_EXEC"]
-        ?? search.map { $0 + "/swiftc" }.first(where: FileManager.default.isExecutableFile(atPath:))
-        ?? "/usr/bin/swiftc"
-    let host = URL(fileURLWithPath: compiler).resolvingSymlinksInPath().deletingLastPathComponent()
-        .appendingPathComponent("../lib/swift/host").standardizedFileURL.path
-    // The compiler's own copy, not a package dependency — so only where this
-    // toolchain has one. Without the check, a toolchain that lays its
-    // libraries out differently fails the whole package's build, not just
-    // the example's.
-    if FileManager.default.fileExists(atPath: host + "/SwiftParser.swiftmodule") {
-        let syntaxSettings = interopCxx + [.unsafeFlags(["-I", host])]
-        let syntaxLinker: [LinkerSetting] = [.unsafeFlags(["-L", host, "-Xlinker", "-rpath", "-Xlinker", host])]
+    if haveSwiftParser {
         targets.append(.testTarget(name: "SwiftTestExtensionTests", dependencies: ["SwiftTestExtension"],
-                                   swiftSettings: syntaxSettings, linkerSettings: syntaxLinker))
+                                   swiftSettings: interopCxx + syntaxSettings, linkerSettings: syntaxLinker))
         products.append(.library(name: "SwiftTestExtension", type: .dynamic, targets: ["SwiftTestExtension"]))
         targets.append(.target(name: "SwiftTestExtension", dependencies: ["LavaEditorExtensionAPI"],
                                path: "Examples/SwiftTestExtension", exclude: ["extension.json", "README.md"],
-                               swiftSettings: syntaxSettings + [.enableExperimentalFeature("CheckImplementationOnly")],
+                               swiftSettings: interopCxx + syntaxSettings + [.enableExperimentalFeature("CheckImplementationOnly")],
                                linkerSettings: syntaxLinker))
     }
     products.append(.library(name: "FormatJSON", type: .dynamic, targets: ["FormatJSON"]))

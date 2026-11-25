@@ -123,12 +123,15 @@ struct LavaEditorView: View {
                     Text(error, color: .muted)
                 }
             } else {
+                let indentation = session.documentIndentation
                 EditorView(
                     text: session.text,
                     isReadOnly: session.active.hasInvalidUTF8,
                     highlighter: session.active.language.highlighter,
+                    indentation: session.active.indentation,
+                    indentationFormat: indentation,
                     style: documentStyle(appearance),
-                    font: session.documentFont,
+                    font: session.documentFont(tabSize: indentation.tabSize),
                     showLineNumbers: session.showLineNumbers,
                     wraps: session.wraps,
                     visibleLines: 24,

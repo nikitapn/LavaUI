@@ -1217,8 +1217,55 @@ extension LeafNode {
         ViewInvalidation.markDirty()
     }
 
-    /// What Tab inserts in an editor. See the `KeyCode.tab` case.
-    static let indentUnit = "    "
+    private var indentUnit: String { indentationFormat?.unit ?? "    " }
+
+    private func insertNewline() {
+        if case .none = indentation {
+            editing.insert("\n")
+            return
+        }
+        let start = editing.selectedRange.lowerBound
+        let line = editing.lineRange(at: start)
+        let prefix = editing.text[line.lowerBound..<start]
+        var indent = String(prefix.prefix { $0 == " " || $0 == "\t" })
+        let unit = indentUnit
+        // The inherited whitespace is kept byte for byte, and only the level
+        // added on top comes from the configured format. Re-encoding it would
+        // turn a Makefile's recipe tab into spaces on the next line.
+        switch indentation {
+        case .braces where endsWithOpeningBrace(prefix, at: start):
+            indent += indent.last == "\t" ? "\t" : unit
+        case .provider(let provider):
+            indent = provider(editing.text, start, unit) ?? indent
+        default:
+            break
+        }
+        editing.insert("\n" + indent)
+    }
+
+    private func endsWithOpeningBrace(_ prefix: Substring, at start: String.Index) -> Bool {
+        guard prefix.contains("{"), let highlighter, highlighter.isStateful else { return false }
+        // Enter can follow an edit in the same input batch, before paint
+        // has refreshed the lexer's state for this logical line.
+        highlightCache.update(lines: editing.lines, with: highlighter)
+        let row = logicalLine(containingOffset: editing.offset(of: start))
+        var spans = highlightCache.spans(atRow: row)[...]
+        var lastCodeCharacter: Character?
+        for (column, character) in prefix.enumerated() where !character.isWhitespace {
+            while let span = spans.first, span.range.upperBound <= column {
+                spans = spans.dropFirst()
+            }
+            if let span = spans.first, span.range.contains(column) {
+                if span.styleIndex == CodeLexer.comment { continue }
+                if span.styleIndex == CodeLexer.string {
+                    lastCodeCharacter = nil
+                    continue
+                }
+            }
+            lastCodeCharacter = character
+        }
+        return lastCodeCharacter == "{"
+    }
 
     private func handleKey(
         _ event: KeyEvent, binding: Binding<String>, onSubmit: (() -> Void)?
@@ -1273,7 +1320,7 @@ extension LeafNode {
             editing.deleteForward()
         case KeyCode.enter:
             if isMultiline, !event.control {
-                editing.insert("\n")
+                insertNewline()
             } else {
                 onSubmit?()
             }
@@ -1296,13 +1343,7 @@ extension LeafNode {
                 }
             }
         case KeyCode.tab where kind == .editor && !event.shift:
-            // Spaces, not a tab character. The shaper has no notion of a tab
-            // stop, so a `\t` in the buffer is a character the font has no
-            // glyph for and draws as a tofu box — an editor whose Tab key
-            // produced that would be making the problem worse on purpose.
-            // Four is the common default; Shift+Tab has no outdent yet, so it
-            // falls through to focus traversal rather than pretending.
-            editing.insert(Self.indentUnit)
+            editing.insert(indentUnit)
         case KeyCode.escape where kind == .editor:
             guard editing.hasSelection else { return true }
             editing.setCursor(editing.selectedRange.upperBound)

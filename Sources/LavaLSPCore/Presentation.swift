@@ -149,7 +149,7 @@ public enum SnippetText {
         var stops: [Int: Int] = [:]
         let characters = Array(snippet)
         var i = 0
-        var depth = 0
+        let depth = 0
         func record(_ number: Int) {
             if stops[number] == nil { stops[number] = count }
         }

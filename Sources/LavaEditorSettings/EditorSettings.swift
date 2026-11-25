@@ -19,6 +19,11 @@ public struct SettingsDiagnostic: Error, Equatable, Sendable, LocalizedError {
     public var errorDescription: String? { "\(location) — \(severity.rawValue): \(message)" }
 }
 
+public struct EditorIndentationPreferences: Equatable, Sendable {
+    public let tabSize: Int
+    public let insertSpaces: Bool
+}
+
 public struct EditorPreferences: Equatable, Sendable {
     public let fontFamily: String
     public let fontSize: Float
@@ -28,12 +33,19 @@ public struct EditorPreferences: Equatable, Sendable {
     public let highlightChangedLines: Bool
     public let tabSize: Int
     public let insertSpaces: Bool
+    /// Whether a file's own indentation outranks `tabSize`/`insertSpaces`.
+    public let detectIndentation: Bool
+    public let languageIndentation: [String: EditorIndentationPreferences]
 
     public static let defaults = Self(
         fontFamily: "Noto Sans Mono", fontSize: 14, lineHeight: 1.5,
         wordWrap: false, lineNumbers: true, highlightChangedLines: true,
-        tabSize: 4, insertSpaces: true
+        tabSize: 4, insertSpaces: true, detectIndentation: true, languageIndentation: [:]
     )
+
+    public func indentation(for language: String) -> EditorIndentationPreferences {
+        languageIndentation[language] ?? .init(tabSize: tabSize, insertSpaces: insertSpaces)
+    }
 
     fileprivate var fields: [String: JSONValue] {
         [
@@ -41,6 +53,10 @@ public struct EditorPreferences: Equatable, Sendable {
             "lineHeight": .number(String(lineHeight)), "wordWrap": .bool(wordWrap),
             "lineNumbers": .bool(lineNumbers), "highlightChangedLines": .bool(highlightChangedLines),
             "tabSize": .number(String(tabSize)), "insertSpaces": .bool(insertSpaces),
+            "detectIndentation": .bool(detectIndentation),
+            "languages": .object(languageIndentation.mapValues {
+                .object(["tabSize": .number(String($0.tabSize)), "insertSpaces": .bool($0.insertSpaces)])
+            }),
         ]
     }
 }
@@ -278,6 +294,8 @@ private struct SettingsValidator {
         warnUnknown(at: ["editor"], known: Set(EditorPreferences.defaults.fields.keys))
         func path(_ key: String) -> [String] { ["editor", key] }
         let fallback = EditorPreferences.defaults
+        let tabSize = readTabSize(at: path("tabSize"), fallback: fallback.tabSize)
+        let insertSpaces = read(path("insertSpaces"), "a Boolean", fallback: fallback.insertSpaces, Self.bool)
         return .init(
             fontFamily: read(path("fontFamily"), "a nonempty font family", fallback: fallback.fontFamily) {
                 guard case .string(let family) = $0,
@@ -297,12 +315,40 @@ private struct SettingsValidator {
             highlightChangedLines: read(
                 path("highlightChangedLines"), "a Boolean", fallback: fallback.highlightChangedLines, Self.bool
             ),
-            tabSize: read(path("tabSize"), "a positive integer", fallback: fallback.tabSize) {
-                guard case .number(let token) = $0, let value = Int(token), value > 0 else { return nil }
-                return value
-            },
-            insertSpaces: read(path("insertSpaces"), "a Boolean", fallback: fallback.insertSpaces, Self.bool)
+            tabSize: tabSize, insertSpaces: insertSpaces,
+            detectIndentation: read(
+                path("detectIndentation"), "a Boolean", fallback: fallback.detectIndentation, Self.bool
+            ),
+            languageIndentation: readLanguageIndentation(tabSize: tabSize, insertSpaces: insertSpaces)
         )
+    }
+
+    private mutating func readLanguageIndentation(
+        tabSize: Int, insertSpaces: Bool
+    ) -> [String: EditorIndentationPreferences] {
+        let path = ["editor", "languages"]
+        guard checkObject(at: path), let languages = root.node(at: path)?.object else { return [:] }
+        var result: [String: EditorIndentationPreferences] = [:]
+        for language in languages.keys.sorted() {
+            let entry = path + [language]
+            guard checkObject(at: entry) else { continue }
+            warnUnknown(at: entry, known: ["tabSize", "insertSpaces"])
+            let sizePath = entry + ["tabSize"]
+            let spacesPath = entry + ["insertSpaces"]
+            let size = root.node(at: sizePath) == nil ? tabSize : readTabSize(at: sizePath, fallback: tabSize)
+            let spaces = root.node(at: spacesPath) == nil ? insertSpaces : read(
+                spacesPath, "a Boolean", fallback: insertSpaces, defaultValue: .bool(insertSpaces), Self.bool
+            )
+            result[language] = .init(tabSize: size, insertSpaces: spaces)
+        }
+        return result
+    }
+
+    private mutating func readTabSize(at path: [String], fallback: Int) -> Int {
+        read(path, "an integer from 1 to 32", fallback: fallback, defaultValue: .number(String(fallback))) {
+            guard case .number(let token) = $0, let value = Int(token), (1...32).contains(value) else { return nil }
+            return value
+        }
     }
 
     mutating func readServers() -> [String: LanguageServerSettings] {

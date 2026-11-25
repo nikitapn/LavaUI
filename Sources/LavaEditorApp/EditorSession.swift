@@ -158,6 +158,51 @@ final class EditorSession {
     private var zoomedDocument: (regular: UIFont, bold: UIFont?)?
     var documentFont: UIFont? { zoomedDocument?.regular ?? fonts.document }
     var documentBoldFont: UIFont? { zoomedDocument == nil ? fonts.documentBold : zoomedDocument?.bold }
+    var documentIndentation: EditorIndentationFormat { indentationFormat(for: active) }
+
+    /// What a diff's sides are indented with: its document's, when it has
+    /// one open — a tab's width is how the file is displayed, read-only or
+    /// not — and otherwise what the settings say for the file's language.
+    func indentationFormat(for diff: DiffModel) -> EditorIndentationFormat {
+        if let id = diff.documentID, let document = documents.first(where: { $0.id == id }) {
+            return indentationFormat(for: document)
+        }
+        let language = Language.of(diff.url)
+        let preferences = editorPreferences.indentation(for: language.indentationLanguageID(for: diff.url))
+        return .init(tabSize: preferences.tabSize, insertSpaces: preferences.insertSpaces)
+    }
+
+    func indentationFormat(for document: EditorDocument) -> EditorIndentationFormat {
+        let preferences = editorPreferences.indentation(for: document.language.indentationLanguageID(for: document.url))
+        var tabSize = preferences.tabSize
+        var insertSpaces = preferences.insertSpaces
+        // The settings are a default for files that have no style yet.
+        if editorPreferences.detectIndentation, let detected = document.detectedIndentation {
+            insertSpaces = detected.insertSpaces
+            tabSize = detected.tabSize ?? tabSize
+        }
+        if document.requiresTabs { insertSpaces = false }
+        return .init(tabSize: tabSize, insertSpaces: insertSpaces)
+    }
+
+    private struct DocumentTabFontKey: Hashable {
+        let font: String
+        let columns: Int
+    }
+
+    @ObservationIgnored private var documentTabFonts: [DocumentTabFontKey: UIFont] = [:]
+
+    func documentFont(tabSize: Int) -> UIFont? {
+        let font = documentFont ?? FontStore.default
+        guard tabSize != UIFont.tabColumns, let font, let editor = fontEditor else { return font }
+        let key = DocumentTabFontKey(font: font.identity, columns: tabSize)
+        if let cached = documentTabFonts[key] { return cached }
+        guard let configured = resizedDocumentFont(font, size: font.pixelSize, editor: editor, tabColumns: tabSize)
+        else { return font }
+        if documentTabFonts.count >= 16 { documentTabFonts.removeAll(keepingCapacity: true) }
+        documentTabFonts[key] = configured
+        return configured
+    }
     @ObservationIgnored private weak var fontEditor: Editor?
     /// The engine images are decoded into — file-type icons in a canvas
     /// paint need it, and have no view of their own to ask.
@@ -256,6 +301,7 @@ final class EditorSession {
         guard fontPreferences != font else { return }
         fontPreferences = font
         fontSettingsWarning = fonts.updateDocument(preferences, editor: fontEditor)
+        documentTabFonts.removeAll()
         zoomFonts.removeAll()
         zoomedDocument = nil
         zoomRemainder = 0
@@ -380,9 +426,12 @@ final class EditorSession {
         zoomedDocument = (font, bold)
     }
 
-    private func resizedDocumentFont(_ base: UIFont, size: Float, editor: Editor) -> UIFont? {
+    private func resizedDocumentFont(
+        _ base: UIFont, size: Float, editor: Editor, tabColumns: Int? = nil
+    ) -> UIFont? {
         guard let font = UIFont(path: base.path, pixelSize: size, faceIndex: base.faceIndex,
-                                raster: base.raster, lineHeightMultiple: editorPreferences.lineHeight),
+                                raster: base.raster, lineHeightMultiple: editorPreferences.lineHeight,
+                                tabColumns: tabColumns),
               font.registerWithEngine(editor) else { return nil }
         font.useFallbacks(base.fallbacks.map {
             FontFallback(path: $0.path, pixelSize: size)

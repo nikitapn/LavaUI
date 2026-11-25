@@ -34,12 +34,44 @@ values and removes comments and trailing commas.
 | `wordWrap` | Boolean | `false` |
 | `lineNumbers` | Boolean | `true` |
 | `highlightChangedLines` | Boolean | `true` |
-| `tabSize` | Positive integer | `4` |
+| `tabSize` | Integer from 1 to 32 | `4` |
 | `insertSpaces` | Boolean | `true` |
+| `detectIndentation` | Boolean | `true` |
+| `languages` | Object keyed by language ID | `{}` |
 
 Font settings apply to the document. If fontconfig can't locate the requested
-family, LavaEditor tries the default family, then bundled Figtree. `tabSize` and
-`insertSpaces` are available in the settings model for future use.
+family, LavaEditor tries the default family, then bundled Figtree.
+
+`tabSize` sets the width of a tab and the number of spaces in one indentation
+level. `insertSpaces` controls what Tab inserts and the level Enter adds after
+an opening brace or colon. The whitespace Enter carries over from the line
+above is kept exactly as it is, so a tab-indented line continues with a tab
+whatever `insertSpaces` says.
+
+With `detectIndentation`, a file's own indentation outranks both settings:
+when it is read, whichever of tabs or spaces more of its lines begin with
+wins, and for spaces the most common step between indented lines becomes the
+level width. A tab-indented file keeps the configured `tabSize` for display,
+since the bytes say nothing about how wide a tab is. A file with no indented
+lines yet uses the settings. Makefiles (`Makefile`, `GNUmakefile`, `*.mk`)
+always insert tabs, since make requires them.
+
+Use `editor.languages` in either settings file to override either field for
+one language. A folder value replaces the user value for the same language
+and field. A field omitted by both layers inherits the general `editor`
+setting. Use `c` for C and `cpp` for C++ and shared `.h` headers.
+
+```json
+{
+  "editor": {
+    "languages": {
+      "swift": { "tabSize": 4, "insertSpaces": true },
+      "cpp": { "tabSize": 2, "insertSpaces": true },
+      "c": { "tabSize": 4, "insertSpaces": false }
+    }
+  }
+}
+```
 
 ## Language servers
 

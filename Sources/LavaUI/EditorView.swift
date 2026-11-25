@@ -573,6 +573,30 @@ extension EditorView {
     }
 }
 
+/// How Enter indents a new logical line in an editor.
+public enum EditorIndentation {
+    case none
+    case inherit
+    /// Inherit the line's indent, adding a level after an opening brace in code.
+    /// Use with a stateful highlighter backed by `CodeLexer`.
+    case braces
+    /// Computes whitespace at the insertion point. Nil inherits the current line's indent.
+    case provider((_ text: String, _ caret: String.Index, _ unit: String) -> String?)
+}
+
+/// The width and representation of newly inserted indentation.
+public struct EditorIndentationFormat {
+    public let tabSize: Int
+    public let insertSpaces: Bool
+
+    public init(tabSize: Int, insertSpaces: Bool) {
+        self.tabSize = min(32, max(1, tabSize))
+        self.insertSpaces = insertSpaces
+    }
+
+    var unit: String { insertSpaces ? String(repeating: " ", count: tabSize) : "\t" }
+}
+
 public struct EditorView: PrimitiveView {
     /// The text being edited.
     @Binding public var text: String
@@ -584,6 +608,10 @@ public struct EditorView: PrimitiveView {
     /// `StatefulLexer`, so a block comment or a multi-line string is coloured
     /// on every line it spans. Nil uses `rules`.
     public var highlighter: SyntaxHighlighter?
+    public var indentation: EditorIndentation
+    /// When supplied, what Tab inserts and the level Enter adds. Whitespace
+    /// Enter inherits from the line is never rewritten into it.
+    public var indentationFormat: EditorIndentationFormat?
     /// Colours for text, gutter, current line and search matches.
     public var style: CodeStyle
     /// The editor's font, or `nil` for the environment's.
@@ -658,6 +686,8 @@ public struct EditorView: PrimitiveView {
         isReadOnly: Bool = false,
         rules: [HighlightRule] = [],
         highlighter: SyntaxHighlighter? = nil,
+        indentation: EditorIndentation = .none,
+        indentationFormat: EditorIndentationFormat? = nil,
         style: CodeStyle = CodeStyle(),
         font: UIFont? = nil,
         showLineNumbers: Bool = true,
@@ -694,6 +724,8 @@ public struct EditorView: PrimitiveView {
         self.isReadOnly = isReadOnly
         self.rules = rules
         self.highlighter = highlighter
+        self.indentation = indentation
+        self.indentationFormat = indentationFormat
         self.style = style
         self.font = font
         self.showLineNumbers = showLineNumbers
@@ -854,6 +886,8 @@ public struct EditorView: PrimitiveView {
             leaf.highlightCache = SyntaxHighlighter.Cache()
         }
         leaf.highlighter = next
+        leaf.indentation = indentation
+        leaf.indentationFormat = indentationFormat
         leaf.codeStyle = style
         leaf.showsGutter = showLineNumbers
         leaf.search = search

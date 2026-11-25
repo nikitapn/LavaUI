@@ -35,6 +35,29 @@ final class EditorSettingsTests: XCTestCase {
         XCTAssertTrue(settings.diagnostics.isEmpty)
     }
 
+    func testLanguageIndentationMergesByFieldAndInheritsEditorDefaults() throws {
+        let settings = try merged(
+            user: #"{"editor":{"tabSize":8,"insertSpaces":false,"languages":{"swift":{"tabSize":4,"insertSpaces":true},"cpp":{"tabSize":2}}}}"#,
+            folder: #"{"editor":{"tabSize":6,"languages":{"cpp":{"insertSpaces":true},"swift":{"tabSize":3}}}}"#
+        )
+        XCTAssertEqual(settings.editor.indentation(for: "swift"), .init(tabSize: 3, insertSpaces: true))
+        XCTAssertEqual(settings.editor.indentation(for: "cpp"), .init(tabSize: 2, insertSpaces: true))
+        XCTAssertEqual(settings.editor.indentation(for: "c"), .init(tabSize: 6, insertSpaces: false))
+        XCTAssertEqual(settings.origin(at: ["editor", "languages", "cpp", "tabSize"])?.layer, .user)
+        XCTAssertEqual(settings.origin(at: ["editor", "languages", "cpp", "insertSpaces"])?.layer, .folder)
+        XCTAssertTrue(settings.diagnostics.isEmpty)
+    }
+
+    func testInvalidLanguageIndentationFallsBackToGeneralSettings() throws {
+        let settings = try merged(
+            user: #"{"editor":{"tabSize":2,"insertSpaces":false,"languages":{"cpp":{"tabSize":33,"insertSpaces":"yes"},"swift":false}}}"#,
+            folder: "{}"
+        )
+        XCTAssertEqual(settings.editor.indentation(for: "cpp"), .init(tabSize: 2, insertSpaces: false))
+        XCTAssertEqual(settings.editor.indentation(for: "swift"), .init(tabSize: 2, insertSpaces: false))
+        XCTAssertEqual(settings.diagnostics.filter { $0.severity == .error }.count, 3)
+    }
+
     func testObjectsMergeRecursivelyAndArraysReplace() throws {
         let settings = try merged(
             user: #"{"lsp":{"servers":{"clangd":{"settings":{"flags":["a","b"],"nested":{"first":1,"second":2}}}}}}"#,

@@ -40,6 +40,16 @@ final class TabShapingTests: XCTestCase {
         XCTAssertEqual(font.shapedRun("\t\t").width, tabWidth * 2, accuracy: 0.5)
     }
 
+    func testTabWidthCanVaryIndependentlyForTheSameFace() throws {
+        let narrow = try XCTUnwrap(UIFont(
+            path: font.path, pixelSize: font.pixelSize, faceIndex: font.faceIndex,
+            raster: font.raster, tabColumns: 2
+        ))
+        XCTAssertNotEqual(narrow.identity, font.identity)
+        XCTAssertEqual(narrow.shapedRun("\t").width, 2 * spaceWidth, accuracy: 0.5)
+        XCTAssertEqual(font.shapedRun("\t").width, tabWidth, accuracy: 0.5)
+    }
+
     /// One glyph per character, so every offset mapping still lines up.
     func testGlyphCountMatchesCharacters() {
         XCTAssertEqual(font.shape("a\tb").count, 3)

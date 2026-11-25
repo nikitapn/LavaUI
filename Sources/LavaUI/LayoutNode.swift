@@ -618,6 +618,8 @@ final class LeafNode: YogaBoxNode {
     /// clears it to empty for a stateless highlighter, so a stale cache from
     /// a prior stateful one can't leak through if `highlighter` is swapped.
     var highlightCache = SyntaxHighlighter.Cache()
+    var indentation: EditorIndentation = .none
+    var indentationFormat: EditorIndentationFormat?
     var codeStyle: CodeStyle?
     var showsGutter = false
     var gutterWidth: Float = 0

@@ -114,6 +114,7 @@ public final class UIFont: @unchecked Sendable {
     /// process's cache key for the face. Not the renderer's identity, which
     /// hashes the file's contents.
     public let identity: String
+    private let configuredTabColumns: Int?
 
     /// The size as FreeType and HarfBuzz both count it: pixels times 64.
     ///
@@ -174,18 +175,20 @@ public final class UIFont: @unchecked Sendable {
     public init?(
         path: String, pixelSize: Float = 16, faceIndex: UInt32 = 0,
         raster: FontRasterFlags = .default, lineHeightMultiple: Float? = nil,
-        features: [String] = [], letterSpacing: Float = 0
+        features: [String] = [], letterSpacing: Float = 0, tabColumns: Int? = nil
     ) {
         self.path = path
         self.pixelSize = pixelSize
         self.faceIndex = faceIndex
         self.raster = raster
+        configuredTabColumns = tabColumns.map { max(1, $0) }
         // Everything that changes a shaped run is in the key: the shape cache
         // is per instance, but `TextLayoutCache` and friends key on this.
         var identity = "\(path)#\(faceIndex)@\(pixelSize)/\(raster.raw)"
         if let lineHeightMultiple { identity += ":\(lineHeightMultiple)" }
         if !features.isEmpty { identity += "+" + features.joined(separator: ",") }
         if letterSpacing != 0 { identity += "~\(letterSpacing)" }
+        if let configuredTabColumns { identity += ":tabs=\(configuredTabColumns)" }
         self.identity = identity
         var f = canvas.Font()
         let size26_6 = UInt32((pixelSize * 64).rounded())
@@ -536,7 +539,7 @@ public final class UIFont: @unchecked Sendable {
     ///
     /// The common case costs one extra scan of the glyph array and nothing
     /// else: text that shapes cleanly never touches the fallback path.
-    /// Columns a tab advances. Four, matching what Tab inserts.
+    /// Default tab width for fonts loaded without a per-instance override.
     ///
     /// `nonisolated(unsafe)` for the same reason the bridges in
     /// `WindowControls` are: set once at startup, read from the main thread
@@ -562,7 +565,7 @@ public final class UIFont: @unchecked Sendable {
     /// indent level. A tab-indented file — a Makefile, Go, plenty of C — was
     /// unreadable.
     ///
-    /// The width is a **constant** `tabColumns` spaces, not the distance to the
+    /// The width is a **constant** number of spaces, not the distance to the
     /// next tab stop. A stop would be prettier for a tab in the middle of a
     /// line, and it is not available: the draw list shapes each syntax-coloured
     /// segment of a line on its own (see `DrawList.emitCodeLine`), and `text()`
@@ -584,7 +587,7 @@ public final class UIFont: @unchecked Sendable {
         guard text.utf8.contains(0x09) else { return shapeWithFallbacks(text) }
 
         let space = spaceMetrics
-        let advance = space.advance * Float(max(1, Self.tabColumns))
+        let advance = space.advance * Float(configuredTabColumns ?? max(1, Self.tabColumns))
         var result: [ShapedGlyph] = []
         var byteBase = 0
         var pen: Float = 0

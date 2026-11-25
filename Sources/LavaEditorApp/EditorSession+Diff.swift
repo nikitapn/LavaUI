@@ -151,7 +151,7 @@ extension EditorSession {
             old: old, new: new, oldTitle: oldTitle, newTitle: newTitle,
             highlighter: language.highlighter, documentID: documentID,
             // Staged is the index, not the buffer; a deleted file has none.
-            isEditable: item.group != .staged && documentID != nil
+            isEditable: item.group != .staged && documentID != nil, url: url
         ))
     }
 

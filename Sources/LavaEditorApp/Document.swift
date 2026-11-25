@@ -1,5 +1,7 @@
 import Foundation
+import LavaEditorIndentation
 import LavaProjectCore
+import LavaText
 import LavaUI
 
 /// One open file.
@@ -14,6 +16,7 @@ struct EditorDocument: EditorTab {
     /// never been saved, which is what makes `Save` fall back to `Save As`.
     var url: URL?
     var text: String
+    let indentationState = IndentationProvider()
     var preview: DocumentPreview?
     var tabState: EditorTabState = .open
 
@@ -39,6 +42,17 @@ struct EditorDocument: EditorTab {
     var loadError: String?
     /// Invalid UTF-8 was replaced for display, so this buffer cannot round-trip.
     private(set) var hasInvalidUTF8 = false
+    /// The file's own indentation, read when the file is. Not refreshed as
+    /// the buffer changes: what the user types is following it, not evidence.
+    private(set) var detectedIndentation: DetectedIndentation?
+
+    /// make reads a recipe only after a tab, so spaces there are a syntax
+    /// error rather than a style — whatever the file has so far.
+    var requiresTabs: Bool {
+        guard let url else { return false }
+        let name = url.lastPathComponent.lowercased()
+        return name == "makefile" || name == "gnumakefile" || url.pathExtension.lowercased() == "mk"
+    }
 
     var saveUnavailable: String? {
         if preview != nil { return "Preview tabs are read-only." }
@@ -56,6 +70,10 @@ struct EditorDocument: EditorTab {
 
     var language: Language { Language.of(url) }
 
+    var indentation: EditorIndentation {
+        language.indentation(using: indentationState, url: url)
+    }
+
     /// Reads the file into `text`. Returns false and fills `loadError` on
     /// failure, leaving the buffer alone.
     ///
@@ -67,6 +85,7 @@ struct EditorDocument: EditorTab {
             let decoded = String(data: data, encoding: .utf8)
             hasInvalidUTF8 = decoded == nil
             text = decoded ?? String(decoding: data, as: UTF8.self)
+            detectedIndentation = DetectedIndentation.detect(in: text)
             isLoaded = true
             isModified = false
             loadError = nil

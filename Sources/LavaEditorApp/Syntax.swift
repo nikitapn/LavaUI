@@ -1,4 +1,5 @@
 import Foundation
+import LavaEditorIndentation
 import LavaText
 import LavaUI
 
@@ -33,7 +34,7 @@ enum Language: String, CaseIterable {
         guard let url else { return .plain }
         switch url.pathExtension.lowercased() {
         case "swift": return .swift
-        case "c", "h", "cc", "cpp", "cxx", "hpp", "hh", "m", "mm": return .c
+        case "c", "h", "cc", "cpp", "cxx", "c++", "hpp", "hh", "hxx", "ipp", "inl", "m", "mm": return .c
         case "py", "pyw": return .python
         case "js", "mjs", "ts", "jsx", "tsx": return .javascript
         case "json": return .json
@@ -71,6 +72,34 @@ enum Language: String, CaseIterable {
             return SyntaxHighlighter(lexer: CodeLexer(.javascript), identity: "javascript")
         case .python: return SyntaxHighlighter(lexer: CodeLexer(.python), identity: "python")
         default: return SyntaxHighlighter(rules: rules)
+        }
+    }
+
+    func indentationLanguageID(for url: URL?) -> String {
+        guard self == .c else { return rawValue }
+        let ext = url?.pathExtension ?? ""
+        switch ext.lowercased() {
+        case "m", "mm": return "objective-c"
+        case "c": return ext == "C" ? "cpp" : "c"
+        // Shared headers use the C++ grammar, as they do for clangd.
+        default: return "cpp"
+        }
+    }
+
+    func indentation(using provider: IndentationProvider, url: URL?) -> EditorIndentation {
+        let parser: IndentationProvider.Language
+        switch indentationLanguageID(for: url) {
+        case "swift":
+            guard IndentationProvider.hasSwiftParser else { return .braces }
+            parser = .swift
+        case "python": parser = .python
+        case "c": parser = .c
+        case "cpp": parser = .cpp
+        default:
+            return .inherit
+        }
+        return .provider { text, caret, unit in
+            provider.indentation(in: text, at: caret, language: parser, unit: unit)
         }
     }
 

@@ -61,6 +61,10 @@ struct DiffPane: View {
         sideStyle.gapStripe = colors.stripe
         sideStyle.placeholder = nil
         let newText = model.isEditable ? session.text : .constant(model.newText)
+        // Both sides take the file's tab width, editable or not: it is how
+        // the file is displayed, and the two sides must line up.
+        let indentation = session.indentationFormat(for: model)
+        let font = session.documentFont(tabSize: indentation.tabSize)
         return VStack(flexGrow: 1, spacing: 0) {
             toolbar(theme: theme, colors: colors)
             HStack(flexGrow: 1, spacing: 0) {
@@ -70,7 +74,7 @@ struct DiffPane: View {
                         isReadOnly: true,
                         highlighter: model.highlighter,
                         style: sideStyle,
-                        font: session.documentFont,
+                        font: font,
                         showLineNumbers: session.showLineNumbers,
                         wraps: false,
                         visibleLines: 24,
@@ -89,8 +93,10 @@ struct DiffPane: View {
                         text: newText,
                         isReadOnly: !model.isEditable || session.active.hasInvalidUTF8,
                         highlighter: model.highlighter,
+                        indentation: model.isEditable ? session.active.indentation : .none,
+                        indentationFormat: model.isEditable ? indentation : nil,
                         style: sideStyle,
-                        font: session.documentFont,
+                        font: font,
                         showLineNumbers: session.showLineNumbers,
                         wraps: false,
                         visibleLines: 24,

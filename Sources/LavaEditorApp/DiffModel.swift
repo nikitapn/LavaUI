@@ -21,6 +21,9 @@ final class DiffModel {
     /// Whether the new side *is* that document's text, and so editable. Not
     /// when it is the index, or a file that has no tab.
     let isEditable: Bool
+    /// The file compared, for a comparison with no document to ask — a
+    /// deleted file. Only its language is read from it.
+    let url: URL?
 
     let oldText: String
     /// The new side as last diffed. For an editable diff the editor shows the
@@ -42,9 +45,10 @@ final class DiffModel {
 
     init(
         old: String, new: String, oldTitle: String, newTitle: String,
-        highlighter: SyntaxHighlighter, documentID: Int?, isEditable: Bool,
+        highlighter: SyntaxHighlighter, documentID: Int?, isEditable: Bool, url: URL? = nil,
         proposalAccept: (() -> Void)? = nil
     ) {
+        self.url = url
         self.proposalAccept = proposalAccept
         self.oldTitle = oldTitle
         self.newTitle = newTitle
