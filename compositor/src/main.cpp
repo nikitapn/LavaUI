@@ -1009,6 +1009,7 @@ struct Keyboard {
   Listener<Keyboard> modifiers;
   Listener<Keyboard> key;
   Listener<Keyboard> destroy;
+  std::unordered_map<uint32_t, xkb_keysym_t> clientModifierPresses;
 
   Keyboard(Server *server, wlr_input_device *device);
   ~Keyboard();
@@ -11482,6 +11483,12 @@ void Keyboard::on_key(wl_listener *listener, void *data) {
   auto *keyboard = owner_of<Keyboard>(listener);
   auto *event = static_cast<wlr_keyboard_key_event *>(data);
   Server *server = keyboard->server;
+  const bool pressed = event->state == WL_KEYBOARD_KEY_STATE_PRESSED;
+  xkb_keysym_t releasedModifier = XKB_KEY_NoSymbol;
+  if (!pressed) {
+    auto press = keyboard->clientModifierPresses.extract(event->keycode);
+    if (!press.empty()) releasedModifier = press.mapped();
+  }
   const bool waking = server->screensOff;
   server->notifyIdleActivity();
 
@@ -11502,7 +11509,7 @@ void Keyboard::on_key(wl_listener *listener, void *data) {
   const uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard->wlr);
   const uint32_t modMask =
       shortcut_mod_mask(server->config.keyboard, server->nested);
-  if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+  if (pressed) {
     // +8 converts evdev to xkb keycodes; the offset is historical, from X.
     const xkb_keycode_t keycode = event->keycode + 8;
     // The *unshifted* keysym, deliberately: Mod+Shift+2 produces "at" on a US
@@ -11591,10 +11598,17 @@ void Keyboard::on_key(wl_listener *listener, void *data) {
     return;
   }
   if (keyTarget != 0) {
-    const bool pressed = event->state == WL_KEYBOARD_KEY_STATE_PRESSED;
     const xkb_keysym_t *syms = nullptr;
-    const int count = xkb_state_key_get_syms(keyboard->wlr->xkb_state,
-                                             event->keycode + 8, &syms);
+    int count = 1;
+    if (releasedModifier != XKB_KEY_NoSymbol) {
+      // wlroots reports the release before updating XKB. Under
+      // grp:ctrls_toggle, a held Ctrl makes its own release resolve to a
+      // group switch. Match the release to the modifier the client saw down.
+      syms = &releasedModifier;
+    } else {
+      count = xkb_state_key_get_syms(keyboard->wlr->xkb_state,
+                                    event->keycode + 8, &syms);
+    }
     const int32_t mods = static_cast<int32_t>(glfw_mods(modifiers));
     if (ClientSurface *target = server->surfaces->find(keyTarget)) {
       // Prefer the first keysym for repeat tracking — multi-sym keys are
@@ -11605,6 +11619,9 @@ void Keyboard::on_key(wl_listener *listener, void *data) {
       }
       std::string text;
       if (pressed) {
+        if (count == 1 && is_modifier_key(glfwKey)) {
+          keyboard->clientModifierPresses.insert_or_assign(event->keycode, syms[0]);
+        }
         const uint32_t utf32 = xkb_state_key_get_utf32(
             keyboard->wlr->xkb_state, event->keycode + 8);
         // Control characters are keys, not text: a client that inserted them
