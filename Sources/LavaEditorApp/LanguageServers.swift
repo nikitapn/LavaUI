@@ -83,7 +83,16 @@ final class LanguageServers {
         var highlights: SemanticHighlights?
         /// The server said to ask again. Still shown until the answer comes.
         var stale = false
+        /// `tokens` are the server's answer for exactly `text` — not shifted
+        /// across edits, not read from the cache — and so worth caching.
+        var fresh = false
     }
+
+    /// Last answers on disk, for the seconds a server takes to warm up.
+    @ObservationIgnored private let tokenCache = SemanticTokenCache.standard
+    /// Tabs whose cache entry has been looked for, so a miss is looked for
+    /// once rather than on every sync.
+    @ObservationIgnored private var cacheLooked: Set<Int> = []
 
     @ObservationIgnored private var positionsMemo: (id: Int, text: String, encoding: PositionEncoding, positions: DocumentPositions)?
 
@@ -107,7 +116,11 @@ final class LanguageServers {
                     server.client.didChange(uri: open.uri, text: document.text)
                     open.text = document.text
                 }
-                if open.modified, !document.isModified { server.client.didSave(uri: open.uri) }
+                if open.modified, !document.isModified {
+                    server.client.didSave(uri: open.uri)
+                    // The answer for the unsaved text is now the answer for the file.
+                    remember(document.id, open)
+                }
                 open.modified = document.isModified
                 opened[document.id] = open
             } else if !lookingUp.contains(document.id), !unserved.contains(document.id) {
@@ -123,6 +136,7 @@ final class LanguageServers {
         // of all of them.
         if let open = opened[active],
            semantic[active] == nil || semantic[active]?.text != open.text || semantic[active]?.stale == true {
+            if semantic[active] == nil, !open.text.isEmpty { lookInCache(active, open) }
             wantSemantic(active)
         }
     }
@@ -173,10 +187,22 @@ final class LanguageServers {
             // settings — seconds to a minute in — and does not send a
             // refresh once it has. Kept, and asked again.
             let early = decoded.tokens.isEmpty && !text.isEmpty
-            semantic[id] = Semantic(text: text, tokens: decoded.tokens, snapshot: decoded.snapshot,
-                                    encoding: encoding, highlights: nil, stale: early)
-            semanticGeneration &+= 1
-            if early { retrySemantic(id) } else { semanticRetries[id] = nil }
+            if early, let shown = semantic[id], shown.text == text, !shown.tokens.isEmpty {
+                // Cached tokens for this very text: better than nothing while
+                // the server warms up. Kept, and asked again.
+                semantic[id]?.stale = true
+                semantic[id]?.snapshot = nil
+            } else {
+                semantic[id] = Semantic(text: text, tokens: decoded.tokens, snapshot: decoded.snapshot,
+                                        encoding: encoding, highlights: nil, stale: early, fresh: !early)
+                semanticGeneration &+= 1
+            }
+            if early {
+                retrySemantic(id)
+            } else {
+                semanticRetries[id] = nil
+                if let open = opened[id], open.text == text, !open.modified { remember(id, open) }
+            }
         case .success(nil):
             retrySemantic(id)
         case .failure(.unsupported):
@@ -195,6 +221,41 @@ final class LanguageServers {
         }
         // Typed into while the server was answering.
         if let open = opened[id], open.text != text { wantSemantic(id) }
+    }
+
+    /// Reads the tab's last answer from the cache, off the main thread, and
+    /// shows it if the server has not answered by the time it is read.
+    private func lookInCache(_ id: Int, _ open: Opened) {
+        guard !cacheLooked.contains(id) else { return }
+        cacheLooked.insert(id)
+        let cache = tokenCache
+        let path = open.path, text = open.text, server = open.key.name
+        let owner = LanguageServersRef(self)
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard let entry = cache.load(path: path, text: text, server: server) else { return }
+            MainQueue.async {
+                guard let servers = owner.servers, servers.semantic[id] == nil,
+                      servers.opened[id]?.text == text else { return }
+                // Stale: the server is still asked, and its answer replaces this.
+                servers.semantic[id] = Semantic(
+                    text: text, tokens: entry.tokens, snapshot: nil, encoding: entry.encoding,
+                    highlights: nil, stale: true
+                )
+                servers.semanticGeneration &+= 1
+            }
+        }
+    }
+
+    /// Writes the tab's tokens to the cache when they are the server's own
+    /// answer for what is now on disk.
+    private func remember(_ id: Int, _ open: Opened) {
+        guard let state = semantic[id], state.fresh, state.text == open.text, !state.tokens.isEmpty else { return }
+        let cache = tokenCache
+        let path = open.path, server = open.key.name
+        let text = state.text, encoding = state.encoding, tokens = state.tokens
+        DispatchQueue.global(qos: .utility).async {
+            cache.store(path: path, text: text, server: server, encoding: encoding, tokens: tokens)
+        }
     }
 
     /// Asks again later, backing off, for a tab the server had nothing for
@@ -229,6 +290,7 @@ final class LanguageServers {
                 edited = (first...change.range.end.line, first + breaks)
             }
             state.text = text
+            state.fresh = false
             if let edited, let previous = state.highlights {
                 // A keystroke converts the tokens on the lines it touched;
                 // every other line's spans are columns in a line it did not
@@ -343,6 +405,7 @@ final class LanguageServers {
         diagnostics[open.path] = nil
         semantic[id] = nil
         semanticRetries[id] = nil
+        cacheLooked.remove(id)
     }
 
     /// Shuts every server down — the session is ending or the folder changed.
@@ -355,6 +418,7 @@ final class LanguageServers {
         diagnostics.removeAll()
         semantic.removeAll()
         semanticRetries.removeAll()
+        cacheLooked.removeAll()
         refreshes.removeAll()
     }
 

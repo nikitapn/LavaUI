@@ -51,7 +51,7 @@ public struct SemanticToken: Sendable, Equatable {
     public let type: String
     public let modifiers: [String]
 
-    fileprivate init(line: Int, start: Int, length: Int, type: String, modifiers: [String]) {
+    init(line: Int, start: Int, length: Int, type: String, modifiers: [String]) {
         self.line = line
         self.start = start
         self.length = length
