@@ -9,7 +9,6 @@ final class HighlightTests: XCTestCase {
         XCTAssertNotNil(Grammar.c.highlights)
         XCTAssertNotNil(Grammar.cpp.highlights)
         XCTAssertNotNil(Grammar.python.highlights)
-        XCTAssertFalse(SyntaxDocument.highlights(.swift), "Swift has no tree-sitter grammar")
     }
 
     func testCTokensTakeTheirCaptureNames() {
@@ -82,6 +81,50 @@ final class HighlightTests: XCTestCase {
         XCTAssertEqual(layer.map { names(in: $0, line: 1, of: state.text) }?["// done"], "comment")
         flag.lock.lock(); defer { flag.lock.unlock() }
         XCTAssertGreaterThan(flag.count, 0)
+    }
+
+    func testSwiftTakesTheCompilersClassification() throws {
+        try XCTSkipUnless(SyntaxDocument.highlights(.swift))
+        let names = highlighted(
+            "@MainActor\nstruct S: Equatable {\n    /// Doc.\n    let x: Int = 4.2 // note\n"
+                + "    func f() -> String { \"a\\(x)b\" + \"\\($0)\" }\n}\n#if DEBUG\nlet café = [1: \"é\"]\n#endif\n",
+            .swift
+        )
+        XCTAssertEqual(names[0]["@MainActor"], "attribute")
+        XCTAssertEqual(names[1]["struct"], "keyword")
+        XCTAssertEqual(names[1]["Equatable"], "type")
+        XCTAssertNil(names[1]["S"], "a declared name is an identifier to the classifier: plain")
+        XCTAssertEqual(names[2]["/// Doc."], "comment.documentation")
+        XCTAssertEqual(names[3]["Int"], "type")
+        XCTAssertEqual(names[3]["4.2"], "number")
+        XCTAssertEqual(names[3]["// note"], "comment")
+        XCTAssertEqual(names[4]["\"a"], "string")
+        XCTAssertEqual(names[4]["b\""], "string", "the interpolation between is code")
+        XCTAssertEqual(names[4]["$0"], "variable.builtin")
+        XCTAssertEqual(names[6]["#if"], "keyword.directive")
+        XCTAssertEqual(names[7]["\"é\""], "string", "columns after a multi-byte character")
+        XCTAssertEqual(names[8]["#endif"], "keyword.directive")
+
+        // Identifiers to the classifier, but not to a reader.
+        let more = highlighted("import Foundation.NSString\nprivate(set) var count = 0\n", .swift)
+        XCTAssertEqual(more[0]["Foundation"], "namespace")
+        XCTAssertEqual(more[0]["NSString"], "namespace")
+        XCTAssertEqual(more[1]["set"], "keyword")
+        XCTAssertNil(more[1]["count"])
+    }
+
+    func testSwiftHighlightsFollowEdits() throws {
+        try XCTSkipUnless(SyntaxDocument.highlights(.swift))
+        let document = SyntaxDocument(answerTimeout: .seconds(10), highlightWait: 10)
+        var state = TextEditingState("let a = 1\n")
+        document.follow(state, language: .swift)
+        _ = document.highlights(for: state, lines: 0..<2)
+        state.setCursor(state.text.endIndex)
+        state.insert("var b: String = \"x\"")
+        let layer = document.highlights(for: state, lines: 0..<2)
+        XCTAssertEqual(layer?.revision, state.revision)
+        XCTAssertEqual(layer.map { names(in: $0, line: 1, of: state.text) }?["String"], "type")
+        XCTAssertEqual(document.fullParses, 1, "followed, not reparsed whole")
     }
 
     func testAStaleLayerKeepsLinesWhoseTextIsUnchanged() {

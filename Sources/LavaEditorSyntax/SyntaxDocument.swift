@@ -39,6 +39,13 @@ public final class SyntaxDocument: HighlightSource, @unchecked Sendable {
     #else
     public static let hasSwiftParser = false
     #endif
+    /// SwiftIDEUtils' classifier ships beside the parser in the toolchains
+    /// this builds with, but is a separate module and checked separately.
+    #if canImport(SwiftParser) && canImport(SwiftSyntax) && canImport(SwiftIDEUtils)
+    static let hasSwiftHighlights = true
+    #else
+    static let hasSwiftHighlights = false
+    #endif
 
     /// The longest a question waits for the parse to catch up. An Enter after
     /// an edit waits for one incremental reparse; only a first parse of a
@@ -72,7 +79,7 @@ public final class SyntaxDocument: HighlightSource, @unchecked Sendable {
     /// as a `HighlightSource` for.
     public static func highlights(_ language: Language) -> Bool {
         switch language {
-        case .swift: return false
+        case .swift: return hasSwiftHighlights
         case .python: return Grammar.python.highlights != nil
         case .c: return Grammar.c.highlights != nil
         case .cpp: return Grammar.cpp.highlights != nil
@@ -283,10 +290,12 @@ extension SyntaxDocument {
                 adopt(language)
                 self.bytes = bytes
                 self.revision = revision
-                treeSitter.map { tree in self.bytes.withUnsafeBufferPointer { tree.reset($0) } }
-                #if canImport(SwiftParser) && canImport(SwiftSyntax)
-                swift?.reset()
-                #endif
+                self.bytes.withUnsafeBufferPointer { bytes in
+                    treeSitter?.reset(bytes)
+                    #if canImport(SwiftParser) && canImport(SwiftSyntax)
+                    swift?.reset(bytes)
+                    #endif
+                }
                 parse()
                 highlight()
             case .edits(let changes, let revision):
@@ -333,7 +342,7 @@ extension SyntaxDocument {
             }
             if let treeSitter, !treeSitter.apply(changes) { return false }
             #if canImport(SwiftParser) && canImport(SwiftSyntax)
-            swift?.apply(changes)
+            if let swift, !swift.apply(changes) { return false }
             #endif
             return true
         }
@@ -349,8 +358,17 @@ extension SyntaxDocument {
 
         /// Publishes the wanted lines' highlights for the current revision.
         private func highlight() {
-            guard let wanted, let revision, let tree = treeSitter, let query = tree.grammar.highlights
-            else { return }
+            guard let wanted, let revision else { return }
+            #if canImport(SwiftParser) && canImport(SwiftSyntax) && canImport(SwiftIDEUtils)
+            if let swift {
+                let layer = bytes.withUnsafeBufferPointer {
+                    swift.highlights(bytes: $0, wanted: wanted, revision: revision)
+                }
+                published.publish(layer, covering: wanted)
+                return
+            }
+            #endif
+            guard let tree = treeSitter, let query = tree.grammar.highlights else { return }
             bytes.withUnsafeBufferPointer { bytes in
                 guard let root = tree.parse(bytes), let mutable = tree.mutableTree else { return }
                 let layer = query.layer(

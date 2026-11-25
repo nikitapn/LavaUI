@@ -259,6 +259,7 @@ enum Language: String, CaseIterable {
                     "variable.builtin": keyword,
                     "constructor": type,
                     "namespace": type,
+                    "attribute": type,
                 ]
             )
         }
@@ -281,6 +282,7 @@ enum Language: String, CaseIterable {
                 "variable.builtin": keyword,
                 "constructor": type,
                 "namespace": type,
+                "attribute": type,
             ]
         )
     }

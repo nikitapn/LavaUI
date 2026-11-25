@@ -1,5 +1,8 @@
 #if canImport(SwiftParser) && canImport(SwiftSyntax)
 import LavaText
+#if canImport(SwiftIDEUtils)
+@_implementationOnly import SwiftIDEUtils
+#endif
 @_implementationOnly import SwiftParser
 @_implementationOnly import SwiftSyntax
 
@@ -15,17 +18,24 @@ final class SwiftTree {
     /// Splices since `previous`, in order.
     private var pending: [SourceEdit] = []
     private var isCurrent = false
+    private(set) var lines = LineStarts()
     private(set) var fullParses = 0
 
     var isDirty: Bool { !isCurrent }
 
-    func reset() {
+    func reset(_ bytes: UnsafeBufferPointer<UInt8>) {
         previous = nil
         pending = []
         isCurrent = false
+        lines = LineStarts(bytes)
     }
 
-    func apply(_ changes: [TextChange]) {
+    /// False when a splice does not fit the buffer this tree knows.
+    func apply(_ changes: [TextChange]) -> Bool {
+        for change in changes {
+            guard change.offset >= 0, change.offset + change.removedLength <= lines.byteCount else { return false }
+            lines.apply(change)
+        }
         pending += changes.map {
             SourceEdit(
                 range: AbsolutePosition(utf8Offset: $0.offset)..<AbsolutePosition(utf8Offset: $0.offset + $0.removedLength),
@@ -33,7 +43,74 @@ final class SwiftTree {
             )
         }
         isCurrent = false
+        return true
     }
+
+    #if canImport(SwiftIDEUtils)
+    /// The compiler's own classification of lines `wanted`, as highlight
+    /// names. What it calls an identifier, an operator or an argument label
+    /// is left plain, as `variable` is for the tree-sitter languages: those
+    /// are most of a line, and colouring them would bury what is not.
+    func highlights(bytes: UnsafeBufferPointer<UInt8>, wanted: Range<Int>, revision: UInt64) -> HighlightLayer {
+        let tree = parse(bytes)
+        let span = HighlightPaint.byteSpan(of: wanted, lines: lines, total: bytes.count)
+        var captures: [HighlightPaint.Capture] = []
+        if !span.isEmpty {
+            let range = AbsolutePosition(utf8Offset: span.lowerBound)..<AbsolutePosition(utf8Offset: span.upperBound)
+            for classified in tree.classifications(in: range) {
+                guard let name = Self.names[classified.kind] else { continue }
+                captures.append(.init(
+                    start: classified.range.lowerBound.utf8Offset, end: classified.range.upperBound.utf8Offset,
+                    priority: 0, name: name
+                ))
+            }
+            // What the classifier calls an identifier but a reader does not.
+            // A walk of the lines asked for only, token by token.
+            var token = tree.token(at: range.lowerBound)
+            while let current = token, current.positionAfterSkippingLeadingTrivia < range.upperBound {
+                if let name = Self.contextualName(of: current) {
+                    captures.append(.init(
+                        start: current.positionAfterSkippingLeadingTrivia.utf8Offset,
+                        end: current.endPositionBeforeTrailingTrivia.utf8Offset, priority: 1, name: name
+                    ))
+                }
+                token = current.nextToken(viewMode: .sourceAccurate)
+            }
+        }
+        return HighlightPaint.layer(captures, bytes: bytes, lines: lines, wanted: wanted, revision: revision)
+    }
+
+    /// A module named by an import, and the `set` of `private(set)`: both
+    /// identifiers to the classifier, and both coloured by the lexer this
+    /// replaced — losing them read as a regression.
+    private static func contextualName(of token: TokenSyntax) -> Int? {
+        guard case .identifier = token.tokenKind, let parent = token.parent else { return nil }
+        if parent.is(ImportPathComponentSyntax.self) { return namespace }
+        if parent.is(DeclModifierDetailSyntax.self) { return HighlightName.keyword }
+        return nil
+    }
+
+    private static let namespace = HighlightName.index(of: "namespace")
+
+    private static let names: [SyntaxClassification: Int] = {
+        let names: [SyntaxClassification: String] = [
+            .keyword: "keyword",
+            .stringLiteral: "string",
+            .regexLiteral: "string.regexp",
+            .integerLiteral: "number",
+            .floatLiteral: "number",
+            .lineComment: "comment",
+            .blockComment: "comment",
+            .docLineComment: "comment.documentation",
+            .docBlockComment: "comment.documentation",
+            .type: "type",
+            .attribute: "attribute",
+            .ifConfigDirective: "keyword.directive",
+            .dollarIdentifier: "variable.builtin",
+        ]
+        return names.mapValues { HighlightName.index(of: $0) }
+    }()
+    #endif
 
     func indentation(bytes: UnsafeBufferPointer<UInt8>, at caret: Int, unit: String) -> String? {
         guard caret > 0 else { return nil }
