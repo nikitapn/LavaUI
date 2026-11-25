@@ -77,6 +77,15 @@ struct EditorDocument: EditorTab {
         language.indentation(using: syntax, url: url)
     }
 
+    /// What the editor showing this document calls after its edits, so the
+    /// tree is parsed in the background from the moment the file is shown
+    /// rather than on the first Enter. Nil for a language with no grammar.
+    var followBuffer: ((TextEditingState) -> Void)? {
+        guard let language = language.syntaxLanguage(for: url) else { return nil }
+        let syntax = syntax
+        return { syntax.follow($0, language: language) }
+    }
+
     /// Reads the file into `text`. Returns false and fills `loadError` on
     /// failure, leaving the buffer alone.
     ///

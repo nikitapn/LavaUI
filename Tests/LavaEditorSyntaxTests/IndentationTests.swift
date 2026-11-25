@@ -4,7 +4,7 @@ import XCTest
 final class IndentationTests: XCTestCase {
     func testSwiftSwitchLabels() throws {
         try XCTSkipUnless(SyntaxDocument.hasSwiftParser)
-        let provider = SyntaxDocument()
+        let provider = SyntaxDocument(answerTimeout: .seconds(10))
         check("switch value {\ncase .item(let value):|\n}", "    ", .swift, provider)
         check("switch value {\n    default: // explanation|\n}", "        ", .swift, provider)
         check("    let value:|", nil, .swift, provider)
@@ -13,7 +13,7 @@ final class IndentationTests: XCTestCase {
 
     func testSwiftDelimiterScopes() throws {
         try XCTSkipUnless(SyntaxDocument.hasSwiftParser)
-        let provider = SyntaxDocument()
+        let provider = SyntaxDocument(answerTimeout: .seconds(10))
         check("    fun(|", "        ", .swift, provider)
         check("    fun(\n        one,|", "        ", .swift, provider)
         check("    fun(\n        one,|)", "    ", .swift, provider)
@@ -27,7 +27,7 @@ final class IndentationTests: XCTestCase {
     }
 
     func testPythonSuitesAndContinuations() {
-        let provider = SyntaxDocument()
+        let provider = SyntaxDocument(answerTimeout: .seconds(10))
         check("if ready: # explanation|", "    ", .python, provider)
         check("def foo():\n\tif ready:|", "\t\t", .python, provider)
         check("match value:\n    case 1:|", "        ", .python, provider)
@@ -42,7 +42,7 @@ final class IndentationTests: XCTestCase {
     }
 
     func testCBlocksCasesAndCalls() {
-        let provider = SyntaxDocument()
+        let provider = SyntaxDocument(answerTimeout: .seconds(10))
         check("int main(void) { // entry point|", "    ", .c, provider)
         check("int main(void) {\n    run();|}", "", .c, provider)
         check("int main(void) {\n    run();|", nil, .c, provider)
@@ -57,7 +57,7 @@ final class IndentationTests: XCTestCase {
     }
 
     func testCppConstructsAndIncrementalEdits() {
-        let provider = SyntaxDocument()
+        let provider = SyntaxDocument(answerTimeout: .seconds(10))
         check("namespace demo {\nclass Widget {|", "    ", .cpp, provider)
         check("namespace demo {\nclass Widget {\n    int item;|};\n}", "", .cpp, provider)
         check("class Widget {\npublic:|", "    ", .cpp, provider)
@@ -73,7 +73,7 @@ final class IndentationTests: XCTestCase {
     }
 
     func testUpdatesReuseTheDocumentAfterUnicodeEdits() throws {
-        let provider = SyntaxDocument()
+        let provider = SyntaxDocument(answerTimeout: .seconds(10))
         check("if café:|\n    work()", "    ", .python, provider)
         check("if cafê:|\n    work()", "    ", .python, provider)
         check("if cafê:\n    fun(é,|", "        ", .python, provider)

@@ -620,6 +620,8 @@ final class LeafNode: YogaBoxNode {
     var highlightCache = SyntaxHighlighter.Cache()
     var indentation: EditorIndentation = .none
     var indentationFormat: EditorIndentationFormat?
+    /// The buffer revision `EditorView.followBuffer` was last told about.
+    var followedRevision: UInt64?
     var codeStyle: CodeStyle?
     var showsGutter = false
     var gutterWidth: Float = 0

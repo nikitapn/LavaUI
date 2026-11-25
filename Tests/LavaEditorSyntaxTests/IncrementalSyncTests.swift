@@ -29,7 +29,7 @@ final class IncrementalSyncTests: XCTestCase {
     }
 
     func testUndoAndRedoAreFollowedToo() {
-        let document = SyntaxDocument()
+        let document = SyntaxDocument(answerTimeout: .seconds(10))
         var state = TextEditingState("void f() {\n}\n")
         _ = document.sExpression(for: state, language: .c)
         state.setCursor(state.index(atOffset: 10))
@@ -43,7 +43,7 @@ final class IncrementalSyncTests: XCTestCase {
     }
 
     func testABufferItCannotFollowIsParsedWhole() {
-        let document = SyntaxDocument()
+        let document = SyntaxDocument(answerTimeout: .seconds(10))
         var state = TextEditingState("int x;\n")
         _ = document.sExpression(for: state, language: .c)
         state.setText("int y = 2;\n")
@@ -57,7 +57,7 @@ final class IncrementalSyncTests: XCTestCase {
     }
 
     func testIndentationAfterEditsMatchesAFreshDocument() {
-        let followed = SyntaxDocument()
+        let followed = SyntaxDocument(answerTimeout: .seconds(10))
         var state = TextEditingState("void f(void) {\n}\n")
         _ = followed.indentation(for: state, at: state.text.endIndex, language: .c)
         state.setCursor(state.index(atOffset: 14))
@@ -65,12 +65,12 @@ final class IncrementalSyncTests: XCTestCase {
         let caret = state.focus
         XCTAssertEqual(followed.indentation(for: state, at: caret, language: .c), "        ")
         XCTAssertEqual(followed.fullParses, 1)
-        XCTAssertEqual(SyntaxDocument().indentation(in: state.text, at: caret, language: .c), "        ")
+        XCTAssertEqual(SyntaxDocument(answerTimeout: .seconds(10)).indentation(in: state.text, at: caret, language: .c), "        ")
     }
 
     func testSwiftFollowsEditsWithoutReparsing() throws {
         try XCTSkipUnless(SyntaxDocument.hasSwiftParser)
-        let document = SyntaxDocument()
+        let document = SyntaxDocument(answerTimeout: .seconds(10))
         var state = TextEditingState("func f() {\n}\n")
         _ = document.indentation(for: state, at: state.text.endIndex, language: .swift)
         state.setCursor(state.index(atOffset: 10))
@@ -100,7 +100,7 @@ final class IncrementalSyncTests: XCTestCase {
         _ initial: String, language: SyntaxDocument.Language, edits: [(Int, Int, String)],
         file: StaticString = #filePath, line: UInt = #line
     ) {
-        let document = SyntaxDocument()
+        let document = SyntaxDocument(answerTimeout: .seconds(10))
         var state = TextEditingState(initial)
         XCTAssertEqual(document.sExpression(for: state, language: language), fresh(initial, language),
                        file: file, line: line)
@@ -116,6 +116,59 @@ final class IncrementalSyncTests: XCTestCase {
     }
 
     private func fresh(_ text: String, _ language: SyntaxDocument.Language) -> String? {
-        SyntaxDocument().sExpression(for: TextEditingState(text), language: language)
+        SyntaxDocument(answerTimeout: .seconds(10)).sExpression(for: TextEditingState(text), language: language)
+    }
+}
+
+/// What the worker does on its own, between questions.
+final class BackgroundParseTests: XCTestCase {
+    private func largeC() -> String {
+        (0..<5000).map { "int f\($0)(int x) {\n    if (x) {\n        return g(x,\n                 x);\n    }\n}\n" }.joined()
+    }
+
+    func testFollowingAFileParsesItWithoutBeingAsked() {
+        let document = SyntaxDocument(answerTimeout: .seconds(10))
+        document.follow(TextEditingState("int main(void) {\n}\n"), language: .c)
+        XCTAssertEqual(document.fullParses, 1)
+        XCTAssertFalse(document.isDirty)
+    }
+
+    func testTypingIsReparsedOnceItPauses() {
+        let document = SyntaxDocument(answerTimeout: .seconds(10))
+        var state = TextEditingState("void f(void) {\n}\n")
+        document.follow(state, language: .c)
+        state.setCursor(state.index(atOffset: 14))
+        for character in "\n    run();" {
+            state.insert(String(character))
+            document.follow(state, language: .c)
+        }
+        let settled = expectation(description: "the worker reparses after the pause")
+        DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(300)) { settled.fulfill() }
+        wait(for: [settled], timeout: 5)
+        XCTAssertFalse(document.isDirty, "reparsed without a question")
+        XCTAssertEqual(document.fullParses, 1, "and incrementally")
+        XCTAssertEqual(document.sExpression(for: state, language: .c),
+                       SyntaxDocument().sExpression(for: TextEditingState(state.text), language: .c))
+    }
+
+    func testEnterDoesNotWaitOutAFirstParse() {
+        let document = SyntaxDocument(answerTimeout: .milliseconds(10))
+        let state = TextEditingState(largeC())
+        let started = Date()
+        _ = document.indentation(for: state, at: state.text.endIndex, language: .c)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.2, "the answer is given up on, not waited for")
+        // The parse it gave up on still lands, and later questions use it.
+        XCTAssertEqual(document.fullParses, 1)
+    }
+
+    func testAnEditFollowedFromAnotherBufferStartsOver() {
+        let document = SyntaxDocument(answerTimeout: .seconds(10))
+        var state = TextEditingState("int x;\n")
+        document.follow(state, language: .c)
+        state.setText("int y = 2;\n")
+        document.follow(state, language: .c)
+        XCTAssertEqual(document.fullParses, 2)
+        XCTAssertEqual(document.sExpression(for: state, language: .c),
+                       SyntaxDocument().sExpression(for: TextEditingState(state.text), language: .c))
     }
 }

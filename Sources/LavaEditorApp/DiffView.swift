@@ -95,6 +95,7 @@ struct DiffPane: View {
                         highlighter: model.highlighter,
                         indentation: model.isEditable ? session.active.indentation : .none,
                         indentationFormat: model.isEditable ? indentation : nil,
+                        followBuffer: model.isEditable ? session.active.followBuffer : nil,
                         style: sideStyle,
                         font: font,
                         showLineNumbers: session.showLineNumbers,

@@ -3,22 +3,41 @@ import LavaText
 @_implementationOnly import SwiftParser
 @_implementationOnly import SwiftSyntax
 
-/// A Swift document on the compiler's own parser, which follows the buffer
-/// the way `TreeSitterTree` does: by revision, through the splices since.
+/// A Swift document on the compiler's own parser, following the buffer the
+/// way `TreeSitterTree` does: edits are applied as they come and parsed
+/// incrementally when someone needs the tree.
 ///
 /// SwiftSyntax rather than tree-sitter because tree-sitter has no grammar for
 /// Swift that it maintains; the rules here are code, not a query, for the
-/// same reason.
+/// same reason. Used only on the parse worker's queue.
 final class SwiftTree {
     private var previous: IncrementalParseResult?
-    private var revision: UInt64?
+    /// Splices since `previous`, in order.
+    private var pending: [SourceEdit] = []
+    private var isCurrent = false
     private(set) var fullParses = 0
 
-    func indentation(
-        for state: TextEditingState, bytes: UnsafeBufferPointer<UInt8>, at caret: Int, unit: String
-    ) -> String? {
+    var isDirty: Bool { !isCurrent }
+
+    func reset() {
+        previous = nil
+        pending = []
+        isCurrent = false
+    }
+
+    func apply(_ changes: [TextChange]) {
+        pending += changes.map {
+            SourceEdit(
+                range: AbsolutePosition(utf8Offset: $0.offset)..<AbsolutePosition(utf8Offset: $0.offset + $0.removedLength),
+                replacement: Array($0.inserted.utf8)
+            )
+        }
+        isCurrent = false
+    }
+
+    func indentation(bytes: UnsafeBufferPointer<UInt8>, at caret: Int, unit: String) -> String? {
         guard caret > 0 else { return nil }
-        let tree = parse(state, bytes)
+        let tree = parse(bytes)
         var token = tree.token(at: AbsolutePosition(utf8Offset: caret - 1))
         while let candidate = token, candidate.endPositionBeforeTrailingTrivia.utf8Offset > caret
                 || candidate.tokenKind == .endOfFile {
@@ -67,18 +86,12 @@ final class SwiftTree {
         return nil
     }
 
-    private func parse(_ state: TextEditingState, _ bytes: UnsafeBufferPointer<UInt8>) -> SourceFileSyntax {
-        if let previous, revision == state.revision { return previous.tree }
-        var transition: IncrementalParseTransition?
-        if let previous, let revision, let changes = state.changes(since: revision) {
-            let edits = changes.map {
-                SourceEdit(
-                    range: AbsolutePosition(utf8Offset: $0.offset)..<AbsolutePosition(utf8Offset: $0.offset + $0.removedLength),
-                    replacement: Array($0.inserted.utf8)
-                )
-            }
-            transition = IncrementalParseTransition(
-                previousIncrementalParseResult: previous, edits: ConcurrentEdits(fromSequential: edits)
+    @discardableResult
+    func parse(_ bytes: UnsafeBufferPointer<UInt8>) -> SourceFileSyntax {
+        if isCurrent, let previous { return previous.tree }
+        let transition = previous.map {
+            IncrementalParseTransition(
+                previousIncrementalParseResult: $0, edits: ConcurrentEdits(fromSequential: pending)
             )
         }
         var result = Parser.parseIncrementally(source: bytes, parseTransition: transition)
@@ -88,8 +101,9 @@ final class SwiftTree {
             if transition != nil { result = Parser.parseIncrementally(source: bytes, parseTransition: nil) }
             fullParses += 1
         }
-        revision = state.revision
         previous = result
+        pending = []
+        isCurrent = true
         return result.tree
     }
 

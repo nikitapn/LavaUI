@@ -626,6 +626,12 @@ public struct EditorView: PrimitiveView {
     /// When supplied, what Tab inserts and the level Enter adds. Whitespace
     /// Enter inherits from the line is never rewritten into it.
     public var indentationFormat: EditorIndentationFormat?
+    /// Told the buffer's state after it changes — at most once a frame, with
+    /// every edit since the last call on record in `changes(since:)`. For
+    /// something that follows the buffer as it is edited, such as a syntax
+    /// tree parsing in the background. Called on the main thread; it must
+    /// return at once.
+    public var followBuffer: ((TextEditingState) -> Void)?
     /// Colours for text, gutter, current line and search matches.
     public var style: CodeStyle
     /// The editor's font, or `nil` for the environment's.
@@ -702,6 +708,7 @@ public struct EditorView: PrimitiveView {
         highlighter: SyntaxHighlighter? = nil,
         indentation: EditorIndentation = .none,
         indentationFormat: EditorIndentationFormat? = nil,
+        followBuffer: ((TextEditingState) -> Void)? = nil,
         style: CodeStyle = CodeStyle(),
         font: UIFont? = nil,
         showLineNumbers: Bool = true,
@@ -740,6 +747,7 @@ public struct EditorView: PrimitiveView {
         self.highlighter = highlighter
         self.indentation = indentation
         self.indentationFormat = indentationFormat
+        self.followBuffer = followBuffer
         self.style = style
         self.font = font
         self.showLineNumbers = showLineNumbers
@@ -902,6 +910,13 @@ public struct EditorView: PrimitiveView {
         leaf.highlighter = next
         leaf.indentation = indentation
         leaf.indentationFormat = indentationFormat
+        // Every edit is committed through the binding, and the binding's
+        // change is what brings the view back here — so this sees each one,
+        // batched by frame, without a call at every place that edits.
+        if let followBuffer, leaf.followedRevision != leaf.editing.revision {
+            leaf.followedRevision = leaf.editing.revision
+            followBuffer(leaf.editing)
+        }
         leaf.codeStyle = style
         leaf.showsGutter = showLineNumbers
         leaf.search = search

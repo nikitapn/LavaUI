@@ -86,17 +86,20 @@ enum Language: String, CaseIterable {
         }
     }
 
-    func indentation(using syntax: SyntaxDocument, url: URL?) -> EditorIndentation {
-        let language: SyntaxDocument.Language
+    /// The grammar `SyntaxDocument` parses this as, or nil for none.
+    func syntaxLanguage(for url: URL?) -> SyntaxDocument.Language? {
         switch indentationLanguageID(for: url) {
-        case "swift":
-            guard SyntaxDocument.hasSwiftParser else { return .braces }
-            language = .swift
-        case "python": language = .python
-        case "c": language = .c
-        case "cpp": language = .cpp
-        default:
-            return .inherit
+        case "swift": return SyntaxDocument.hasSwiftParser ? .swift : nil
+        case "python": return .python
+        case "c": return .c
+        case "cpp": return .cpp
+        default: return nil
+        }
+    }
+
+    func indentation(using syntax: SyntaxDocument, url: URL?) -> EditorIndentation {
+        guard let language = syntaxLanguage(for: url) else {
+            return indentationLanguageID(for: url) == "swift" ? .braces : .inherit
         }
         return .provider { request in
             syntax.indentation(for: request.editing, at: request.caret, language: language, unit: request.unit)

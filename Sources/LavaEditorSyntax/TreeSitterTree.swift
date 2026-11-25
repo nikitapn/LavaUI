@@ -55,12 +55,16 @@ final class Grammar: Sendable {
 }
 
 /// A tree-sitter tree that follows one buffer through its edits.
+///
+/// Applying an edit and parsing are separate steps, so a burst of typing
+/// costs a reparse when it pauses rather than one per key. Used only on the
+/// parse worker's queue.
 final class TreeSitterTree {
     let grammar: Grammar
     private let parser = Parser()
     private var tree: MutableTree?
-    /// The revision `tree` describes.
-    private var revision: UInt64?
+    /// Whether `tree` describes the bytes, or edits have been applied since.
+    private var isCurrent = false
     private(set) var lines = LineStarts()
     private(set) var fullParses = 0
 
@@ -70,36 +74,19 @@ final class TreeSitterTree {
     }
 
     var mutableTree: MutableTree? { tree }
+    var isDirty: Bool { !isCurrent }
 
-    /// Brings the tree to `state`'s text; `bytes` is that text.
-    func sync(to state: TextEditingState, bytes: UnsafeBufferPointer<UInt8>) -> Node? {
-        guard bytes.count < Int(UInt32.max) else { return nil }
-        if let tree, revision == state.revision { return tree.rootNode }
-        if let tree, let revision, let changes = state.changes(since: revision),
-           follow(changes, in: tree), lines.byteCount == bytes.count {
-            // Edited in place; the parse below reuses what the edits missed.
-        } else {
-            tree = nil
-            lines = LineStarts(bytes)
-            fullParses += 1
-        }
-        tree = parser.parse(tree: tree, encoding: TSInputEncodingUTF8) { offset, _ in
-            guard offset < bytes.count else { return nil }
-            // Chunks end on a character boundary, so no read hands the lexer
-            // half a scalar.
-            var end = min(offset + 16 * 1024, bytes.count)
-            while end < bytes.count, bytes[end] & 0xc0 == 0x80 { end += 1 }
-            return Data(UnsafeBufferPointer(rebasing: bytes[offset..<end]))
-        }
-        revision = tree == nil ? nil : state.revision
-        return tree?.rootNode
+    /// Starts over from `bytes`; the next parse is a whole one.
+    func reset(_ bytes: UnsafeBufferPointer<UInt8>) {
+        tree = nil
+        isCurrent = false
+        lines = LineStarts(bytes)
     }
 
     /// Tells the tree about each splice, in the coordinates of the buffer as
     /// it was at that point. False when one does not fit the buffer this tree
-    /// knows, which means the log and the tree disagree and neither is worth
-    /// trusting.
-    private func follow(_ changes: [TextChange], in tree: MutableTree) -> Bool {
+    /// knows: the log and the tree disagree, and neither is worth trusting.
+    func apply(_ changes: [TextChange]) -> Bool {
         for change in changes {
             let start = change.offset
             let oldEnd = start + change.removedLength
@@ -108,12 +95,31 @@ final class TreeSitterTree {
             let startPoint = lines.point(at: start)
             let oldEndPoint = lines.point(at: oldEnd)
             lines.apply(change)
-            tree.edit(InputEdit(
+            tree?.edit(InputEdit(
                 startByte: start, oldEndByte: oldEnd, newEndByte: newEnd,
                 startPoint: startPoint, oldEndPoint: oldEndPoint, newEndPoint: lines.point(at: newEnd)
             ))
+            isCurrent = false
         }
         return true
+    }
+
+    /// The tree for `bytes`, reparsing what the edits since the last parse
+    /// touched — or all of it, the first time.
+    func parse(_ bytes: UnsafeBufferPointer<UInt8>) -> Node? {
+        guard bytes.count < Int(UInt32.max) else { return nil }
+        if isCurrent, let tree { return tree.rootNode }
+        if tree == nil { fullParses += 1 }
+        tree = parser.parse(tree: tree, encoding: TSInputEncodingUTF8) { offset, _ in
+            guard offset < bytes.count else { return nil }
+            // Chunks end on a character boundary, so no read hands the lexer
+            // half a scalar.
+            var end = min(offset + 16 * 1024, bytes.count)
+            while end < bytes.count, bytes[end] & 0xc0 == 0x80 { end += 1 }
+            return Data(UnsafeBufferPointer(rebasing: bytes[offset..<end]))
+        }
+        isCurrent = tree != nil
+        return tree?.rootNode
     }
 }
 
