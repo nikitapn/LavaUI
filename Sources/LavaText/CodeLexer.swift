@@ -74,14 +74,15 @@ public enum CodeLexerState: Hashable, Sendable {
 /// multi-line string is coloured on every line it covers — not only on the
 /// lines whose own text says so, which is all a rule list can do.
 ///
-/// Styles are palette indices, the same ones the editor's rule lists use:
-/// 0 keyword, 1 string, 2 comment, 3 number, 4 type / attribute / directive.
+/// Styles are `HighlightName`s: keyword, string, comment, number, and type
+/// for everything the lexer cannot tell apart further — attributes and
+/// directives included.
 public struct CodeLexer: StatefulLexer {
-    public static let keyword = 0
-    public static let string = 1
-    public static let comment = 2
-    public static let number = 3
-    public static let type = 4
+    public static let keyword = HighlightName.keyword
+    public static let string = HighlightName.string
+    public static let comment = HighlightName.comment
+    public static let number = HighlightName.number
+    public static let type = HighlightName.type
 
     public let language: CodeLanguage
     private let lineComments: [[Character]]

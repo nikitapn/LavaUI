@@ -61,23 +61,26 @@ extension EditorSession {
         languageServers.highlights(for: active.id, text: active.text, style: Self.semanticStyle)
     }
 
-    /// Which palette entry a semantic token takes — see `Language.codeStyle`.
+    /// Which `HighlightName` a semantic token takes — see `Language.codeStyle`.
     /// Variables and operators keep the lexer's colour: a server colours
     /// nearly every identifier as one or the other, and painting them all
     /// would bury the ones that say something.
     static func semanticStyle(_ type: String, _ modifiers: [String]) -> Int? {
+        let name: String
         switch type {
-        case "namespace", "type", "class", "enum", "interface", "struct", "typeParameter", "protocol":
-            return 4
-        case "function", "method": return 5
-        case "parameter": return 6
-        case "property", "enumMember", "event": return 7
-        case "macro", "decorator", "keyword", "modifier": return 0
-        case "string", "regexp": return 1
-        case "comment": return 2
-        case "number": return 3
+        case "namespace": name = "namespace"
+        case "type", "class", "enum", "interface", "struct", "typeParameter", "protocol": name = "type"
+        case "function": name = "function"
+        case "method": name = "function.method"
+        case "parameter": name = "variable.parameter"
+        case "property", "enumMember", "event": name = "property"
+        case "macro", "decorator", "keyword", "modifier": name = "keyword"
+        case "string", "regexp": name = "string"
+        case "comment": name = "comment"
+        case "number": name = "number"
         default: return nil
         }
+        return HighlightName.index(of: name)
     }
 
     private static func severity(_ severity: LavaLSPCore.DiagnosticSeverity?) -> LavaUI.DiagnosticSeverity {

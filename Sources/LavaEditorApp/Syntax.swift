@@ -136,7 +136,7 @@ enum Language: String, CaseIterable {
                 extra: [
                     // Preprocessor lines, which are neither keyword nor comment
                     // and read as neither without this.
-                    HighlightRule(pattern: "^\\s*#\\s*\\w+", styleIndex: 4, priority: 5)
+                    HighlightRule(pattern: "^\\s*#\\s*\\w+", styleIndex: HighlightName.type, priority: 5)
                 ])
         case .python:
             return Self.common(
@@ -157,18 +157,18 @@ enum Language: String, CaseIterable {
                 lineComment: "//")
         case .json:
             return [
-                HighlightRule(pattern: "\"(\\\\.|[^\"\\\\])*\"\\s*:", styleIndex: 4, priority: 3),
-                HighlightRule(pattern: "\"(\\\\.|[^\"\\\\])*\"", styleIndex: 1, priority: 2),
-                HighlightRule(pattern: "\\b(true|false|null)\\b", styleIndex: 0, priority: 1),
-                HighlightRule(pattern: "\\b-?\\d+(\\.\\d+)?([eE][-+]?\\d+)?\\b", styleIndex: 3),
+                HighlightRule(pattern: "\"(\\\\.|[^\"\\\\])*\"\\s*:", styleIndex: HighlightName.type, priority: 3),
+                HighlightRule(pattern: "\"(\\\\.|[^\"\\\\])*\"", styleIndex: HighlightName.string, priority: 2),
+                HighlightRule(pattern: "\\b(true|false|null)\\b", styleIndex: HighlightName.keyword, priority: 1),
+                HighlightRule(pattern: "\\b-?\\d+(\\.\\d+)?([eE][-+]?\\d+)?\\b", styleIndex: HighlightName.number),
             ]
         case .markdown:
             return [
-                HighlightRule(pattern: "^#{1,6}\\s.*$", styleIndex: 0, priority: 3),
-                HighlightRule(pattern: "^\\s*([-*+]|\\d+\\.)\\s", styleIndex: 4, priority: 2),
-                HighlightRule(pattern: "`[^`]*`", styleIndex: 1, priority: 2),
-                HighlightRule(pattern: "\\*\\*[^*]+\\*\\*", styleIndex: 3, priority: 1),
-                HighlightRule(pattern: "^>\\s.*$", styleIndex: 2, priority: 1),
+                HighlightRule(pattern: "^#{1,6}\\s.*$", styleIndex: HighlightName.keyword, priority: 3),
+                HighlightRule(pattern: "^\\s*([-*+]|\\d+\\.)\\s", styleIndex: HighlightName.type, priority: 2),
+                HighlightRule(pattern: "`[^`]*`", styleIndex: HighlightName.string, priority: 2),
+                HighlightRule(pattern: "\\*\\*[^*]+\\*\\*", styleIndex: HighlightName.number, priority: 1),
+                HighlightRule(pattern: "^>\\s.*$", styleIndex: HighlightName.comment, priority: 1),
             ]
         case .shell:
             return Self.common(
@@ -178,24 +178,24 @@ enum Language: String, CaseIterable {
                     """,
                 lineComment: "#",
                 extra: [
-                    HighlightRule(pattern: "\\$\\{?\\w+\\}?", styleIndex: 4, priority: 2)
+                    HighlightRule(pattern: "\\$\\{?\\w+\\}?", styleIndex: HighlightName.type, priority: 2)
                 ])
         case .yaml:
             return [
-                HighlightRule(pattern: "#.*$", styleIndex: 2, priority: 10),
-                HighlightRule(pattern: "^\\s*[-\\w.]+\\s*:", styleIndex: 4, priority: 3),
-                HighlightRule(pattern: "\"(\\\\.|[^\"\\\\])*\"|'[^']*'", styleIndex: 1, priority: 2),
-                HighlightRule(pattern: "\\b(true|false|null|yes|no)\\b", styleIndex: 0, priority: 1),
-                HighlightRule(pattern: "\\b-?\\d+(\\.\\d+)?\\b", styleIndex: 3),
+                HighlightRule(pattern: "#.*$", styleIndex: HighlightName.comment, priority: 10),
+                HighlightRule(pattern: "^\\s*[-\\w.]+\\s*:", styleIndex: HighlightName.type, priority: 3),
+                HighlightRule(pattern: "\"(\\\\.|[^\"\\\\])*\"|'[^']*'", styleIndex: HighlightName.string, priority: 2),
+                HighlightRule(pattern: "\\b(true|false|null|yes|no)\\b", styleIndex: HighlightName.keyword, priority: 1),
+                HighlightRule(pattern: "\\b-?\\d+(\\.\\d+)?\\b", styleIndex: HighlightName.number),
             ]
         case .toml, .ini:
             return [
-                HighlightRule(pattern: "[#;].*$", styleIndex: 2, priority: 10),
-                HighlightRule(pattern: "^\\s*\\[.+\\]\\s*$", styleIndex: 0, priority: 4),
-                HighlightRule(pattern: "^\\s*[\\w.\\-\"]+\\s*=", styleIndex: 4, priority: 3),
-                HighlightRule(pattern: "\"(\\\\.|[^\"\\\\])*\"|'[^']*'", styleIndex: 1, priority: 2),
-                HighlightRule(pattern: "\\b(true|false)\\b", styleIndex: 0, priority: 1),
-                HighlightRule(pattern: "\\b-?\\d+(\\.\\d+)?\\b", styleIndex: 3),
+                HighlightRule(pattern: "[#;].*$", styleIndex: HighlightName.comment, priority: 10),
+                HighlightRule(pattern: "^\\s*\\[.+\\]\\s*$", styleIndex: HighlightName.keyword, priority: 4),
+                HighlightRule(pattern: "^\\s*[\\w.\\-\"]+\\s*=", styleIndex: HighlightName.type, priority: 3),
+                HighlightRule(pattern: "\"(\\\\.|[^\"\\\\])*\"|'[^']*'", styleIndex: HighlightName.string, priority: 2),
+                HighlightRule(pattern: "\\b(true|false)\\b", styleIndex: HighlightName.keyword, priority: 1),
+                HighlightRule(pattern: "\\b-?\\d+(\\.\\d+)?\\b", styleIndex: HighlightName.number),
             ]
         }
     }
@@ -212,55 +212,77 @@ enum Language: String, CaseIterable {
             // Highest, because a keyword inside a comment is a comment. The
             // reverse ordering is the classic way to get `// return early`
             // half-coloured.
-            HighlightRule(pattern: "\(marker).*$", styleIndex: 2, priority: 10),
+            HighlightRule(pattern: "\(marker).*$", styleIndex: HighlightName.comment, priority: 10),
             HighlightRule(
                 pattern: "\"(\\\\.|[^\"\\\\])*\"|'(\\\\.|[^'\\\\])*'",
-                styleIndex: 1, priority: 8
+                styleIndex: HighlightName.string, priority: 8
             ),
-            HighlightRule(pattern: "\\b(\(keywords))\\b", styleIndex: 0, priority: 4),
+            HighlightRule(pattern: "\\b(\(keywords))\\b", styleIndex: HighlightName.keyword, priority: 4),
             // Capitalised words as a stand-in for types: no rule list can know
             // what a type is, and in every language here the convention holds
             // often enough to be worth more than nothing.
-            HighlightRule(pattern: "\\b[A-Z][A-Za-z0-9_]*\\b", styleIndex: 4, priority: 2),
+            HighlightRule(pattern: "\\b[A-Z][A-Za-z0-9_]*\\b", styleIndex: HighlightName.type, priority: 2),
             HighlightRule(
-                pattern: "\\b-?\\d+(\\.\\d+)?([eE][-+]?\\d+)?\\b", styleIndex: 3, priority: 1
+                pattern: "\\b-?\\d+(\\.\\d+)?([eE][-+]?\\d+)?\\b", styleIndex: HighlightName.number, priority: 1
             ),
         ] + extra
     }
 
-    /// Colours for the style indices the rules above use.
+    /// Colours by `HighlightName`. Only names whose colour differs from
+    /// their parent's are listed: `function.method` is `function`'s colour,
+    /// `constant.builtin` is `constant`'s, and a name with nothing coloured
+    /// above it — `variable`, `operator`, `punctuation` — is plain text, so
+    /// that the names that do say something are not buried under the ones
+    /// that do not. The names past `property` are what tree-sitter's
+    /// highlight queries capture; the lexer and the language servers never
+    /// produce them.
     static func codeStyle(theme: Theme) -> CodeStyle {
         if theme.inset.luminance > 0.5 {
+            let keyword = Color(rgb24: 0x72_43_89)
+            let number = Color(rgb24: 0x8e_47_20)
+            let type = Color(rgb24: 0x23_5c_73)
             return CodeStyle(
                 text: theme.textPrimary,
                 searchMatch: Color(rgb24: 0xf1_e0_ab),
                 currentSearchMatch: Color(rgb24: 0xf3_c9_a5),
-                palette: [
-                    Color(rgb24: 0x72_43_89),  // keyword
-                    Color(rgb24: 0x4b_61_31),  // string
-                    Color(rgb24: 0x6b_62_54),  // comment
-                    Color(rgb24: 0x8e_47_20),  // number
-                    Color(rgb24: 0x23_5c_73),  // type / key
-                    Color(rgb24: 0x7a_5a_12),  // function (language server)
-                    Color(rgb24: 0x9a_4a_2e),  // parameter (language server)
-                    Color(rgb24: 0x2d_6a_5a),  // property / member (language server)
+                colors: [
+                    "keyword": keyword,
+                    "string": Color(rgb24: 0x4b_61_31),
+                    "comment": Color(rgb24: 0x6b_62_54),
+                    "number": number,
+                    "type": type,
+                    "function": Color(rgb24: 0x7a_5a_12),
+                    "variable.parameter": Color(rgb24: 0x9a_4a_2e),
+                    "property": Color(rgb24: 0x2d_6a_5a),
+                    "constant": number,
+                    "escape": number,
+                    "variable.builtin": keyword,
+                    "constructor": type,
+                    "namespace": type,
                 ]
             )
         }
+        let keyword = Color(r: 0.78, g: 0.52, b: 0.90)
+        let number = Color(r: 0.90, g: 0.68, b: 0.40)
+        let type = Color(r: 0.40, g: 0.72, b: 0.92)
         return CodeStyle(
             text: theme.textPrimary,
-            palette: [
-                Color(r: 0.78, g: 0.52, b: 0.90),  // 0 keyword
-                Color(r: 0.60, g: 0.80, b: 0.45),  // 1 string
-                Color(r: 0.45, g: 0.50, b: 0.58),  // 2 comment
-                Color(r: 0.90, g: 0.68, b: 0.40),  // 3 number
-                Color(r: 0.40, g: 0.72, b: 0.92),  // 4 type / key
-                // From here only a language server colours: the lexer cannot
-                // tell a call from any other identifier.
-                Color(r: 0.88, g: 0.80, b: 0.52),  // 5 function
-                Color(r: 0.92, g: 0.62, b: 0.55),  // 6 parameter
-                Color(r: 0.55, g: 0.82, b: 0.80),  // 7 property / member
+            colors: [
+                "keyword": keyword,
+                "string": Color(r: 0.60, g: 0.80, b: 0.45),
+                "comment": Color(r: 0.45, g: 0.50, b: 0.58),
+                "number": number,
+                "type": type,
+                "function": Color(r: 0.88, g: 0.80, b: 0.52),
+                "variable.parameter": Color(r: 0.92, g: 0.62, b: 0.55),
+                "property": Color(r: 0.55, g: 0.82, b: 0.80),
+                "constant": number,
+                "escape": number,
+                "variable.builtin": keyword,
+                "constructor": type,
+                "namespace": type,
             ]
         )
     }
 }
+

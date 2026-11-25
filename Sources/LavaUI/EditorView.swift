@@ -15,8 +15,21 @@ public struct CodeStyle {
     public var searchMatch: Color
     /// Fill behind the search match the search is currently on.
     public var currentSearchMatch: Color
-    /// Indexed by `HighlightRule.styleIndex`; out-of-range falls back to `text`.
+    /// Indexed by `HighlightRule.styleIndex`, for a caller whose indices are
+    /// its own positions. Takes precedence over `colors` for the indices it
+    /// covers.
     public var palette: [Color]
+    /// Colours by `HighlightName` — `keyword`, `function.method` — for spans
+    /// whose index is a name. A name with no colour takes its parent's
+    /// (`function.method` → `function`), and one with no coloured ancestor is
+    /// `text`: a theme colours what it means to and nothing else.
+    public var colors: [String: Color] {
+        didSet { resolution = Resolution(colors) }
+    }
+    /// `colors` resolved per name index, so the draw path's lookup is one
+    /// array read. Shared by copies of this style and owned by the colours
+    /// it was made from: setting `colors` starts a new one.
+    private var resolution: Resolution
     /// Number colour for the caret's logical line. Also extends its highlight across the gutter.
     public var activeGutterText: Color?
     /// Optional emphasized face for the caret's line number.
@@ -45,7 +58,8 @@ public struct CodeStyle {
         currentLine: Color? = nil,
         searchMatch: Color? = nil,
         currentSearchMatch: Color? = nil,
-        palette: [Color] = []
+        palette: [Color] = [],
+        colors: [String: Color] = [:]
     ) {
         let theme = Environment.current.theme
         self.text = text
@@ -55,10 +69,47 @@ public struct CodeStyle {
         self.searchMatch = searchMatch ?? Color(r: 0.45, g: 0.40, b: 0.15)
         self.currentSearchMatch = currentSearchMatch ?? Color(r: 0.70, g: 0.55, b: 0.15)
         self.palette = palette
+        self.colors = colors
+        resolution = Resolution(colors)
     }
 
     func color(for styleIndex: Int) -> Color {
-        palette.indices.contains(styleIndex) ? palette[styleIndex] : text
+        if palette.indices.contains(styleIndex) { return palette[styleIndex] }
+        guard !colors.isEmpty, styleIndex >= 0 else { return text }
+        return resolution.color(at: styleIndex, in: colors) ?? text
+    }
+
+    /// Colours by name index, grown when a span carries a name registered
+    /// after the last growth — a language server's `function.method`, a
+    /// query capture met for the first time — so each name is resolved once,
+    /// not on every span of every frame. Drawing is on the main thread, and
+    /// so is every call here.
+    private final class Resolution: @unchecked Sendable {
+        private var colors: [Color?] = []
+
+        init(_ table: [String: Color]) {
+            // A themed name is registered now, so it is resolved up front
+            // even if nothing has produced it yet.
+            for name in table.keys { _ = HighlightName.index(of: name) }
+        }
+
+        func color(at index: Int, in table: [String: Color]) -> Color? {
+            if index >= colors.count {
+                let count = HighlightName.count
+                guard index < count else { return nil }
+                colors += (colors.count..<count).map { index in
+                    HighlightName.name(at: index).flatMap { Self.color(named: $0, in: table) }
+                }
+            }
+            return colors[index]
+        }
+
+        private static func color(named name: String, in table: [String: Color]) -> Color? {
+            for candidate in HighlightName.fallbacks(of: name) {
+                if let color = table[String(candidate)] { return color }
+            }
+            return nil
+        }
     }
 }
 
