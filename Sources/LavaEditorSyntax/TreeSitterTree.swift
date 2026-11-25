@@ -11,15 +11,17 @@ internal import TreeSitterPython
 /// Queries live in `Queries/<name>/*.scm`. A file whose first line is
 /// `; inherits: <other>` starts with that language's file of the same name,
 /// which is how C++ reuses C's rules: every C node name is also a C++ one.
-final class Grammar: Sendable {
+final class Grammar: @unchecked Sendable {
     let name: String
     let language: SwiftTreeSitter.Language
     let indents: Query?
+    let highlights: HighlightQuery?
 
     private init(_ name: String, _ language: OpaquePointer) {
         self.name = name
         self.language = SwiftTreeSitter.Language(language)
         indents = Self.query("indents", for: name, language: self.language)
+        highlights = Self.query("highlights", for: name, language: self.language).map(HighlightQuery.init)
     }
 
     static let c = Grammar("c", tree_sitter_c())

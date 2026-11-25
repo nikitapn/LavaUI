@@ -131,6 +131,7 @@ struct LavaEditorView: View {
                     indentation: session.active.indentation,
                     indentationFormat: indentation,
                     followBuffer: session.active.followBuffer,
+                    highlightSource: session.active.highlightSource,
                     style: documentStyle(appearance),
                     font: session.documentFont(tabSize: indentation.tabSize),
                     showLineNumbers: session.showLineNumbers,

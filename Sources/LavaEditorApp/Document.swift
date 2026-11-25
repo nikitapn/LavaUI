@@ -77,6 +77,13 @@ struct EditorDocument: EditorTab {
         language.indentation(using: syntax, url: url)
     }
 
+    /// Colours from the syntax tree, for a language with a highlight query;
+    /// the lexer stands in for lines it has not answered for yet.
+    var highlightSource: HighlightSource? {
+        guard let language = language.syntaxLanguage(for: url), SyntaxDocument.highlights(language) else { return nil }
+        return syntax
+    }
+
     /// What the editor showing this document calls after its edits, so the
     /// tree is parsed in the background from the moment the file is shown
     /// rather than on the first Enter. Nil for a language with no grammar.

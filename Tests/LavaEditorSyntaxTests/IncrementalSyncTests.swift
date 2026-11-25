@@ -133,7 +133,7 @@ final class BackgroundParseTests: XCTestCase {
         XCTAssertFalse(document.isDirty)
     }
 
-    func testTypingIsReparsedOnceItPauses() {
+    func testTypingIsReparsedAsItArrives() {
         let document = SyntaxDocument(answerTimeout: .seconds(10))
         var state = TextEditingState("void f(void) {\n}\n")
         document.follow(state, language: .c)
@@ -142,10 +142,10 @@ final class BackgroundParseTests: XCTestCase {
             state.insert(String(character))
             document.follow(state, language: .c)
         }
-        let settled = expectation(description: "the worker reparses after the pause")
+        let settled = expectation(description: "the worker has reparsed")
         DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(300)) { settled.fulfill() }
         wait(for: [settled], timeout: 5)
-        XCTAssertFalse(document.isDirty, "reparsed without a question")
+        XCTAssertFalse(document.isDirty, "reparsed without being asked")
         XCTAssertEqual(document.fullParses, 1, "and incrementally")
         XCTAssertEqual(document.sExpression(for: state, language: .c),
                        SyntaxDocument().sExpression(for: TextEditingState(state.text), language: .c))

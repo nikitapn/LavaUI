@@ -2961,6 +2961,22 @@ extension DrawList {
         var spanLine = -1
         var spanCache: [HighlightSpan] = []
 
+        // A highlight source's layer for the logical lines on screen, asked
+        // for once per emit. Where it has a line, that is the line's base and
+        // the highlighter is not consulted; where it has none — the first
+        // parse of a large file, a frame after a jump — the highlighter
+        // stands in. See `HighlightLayer.spans(forLine:)` for a layer that is
+        // a revision or two behind the buffer.
+        let sourceLayer: HighlightLayer? = leaf.highlightSource.flatMap { source in
+            EditorProbe.measure("emit.highlightSource") {
+                source.highlights(
+                    for: state,
+                    lines: leaf.logicalLine(ofRow: firstRow)..<(leaf.logicalLine(ofRow: lastRow) + 1)
+                )
+            }
+        }
+        let logicalLineCount = sourceLayer == nil ? 0 : leaf.logicalLineCount
+
         var cursor = EditorProbe.measure(
             "emit.rowWindow", at: rows[firstRow].lowerBound
         ) {
@@ -3053,9 +3069,12 @@ extension DrawList {
             if let highlighter = leaf.highlighter, !highlighter.isEmpty {
                 if !leaf.wraps {
                     // Row is line: nothing to translate either way.
-                    lineSpans = highlighter.isStateful
+                    lineSpans = sourceLayer?.spans(
+                        forLine: row, revision: state.revision, lineCount: logicalLineCount,
+                        text: { lineText[...] }
+                    ) ?? (highlighter.isStateful
                         ? leaf.highlightCache.spans(atRow: row)
-                        : highlighter.spans(in: lineText)
+                        : highlighter.spans(in: lineText))
                     if let semantic = leaf.semanticHighlights {
                         lineSpans = semantic.overlay(lineSpans, line: row)
                     }
@@ -3074,7 +3093,18 @@ extension DrawList {
                     let logical = leaf.logicalLine(ofRow: row)
                     if logical != spanLine {
                         spanLine = logical
-                        if highlighter.isStateful {
+                        if let spans = sourceLayer?.spans(
+                            forLine: logical, revision: state.revision, lineCount: logicalLineCount,
+                            text: {
+                                let extent = leaf.logicalLineRange(ofRow: row)
+                                let start = leaf.textIndex(atOffset: extent.lowerBound)
+                                return state.text[start..<state.text.index(
+                                    start, offsetBy: extent.upperBound - extent.lowerBound
+                                )]
+                            }
+                        ) {
+                            spanCache = spans
+                        } else if highlighter.isStateful {
                             spanCache = leaf.highlightCache.spans(atRow: logical)
                         } else {
                             let extent = leaf.logicalLineRange(ofRow: row)

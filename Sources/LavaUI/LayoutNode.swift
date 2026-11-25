@@ -622,6 +622,8 @@ final class LeafNode: YogaBoxNode {
     var indentationFormat: EditorIndentationFormat?
     /// The buffer revision `EditorView.followBuffer` was last told about.
     var followedRevision: UInt64?
+    /// `EditorView.highlightSource`.
+    var highlightSource: HighlightSource?
     var codeStyle: CodeStyle?
     var showsGutter = false
     var gutterWidth: Float = 0

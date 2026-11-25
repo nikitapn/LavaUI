@@ -683,6 +683,10 @@ public struct EditorView: PrimitiveView {
     /// tree parsing in the background. Called on the main thread; it must
     /// return at once.
     public var followBuffer: ((TextEditingState) -> Void)?
+    /// Highlighting worked out elsewhere — a syntax tree on a worker — laid
+    /// under `highlighter`: where it has spans for a line they are the line's
+    /// base, and `highlighter` colours the lines it has none for yet.
+    public var highlightSource: HighlightSource?
     /// Colours for text, gutter, current line and search matches.
     public var style: CodeStyle
     /// The editor's font, or `nil` for the environment's.
@@ -760,6 +764,7 @@ public struct EditorView: PrimitiveView {
         indentation: EditorIndentation = .none,
         indentationFormat: EditorIndentationFormat? = nil,
         followBuffer: ((TextEditingState) -> Void)? = nil,
+        highlightSource: HighlightSource? = nil,
         style: CodeStyle = CodeStyle(),
         font: UIFont? = nil,
         showLineNumbers: Bool = true,
@@ -799,6 +804,7 @@ public struct EditorView: PrimitiveView {
         self.indentation = indentation
         self.indentationFormat = indentationFormat
         self.followBuffer = followBuffer
+        self.highlightSource = highlightSource
         self.style = style
         self.font = font
         self.showLineNumbers = showLineNumbers
@@ -967,6 +973,17 @@ public struct EditorView: PrimitiveView {
         if let followBuffer, leaf.followedRevision != leaf.editing.revision {
             leaf.followedRevision = leaf.editing.revision
             followBuffer(leaf.editing)
+        }
+        if leaf.highlightSource !== highlightSource {
+            leaf.highlightSource = highlightSource
+            // A layer the source finishes between frames has to bring one
+            // about, in this editor's window: nothing else is going to.
+            if let highlightSource {
+                let target = RedrawTarget(source: highlightSource, scope: WindowScope.currentOrMain)
+                highlightSource.highlightsChanged = {
+                    MainQueue.async { target.redrawIfUndrawn() }
+                }
+            }
         }
         leaf.codeStyle = style
         leaf.showsGutter = showLineNumbers
@@ -1392,5 +1409,23 @@ extension LeafNode {
         let row = max(0, min(rows.count - 1, self.row(atScreenY: localY - textInset, lineHeight: f.lineHeight)))
         let range = rows[row]
         return decorations.first { $0.range.overlaps(range) }
+    }
+}
+
+/// What a highlight source's "changed" callback holds: weakly, because the
+/// source outlives the window and the editor that installed it.
+private final class RedrawTarget: @unchecked Sendable {
+    // Read on the main thread only, from `MainQueue`.
+    private weak var source: HighlightSource?
+    private weak var scope: WindowScope?
+
+    init(source: HighlightSource, scope: WindowScope) {
+        self.source = source
+        self.scope = scope
+    }
+
+    func redrawIfUndrawn() {
+        guard let source, source.hasUndrawnHighlights, let scope else { return }
+        scope.raise(.redraw)
     }
 }
