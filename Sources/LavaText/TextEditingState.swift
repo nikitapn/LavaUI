@@ -65,6 +65,11 @@ public struct TextEditingState: Equatable {
     /// the thing the plan warned becomes painful to retrofit.
     public private(set) var undoStack = UndoStack()
 
+    /// Every splice since some recent revision, for consumers that follow the
+    /// buffer incrementally — see `changes(since:)`. Unlike `undoStack` it
+    /// never merges, and records undo and redo as the edits they are.
+    private var changeLog = TextChangeLog()
+
     /// Column to aim for during vertical movement, in characters.
     ///
     /// Held across consecutive up/down presses and cleared by anything else,
@@ -313,6 +318,9 @@ public struct TextEditingState: Equatable {
         }
 
         text.replaceSubrange(range, with: replacement)
+        changeLog.append(
+            TextChange(offset: start, removedLength: removed.utf8.count, inserted: replacement), before: revision
+        )
         revision = Self.nextRevision()
         // Row ranges are character offsets into `text`. Leaving them installed
         // after a delete (or any length-changing edit) makes every consumer of
@@ -421,6 +429,14 @@ public struct TextEditingState: Equatable {
         return applied.count
     }
 
+    /// The splices from `revision` to this state's, oldest first; empty when
+    /// it is this state's revision. Nil when that revision is not on record —
+    /// another state's, older than the log reaches, or before a `setText` —
+    /// and then the only correct thing is to read `text` whole.
+    public func changes(since revision: UInt64) -> [TextChange]? {
+        changeLog.changes(since: revision, current: self.revision)
+    }
+
     // MARK: Undo / redo
 
     /// Whether there is an edit to undo.
@@ -455,6 +471,10 @@ public struct TextEditingState: Equatable {
         let upper = index(atUTF8Offset: edit.offset + edit.removed.utf8.count)
         let startChar: Int? = indexAnchor.revision == revision ? offset(of: lower) : nil
         text.replaceSubrange(lower..<upper, with: edit.inserted)
+        changeLog.append(
+            TextChange(offset: edit.offset, removedLength: edit.removed.utf8.count, inserted: edit.inserted),
+            before: revision
+        )
         revision = Self.nextRevision()
         visualRows = nil
         // Same reason as `replace`: holding undo down is a run of edits, and
@@ -519,6 +539,7 @@ public struct TextEditingState: Equatable {
             ? text.utf8.distance(from: text.utf8.startIndex, to: focus.samePosition(in: text.utf8)!)
             : new.utf8.count
         text = new
+        changeLog.removeAll()
         revision = Self.nextRevision()
         // Same reason as `replace`: rows are character offsets into the old
         // buffer and describe nothing once it is gone. The view layer usually

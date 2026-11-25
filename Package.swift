@@ -566,25 +566,28 @@ var targets: [Target] = [
         dependencies: [
             "CExtensionHost",
             "LavaUI", "LavaHost", "LavaText", "LavaDiffCore", "LavaGitCore", "LavaProjectCore", "LavaAgentCore",
-            "LavaExplorerCore", "LavaLSPCore", "LavaEditorSettings", "LavaTerminal", "LavaEditorIndentation",
+            "LavaExplorerCore", "LavaLSPCore", "LavaEditorSettings", "LavaTerminal", "LavaEditorSyntax",
         ] + (haveNprpc ? [Target.Dependency("LavaClient"), "LavaEditorExtensionAPI",
                            .product(name: "NPRPC", package: "nprpc_swift")] : []),
         resources: [.copy("Resources")],
         swiftSettings: interopCxx
     ),
     .target(
-        name: "LavaEditorIndentation",
+        name: "LavaEditorSyntax",
         dependencies: [
+            "LavaText",
             .product(name: "TreeSitter", package: "tree-sitter"),
             .product(name: "SwiftTreeSitter", package: "SwiftTreeSitter"),
             .product(name: "TreeSitterPython", package: "tree-sitter-python"),
             .product(name: "TreeSitterC", package: "tree-sitter-c"),
             .product(name: "TreeSitterCPP", package: "tree-sitter-cpp"),
         ],
+        // One folder per grammar, `indents.scm` and whatever comes next.
+        resources: [.copy("Queries")],
         swiftSettings: syntaxSettings + [.enableExperimentalFeature("CheckImplementationOnly")],
         linkerSettings: syntaxLinker
     ),
-    .testTarget(name: "LavaEditorIndentationTests", dependencies: ["LavaEditorIndentation"]),
+    .testTarget(name: "LavaEditorSyntaxTests", dependencies: ["LavaEditorSyntax", "LavaText"]),
     // A terminal as a view: the PTY, the session and the grid, no window.
     // LavaTerm wraps it in chrome; LavaEditor puts it in a panel.
     .target(

@@ -1,14 +1,24 @@
 #if canImport(SwiftParser) && canImport(SwiftSyntax)
+import LavaText
 @_implementationOnly import SwiftParser
 @_implementationOnly import SwiftSyntax
 
-final class SwiftIndentation {
-    private var bytes: [UInt8] = []
+/// A Swift document on the compiler's own parser, which follows the buffer
+/// the way `TreeSitterTree` does: by revision, through the splices since.
+///
+/// SwiftSyntax rather than tree-sitter because tree-sitter has no grammar for
+/// Swift that it maintains; the rules here are code, not a query, for the
+/// same reason.
+final class SwiftTree {
     private var previous: IncrementalParseResult?
+    private var revision: UInt64?
+    private(set) var fullParses = 0
 
-    func indentation(in text: String, at caret: Int, unit: String) -> String? {
+    func indentation(
+        for state: TextEditingState, bytes: UnsafeBufferPointer<UInt8>, at caret: Int, unit: String
+    ) -> String? {
         guard caret > 0 else { return nil }
-        let tree = parse(Array(text.utf8))
+        let tree = parse(state, bytes)
         var token = tree.token(at: AbsolutePosition(utf8Offset: caret - 1))
         while let candidate = token, candidate.endPositionBeforeTrailingTrivia.utf8Offset > caret
                 || candidate.tokenKind == .endOfFile {
@@ -57,20 +67,28 @@ final class SwiftIndentation {
         return nil
     }
 
-    private func parse(_ source: [UInt8]) -> SourceFileSyntax {
-        if let previous, source == bytes { return previous.tree }
-        let transition = previous.map { previous in
-            let change = SourceChange(from: bytes, to: source)
-            let edit = SourceEdit(
-                range: AbsolutePosition(utf8Offset: change.start)..<AbsolutePosition(utf8Offset: change.oldEnd),
-                replacement: Array(source[change.start..<change.newEnd])
+    private func parse(_ state: TextEditingState, _ bytes: UnsafeBufferPointer<UInt8>) -> SourceFileSyntax {
+        if let previous, revision == state.revision { return previous.tree }
+        var transition: IncrementalParseTransition?
+        if let previous, let revision, let changes = state.changes(since: revision) {
+            let edits = changes.map {
+                SourceEdit(
+                    range: AbsolutePosition(utf8Offset: $0.offset)..<AbsolutePosition(utf8Offset: $0.offset + $0.removedLength),
+                    replacement: Array($0.inserted.utf8)
+                )
+            }
+            transition = IncrementalParseTransition(
+                previousIncrementalParseResult: previous, edits: ConcurrentEdits(fromSequential: edits)
             )
-            return IncrementalParseTransition(previousIncrementalParseResult: previous, edits: ConcurrentEdits(edit))
         }
-        let result: IncrementalParseResult = source.withUnsafeBufferPointer {
-            Parser.parseIncrementally(source: $0, parseTransition: transition)
+        var result = Parser.parseIncrementally(source: bytes, parseTransition: transition)
+        // A tree that does not span the buffer means the edits and the old
+        // tree disagreed; start over rather than answer from it.
+        if transition == nil || result.tree.totalLength.utf8Length != bytes.count {
+            if transition != nil { result = Parser.parseIncrementally(source: bytes, parseTransition: nil) }
+            fullParses += 1
         }
-        bytes = source
+        revision = state.revision
         previous = result
         return result.tree
     }

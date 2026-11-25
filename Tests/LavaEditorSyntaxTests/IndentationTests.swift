@@ -1,10 +1,10 @@
-import LavaEditorIndentation
+import LavaEditorSyntax
 import XCTest
 
-final class IndentationProviderTests: XCTestCase {
+final class IndentationTests: XCTestCase {
     func testSwiftSwitchLabels() throws {
-        try XCTSkipUnless(IndentationProvider.hasSwiftParser)
-        let provider = IndentationProvider()
+        try XCTSkipUnless(SyntaxDocument.hasSwiftParser)
+        let provider = SyntaxDocument()
         check("switch value {\ncase .item(let value):|\n}", "    ", .swift, provider)
         check("switch value {\n    default: // explanation|\n}", "        ", .swift, provider)
         check("    let value:|", nil, .swift, provider)
@@ -12,8 +12,8 @@ final class IndentationProviderTests: XCTestCase {
     }
 
     func testSwiftDelimiterScopes() throws {
-        try XCTSkipUnless(IndentationProvider.hasSwiftParser)
-        let provider = IndentationProvider()
+        try XCTSkipUnless(SyntaxDocument.hasSwiftParser)
+        let provider = SyntaxDocument()
         check("    fun(|", "        ", .swift, provider)
         check("    fun(\n        one,|", "        ", .swift, provider)
         check("    fun(\n        one,|)", "    ", .swift, provider)
@@ -27,7 +27,7 @@ final class IndentationProviderTests: XCTestCase {
     }
 
     func testPythonSuitesAndContinuations() {
-        let provider = IndentationProvider()
+        let provider = SyntaxDocument()
         check("if ready: # explanation|", "    ", .python, provider)
         check("def foo():\n\tif ready:|", "\t\t", .python, provider)
         check("match value:\n    case 1:|", "        ", .python, provider)
@@ -42,7 +42,7 @@ final class IndentationProviderTests: XCTestCase {
     }
 
     func testCBlocksCasesAndCalls() {
-        let provider = IndentationProvider()
+        let provider = SyntaxDocument()
         check("int main(void) { // entry point|", "    ", .c, provider)
         check("int main(void) {\n    run();|}", "", .c, provider)
         check("int main(void) {\n    run();|", nil, .c, provider)
@@ -57,7 +57,7 @@ final class IndentationProviderTests: XCTestCase {
     }
 
     func testCppConstructsAndIncrementalEdits() {
-        let provider = IndentationProvider()
+        let provider = SyntaxDocument()
         check("namespace demo {\nclass Widget {|", "    ", .cpp, provider)
         check("namespace demo {\nclass Widget {\n    int item;|};\n}", "", .cpp, provider)
         check("class Widget {\npublic:|", "    ", .cpp, provider)
@@ -73,7 +73,7 @@ final class IndentationProviderTests: XCTestCase {
     }
 
     func testUpdatesReuseTheDocumentAfterUnicodeEdits() throws {
-        let provider = IndentationProvider()
+        let provider = SyntaxDocument()
         check("if café:|\n    work()", "    ", .python, provider)
         check("if cafê:|\n    work()", "    ", .python, provider)
         check("if cafê:\n    fun(é,|", "        ", .python, provider)
@@ -81,14 +81,14 @@ final class IndentationProviderTests: XCTestCase {
         check("if cafê:\n    fun(é,|)", "    ", .python, provider)
         check("if cafê:|\n    work()", "    ", .python, provider)
 
-        try XCTSkipUnless(IndentationProvider.hasSwiftParser)
+        try XCTSkipUnless(SyntaxDocument.hasSwiftParser)
         check("switch café {\ncase .🍎:|\n}", "    ", .swift, provider)
         check("switch cafê {\ncase .🍏:|\n}", "    ", .swift, provider)
     }
 
     private func check(
-        _ sample: String, _ indentation: String?, _ language: IndentationProvider.Language,
-        _ provider: IndentationProvider, file: StaticString = #filePath, line: UInt = #line
+        _ sample: String, _ indentation: String?, _ language: SyntaxDocument.Language,
+        _ provider: SyntaxDocument, file: StaticString = #filePath, line: UInt = #line
     ) {
         let marker = sample.firstIndex(of: "|")!
         let before = sample[..<marker]

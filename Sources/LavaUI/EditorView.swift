@@ -581,7 +581,21 @@ public enum EditorIndentation {
     /// Use with a stateful highlighter backed by `CodeLexer`.
     case braces
     /// Computes whitespace at the insertion point. Nil inherits the current line's indent.
-    case provider((_ text: String, _ caret: String.Index, _ unit: String) -> String?)
+    case provider((EditorIndentationRequest) -> String?)
+}
+
+/// What an indentation provider is asked with.
+public struct EditorIndentationRequest {
+    /// The buffer as the editor holds it. Its `revision` and
+    /// `changes(since:)` are what let a syntax tree follow the edits since it
+    /// last looked instead of reading the whole buffer again.
+    public let editing: TextEditingState
+    /// Where the new line goes.
+    public let caret: String.Index
+    /// One level of indentation, as the configured format writes it.
+    public let unit: String
+
+    public var text: String { editing.text }
 }
 
 /// The width and representation of newly inserted indentation.

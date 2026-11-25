@@ -1224,23 +1224,32 @@ extension LeafNode {
             editing.insert("\n")
             return
         }
+        // Worked out in a function of its own so that nothing it read — the
+        // line prefix, the request's copy of the state — is still holding the
+        // buffer when the insert below mutates it, which would copy the file.
+        let indent = newlineIndent()
+        editing.insert("\n" + indent)
+    }
+
+    /// The whitespace a new line at the caret starts with.
+    ///
+    /// The inherited whitespace is kept byte for byte, and only the level
+    /// added on top comes from the configured format. Re-encoding it would
+    /// turn a Makefile's recipe tab into spaces on the next line.
+    private func newlineIndent() -> String {
         let start = editing.selectedRange.lowerBound
         let line = editing.lineRange(at: start)
         let prefix = editing.text[line.lowerBound..<start]
-        var indent = String(prefix.prefix { $0 == " " || $0 == "\t" })
+        let inherited = String(prefix.prefix { $0 == " " || $0 == "\t" })
         let unit = indentUnit
-        // The inherited whitespace is kept byte for byte, and only the level
-        // added on top comes from the configured format. Re-encoding it would
-        // turn a Makefile's recipe tab into spaces on the next line.
         switch indentation {
         case .braces where endsWithOpeningBrace(prefix, at: start):
-            indent += indent.last == "\t" ? "\t" : unit
+            return inherited + (inherited.last == "\t" ? "\t" : unit)
         case .provider(let provider):
-            indent = provider(editing.text, start, unit) ?? indent
+            return provider(EditorIndentationRequest(editing: editing, caret: start, unit: unit)) ?? inherited
         default:
-            break
+            return inherited
         }
-        editing.insert("\n" + indent)
     }
 
     private func endsWithOpeningBrace(_ prefix: Substring, at start: String.Index) -> Bool {

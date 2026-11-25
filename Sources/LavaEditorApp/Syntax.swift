@@ -1,5 +1,5 @@
 import Foundation
-import LavaEditorIndentation
+import LavaEditorSyntax
 import LavaText
 import LavaUI
 
@@ -86,20 +86,20 @@ enum Language: String, CaseIterable {
         }
     }
 
-    func indentation(using provider: IndentationProvider, url: URL?) -> EditorIndentation {
-        let parser: IndentationProvider.Language
+    func indentation(using syntax: SyntaxDocument, url: URL?) -> EditorIndentation {
+        let language: SyntaxDocument.Language
         switch indentationLanguageID(for: url) {
         case "swift":
-            guard IndentationProvider.hasSwiftParser else { return .braces }
-            parser = .swift
-        case "python": parser = .python
-        case "c": parser = .c
-        case "cpp": parser = .cpp
+            guard SyntaxDocument.hasSwiftParser else { return .braces }
+            language = .swift
+        case "python": language = .python
+        case "c": language = .c
+        case "cpp": language = .cpp
         default:
             return .inherit
         }
-        return .provider { text, caret, unit in
-            provider.indentation(in: text, at: caret, language: parser, unit: unit)
+        return .provider { request in
+            syntax.indentation(for: request.editing, at: request.caret, language: language, unit: request.unit)
         }
     }
 

@@ -25,11 +25,11 @@ final class EditorIndentationTests: XCTestCase {
     }
 
     func testProviderUsesTheInsertionPointAndFallback() throws {
-        try checkEnter("    call(|", inserts: "\n        ", indentation: .provider { text, caret, unit in
-            XCTAssertEqual(text[..<caret], "    call(")
-            return unit + unit
+        try checkEnter("    call(|", inserts: "\n        ", indentation: .provider { request in
+            XCTAssertEqual(request.text[..<request.caret], "    call(")
+            return request.unit + request.unit
         })
-        try checkEnter("    work()|", inserts: "\n    ", indentation: .provider { _, _, _ in nil })
+        try checkEnter("    work()|", inserts: "\n    ", indentation: .provider { _ in nil })
     }
 
     func testTabAndEnterUseTheConfiguredIndentation() throws {
@@ -50,8 +50,8 @@ final class EditorIndentationTests: XCTestCase {
         // A level on a tab-led line is a tab, whatever the format says.
         try checkEnter("\tif ready {|", inserts: "\n\t\t", format: spaces)
         try checkEnter("  if ready {|", inserts: "\n  \t", format: tabs)
-        try checkEnter("  call(|", inserts: "\n    ", indentation: .provider { _, _, unit in
-            "  " + unit
+        try checkEnter("  call(|", inserts: "\n    ", indentation: .provider { request in
+            "  " + request.unit
         }, format: spaces)
     }
 

@@ -1,5 +1,5 @@
 import Foundation
-import LavaEditorIndentation
+import LavaEditorSyntax
 import LavaProjectCore
 import LavaText
 import LavaUI
@@ -16,7 +16,10 @@ struct EditorDocument: EditorTab {
     /// never been saved, which is what makes `Save` fall back to `Save As`.
     var url: URL?
     var text: String
-    let indentationState = IndentationProvider()
+    /// The parse of `text`, shared by whatever reads syntax. A reference in a
+    /// value: copies of this document are the same document, and the tree
+    /// follows whichever buffer asks by revision, so sharing it is safe.
+    let syntax = SyntaxDocument()
     var preview: DocumentPreview?
     var tabState: EditorTabState = .open
 
@@ -71,7 +74,7 @@ struct EditorDocument: EditorTab {
     var language: Language { Language.of(url) }
 
     var indentation: EditorIndentation {
-        language.indentation(using: indentationState, url: url)
+        language.indentation(using: syntax, url: url)
     }
 
     /// Reads the file into `text`. Returns false and fills `loadError` on
