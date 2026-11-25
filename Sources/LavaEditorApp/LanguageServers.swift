@@ -66,6 +66,13 @@ final class LanguageServers {
     @ObservationIgnored private var semanticWanted: Set<Int> = []
     @ObservationIgnored private var semanticInFlight: Set<Int> = []
     @ObservationIgnored private var semanticUnsupported: Set<Key> = []
+    /// Asks made again for a tab whose answer was empty or did not come —
+    /// see `retrySemantic`. Cleared by an answer with tokens in it.
+    @ObservationIgnored private var semanticRetries: [Int: Int] = [:]
+    /// Bumped by each refresh a server sends, so a reply to a request made
+    /// before it knows it is out of date even when the tab had no tokens to
+    /// mark stale yet.
+    @ObservationIgnored private var refreshes: [Key: Int] = [:]
 
     private struct Semantic {
         var text: String
@@ -142,35 +149,66 @@ final class LanguageServers {
         let text = open.text
         let key = open.key
         let encoding = capabilities.positionEncoding
+        let refresh = refreshes[key, default: 0]
         let owner = LanguageServersRef(self)
         server.client.semanticTokens(uri: open.uri, previous: semantic[id]?.snapshot) { result in
             MainQueue.async {
-                owner.servers?.semanticArrived(id, key: key, text: text, encoding: encoding, result: result)
+                owner.servers?.semanticArrived(
+                    id, key: key, text: text, encoding: encoding, refresh: refresh, result: result
+                )
             }
         }
     }
 
     private func semanticArrived(
-        _ id: Int, key: Key, text: String, encoding: PositionEncoding,
+        _ id: Int, key: Key, text: String, encoding: PositionEncoding, refresh: Int,
         result: Result<DecodedSemanticTokens?, LSPClientError>
     ) {
         semanticInFlight.remove(id)
         switch result {
         case .success(let decoded?):
+            // Nothing at all for a file with text in it is a server that is
+            // not ready, not a file with nothing to colour: sourcekit-lsp
+            // answers that way until it has loaded the package's build
+            // settings — seconds to a minute in — and does not send a
+            // refresh once it has. Kept, and asked again.
+            let early = decoded.tokens.isEmpty && !text.isEmpty
             semantic[id] = Semantic(text: text, tokens: decoded.tokens, snapshot: decoded.snapshot,
-                                    encoding: encoding, highlights: nil)
+                                    encoding: encoding, highlights: nil, stale: early)
             semanticGeneration &+= 1
+            if early { retrySemantic(id) } else { semanticRetries[id] = nil }
         case .success(nil):
-            break
+            retrySemantic(id)
         case .failure(.unsupported):
             semanticUnsupported.insert(key)
         case .failure:
             // A delta the server no longer has the base for, a timeout: the
             // next request asks for everything again.
             semantic[id]?.snapshot = nil
+            retrySemantic(id)
+        }
+        if refreshes[key, default: 0] != refresh {
+            // The server said its answers were out of date while this one was
+            // on its way — before the tab had anything to mark stale.
+            semantic[id]?.stale = true
+            requestSync()
         }
         // Typed into while the server was answering.
         if let open = opened[id], open.text != text { wantSemantic(id) }
+    }
+
+    /// Asks again later, backing off, for a tab the server had nothing for
+    /// yet. Through the sync, which asks only for the tab in front — one that
+    /// is not is asked when it comes to the front, being stale or unanswered.
+    private func retrySemantic(_ id: Int) {
+        let attempt = semanticRetries[id, default: 0]
+        let delays: [Double] = [1, 2, 4, 8, 16, 30]
+        guard attempt < delays.count else { return }
+        semanticRetries[id] = attempt + 1
+        let owner = LanguageServersRef(self)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delays[attempt]) {
+            MainQueue.async { owner.servers?.requestSync() }
+        }
     }
 
     /// The tab's semantic highlighting for `text`, its current contents, with
@@ -304,6 +342,7 @@ final class LanguageServers {
         servers[open.key]?.client.didClose(uri: open.uri)
         diagnostics[open.path] = nil
         semantic[id] = nil
+        semanticRetries[id] = nil
     }
 
     /// Shuts every server down — the session is ending or the folder changed.
@@ -315,6 +354,8 @@ final class LanguageServers {
         unserved.removeAll()
         diagnostics.removeAll()
         semantic.removeAll()
+        semanticRetries.removeAll()
+        refreshes.removeAll()
     }
 
     private func handle(_ event: LSPEvent, from key: Key) {
@@ -343,6 +384,7 @@ final class LanguageServers {
         case .notification:
             break
         case .refresh(.semanticTokens):
+            refreshes[key, default: 0] += 1
             // Every tab this server colours is out of date. Only the one in
             // front is asked again now; the rest when they come to the front.
             for (id, open) in opened where open.key == key {
