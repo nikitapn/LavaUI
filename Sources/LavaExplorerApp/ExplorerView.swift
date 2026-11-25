@@ -1634,19 +1634,7 @@ private struct FileRow: View, Equatable {
     }
 
     private func pointer(_ mods: Int32, _ button: Int32) {
-        if button == PointerButton.right {
-            session.rightPress(entry)
-            return
-        }
-        // Middle-click opens a folder in a new tab, as in a browser;
-        // Ctrl+click is selection, as in every file manager.
-        if button == PointerButton.middle {
-            if entry.isDirectory { session.newTab(path: entry.path) }
-            return
-        }
-        guard button == PointerButton.left else { return }
-        let p = PointerState.window
-        session.click(entry, clicks: ClickCounter.register(x: p.x, y: p.y), mods: mods)
+        session.press(entry, mods: mods, button: button)
     }
 
     private var renameField: some View {

@@ -795,6 +795,7 @@ final class ExplorerSession: @unchecked Sendable {
     private func move(
         _ body: (inout ExplorerTab, Float, any FileSource) -> ExplorerTab.ScrollLanding?
     ) {
+        pendingRowClick = nil
         dismissContext()
         notice = nil
         // Leaving the folder leaves the name that was being typed for it.
@@ -966,18 +967,44 @@ final class ExplorerSession: @unchecked Sendable {
     /// all of them. Cleared when that drag starts.
     @ObservationIgnored private var collapseOnRelease: String?
 
-    /// A left press on a row. Ctrl toggles it, Shift selects the range from
-    /// the anchor, Ctrl+Shift adds that range; a double-click opens.
-    func click(_ entry: FileEntry, clicks: Int, mods: Int32 = 0) {
+    @ObservationIgnored private var pendingRowClick: (
+        path: String, tabID: Int, point: (x: Float, y: Float), time: TimeInterval
+    )?
+
+    func press(_ entry: FileEntry, mods: Int32, button: Int32) {
+        let previous = pendingRowClick
+        pendingRowClick = nil
+        if button == PointerButton.right {
+            rightPress(entry)
+            return
+        }
+        // Middle-click opens a folder in a new tab, as in a browser.
+        if button == PointerButton.middle {
+            if entry.isDirectory { newTab(path: entry.path) }
+            return
+        }
+        guard button == PointerButton.left else { return }
+
         dismissContext()
         notice = nil
         let control = KeyMods.contains(mods, KeyMods.control)
         let shift = KeyMods.contains(mods, KeyMods.shift)
         let path = entry.path
-        if clicks >= 2, !control, !shift {
-            tabSet.updateCurrent { $0.selected = path }
-            activate()
-            return
+        if !control, !shift {
+            let point = PointerState.window
+            let time = ProcessInfo.processInfo.systemUptime
+            let tabID = tabSet.currentID
+            // Opening a row consumes the pair. A different row may now
+            // occupy the same spot, or the same file may still be visible.
+            if let previous, previous.path == path, previous.tabID == tabID,
+               time - previous.time <= ClickCounter.interval,
+               abs(point.x - previous.point.x) <= ClickCounter.slop,
+               abs(point.y - previous.point.y) <= ClickCounter.slop {
+                tabSet.updateCurrent { $0.selected = path }
+                activate()
+                return
+            }
+            pendingRowClick = (path, tabID, point, time)
         }
         let order = listing.entries.map(\.path)
         tabSet.updateCurrent { tab in
@@ -2740,7 +2767,7 @@ final class ExplorerSession: @unchecked Sendable {
 
     /// A right press on a row: the menu waits for the release, as in Windows,
     /// so the press can still become a right-drag instead.
-    func rightPress(_ entry: FileEntry) {
+    private func rightPress(_ entry: FileEntry) {
         rightDragged = false
         dismissContext()
         // Selected on the press, as in Windows; one of several selected keeps
