@@ -5,6 +5,9 @@ import LavaUI
 struct PassView: View {
     @Bindable var session: PassSession
     let fonts: PassFonts
+    let look: PassLook
+
+    private var theme: Theme { look.theme }
 
     @ViewBuilder var body: some View {
         if let font = fonts.body { vaultWindow.font(font) }
@@ -17,13 +20,13 @@ struct PassView: View {
             if let vault = session.snapshot {
                 if let reason = vault.readOnlyReason {
                     HStack(padding: 10, alignment: .center, spacing: 10) {
-                        Text(reason, color: Theme.current.textSecondary).flexShrink(1)
+                        Text(reason, color: theme.textSecondary).flexShrink(1)
                         Spacer()
                         if vault.canSaveCopy {
                             Button("Save KDBX 4 Copy", isEnabled: !session.busy) { session.saveCopy() }
                         }
                     }
-                    .background(Theme.current.panel)
+                    .background(theme.panel)
                 }
                 HSplitView(initialFraction: 0.196, minLeading: 164, minTrailing: 640) {
                     sidebar(vault)
@@ -38,40 +41,40 @@ struct PassView: View {
                 unlockScreen
             }
             HStack(height: .pt(34), padding: 0, alignment: .center, spacing: 10) {
-                statusDot(session.snapshot == nil ? PassLook.accent : PassLook.sage)
+                statusDot(session.snapshot == nil ? (look.isPaper ? theme.accent : theme.textMuted) : look.success)
                 Text(session.busy ? "Working…" : (session.notice ?? (session.snapshot == nil
                     ? "Vault locked" : "Changes save directly to your encrypted vault")),
-                     color: PassLook.soft, font: fonts.caption, lineLimit: 1)
+                     color: theme.textSecondary, font: fonts.caption, lineLimit: 1)
                     .flexShrink(1)
                 Spacer()
                 if let vault = session.snapshot {
-                    Text("\(vault.entries.filter { !$0.recycled }.count) entries", color: PassLook.soft, font: fonts.caption)
+                    Text("\(vault.entries.filter { !$0.recycled }.count) entries", color: theme.textSecondary, font: fonts.caption)
                 } else {
-                    Text("KeePass · KDBX", color: PassLook.soft, font: fonts.caption)
+                    Text("KeePass · KDBX", color: theme.textSecondary, font: fonts.caption)
                 }
             }
             .padding(EdgeInsets(top: 0, leading: 22, bottom: 0, trailing: 18))
-            .background(PassLook.surface)
+            .background(theme.panel)
         }
-        .background(PassLook.card)
+        .background(theme.background)
         .onAnyPress { _ in session.activity() }
     }
 
     private var toolbar: some View {
         HStack(height: .pt(50), padding: 0, alignment: .center, spacing: 12) {
             if WindowBridge.drawsOwnChrome {
-                WindowControls(style: WindowControlsStyle(
-                    size: 13, close: PassLook.accent, minimize: Color(rgb24: 0xf6_a0_6b),
-                    maximize: PassLook.sage
-                ), beforeClose: { session.lock() })
+                WindowControls(
+                    style: look.windowControls,
+                    beforeClose: { session.lock() }
+                )
             }
-            Text(session.isDemo ? "Vault · Demo" : "Vault", color: PassLook.text, font: fonts.strong)
+            Text(session.isDemo ? "Vault · Demo" : "Vault", color: theme.textPrimary, font: fonts.strong)
             if let vault = session.snapshot {
-                PassIcon(symbol: "chevron", color: PassLook.muted, size: 12)
-                Text(vault.name, color: PassLook.soft, lineLimit: 1).flexShrink(1)
-                Text("Unlocked", color: PassLook.sageInk, font: fonts.caption)
+                PassIcon(symbol: "chevron", color: theme.textMuted, size: 12)
+                Text(vault.name, color: theme.textSecondary, lineLimit: 1).flexShrink(1)
+                Text("Unlocked", color: look.successInk, font: fonts.caption)
                     .padding(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8))
-                    .background(PassLook.sagePale)
+                    .background(look.successFill)
                     .cornerRadius(14)
             }
             Spacer()
@@ -84,7 +87,7 @@ struct PassView: View {
             }
         }
         .padding(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 12))
-        .background(PassLook.surface)
+        .background(theme.panel)
         .windowDrag()
     }
 
@@ -94,14 +97,14 @@ struct PassView: View {
                 VStack(padding: 0, alignment: .center, spacing: 7) {
                     HStack(width: .pt(64), height: .pt(64), padding: 0, alignment: .center) {
                         Spacer()
-                        PassIcon(symbol: "shield", color: PassLook.orange, size: 30)
+                        PassIcon(symbol: "shield", color: look.isPaper ? look.accentInk : theme.textPrimary, size: 30)
                         Spacer()
                     }
-                    .background(PassLook.peach)
+                    .background(theme.selectionFill)
                     .cornerRadius(22)
                     Text(session.creating ? "Create an encrypted vault" : "Your passwords. Your vault.",
-                         color: PassLook.text, font: fonts.hero, align: .center)
-                    Text("KeePass-compatible. Encrypted and stored on your disk.", color: PassLook.soft)
+                         color: theme.textPrimary, font: fonts.hero, align: .center)
+                    Text("KeePass-compatible. Encrypted and stored on your disk.", color: theme.textSecondary)
                 }
                 HStack(width: .pt(840), padding: 0, alignment: .start, spacing: 20) {
                     if session.creating { Spacer() }
@@ -110,9 +113,9 @@ struct PassView: View {
                     if session.creating { Spacer() }
                 }
                 HStack(padding: 0, alignment: .center, spacing: 7) {
-                    PassIcon(symbol: "clock", color: PassLook.muted, size: 14)
+                    PassIcon(symbol: "clock", color: theme.textMuted, size: 14)
                     Text("Locks after 5 minutes of inactivity. Copied passwords clear after 30 seconds.",
-                         color: PassLook.soft, font: fonts.caption)
+                         color: theme.textSecondary, font: fonts.caption)
                 }
             }
             .padding(EdgeInsets(top: 24, leading: 0, bottom: 16, trailing: 0))
@@ -132,11 +135,11 @@ struct PassView: View {
             }
             .padding(EdgeInsets(top: 0, leading: 8, bottom: 4, trailing: 4))
             if session.recentVaults.isEmpty {
-                Text("No recent vaults. Open a .kdbx file to start.", color: PassLook.soft,
+                Text("No recent vaults. Open a .kdbx file to start.", color: theme.textSecondary,
                      font: fonts.caption, align: .center)
                     .padding(14)
                     .frame(width: .pct(100), height: .pt(60))
-                    .border(PassLook.faint)
+                    .border(look.subtleBorder)
                     .cornerRadius(18)
             }
             ForEach(Array(session.recentVaults.enumerated()), id: \.element) { item in
@@ -145,19 +148,21 @@ struct PassView: View {
                 HStack(height: .pt(58), padding: 0, alignment: .center, spacing: 2) {
                     HStack(padding: 10, alignment: .center, spacing: 12,
                            onClick: { if !session.busy { session.openRecentVault(path) } }) {
-                        iconTile("vault", size: 38, color: selected ? PassLook.orange : PassLook.sageInk,
-                                 fill: selected ? PassLook.peachHover : PassLook.sagePale)
+                        iconTile("vault", size: 38,
+                                 color: look.isPaper && !selected ? theme.textSecondary : look.accentInk,
+                                 fill: look.isPaper ? (selected ? theme.selectionFill : theme.hover) : theme.inset)
                         VStack(padding: 0, spacing: 2) {
-                            Text((path as NSString).lastPathComponent, color: PassLook.text,
+                            Text((path as NSString).lastPathComponent, color: theme.textPrimary,
                                  font: fonts.strong, lineLimit: 1)
-                            Text((path as NSString).deletingLastPathComponent, color: PassLook.soft,
+                            Text((path as NSString).deletingLastPathComponent,
+                                 color: selected && !look.isPaper ? theme.textPrimary : theme.textSecondary,
                                  font: fonts.caption, lineLimit: 1)
                         }
                         .flexShrink(1)
                         Spacer()
                     }
                     .flexGrow(1).flexShrink(1)
-                    .hoverBackground(selected ? PassLook.peachHover : PassLook.well)
+                    .hoverBackground(selected ? look.recentSelectionFill : theme.hover)
                     .cornerRadius(18)
                     .cursor(.pointer)
                     .agentId("recent-vault-\(item.offset)")
@@ -165,7 +170,8 @@ struct PassView: View {
                            style: .icon, enabled: !session.busy) { session.removeRecentVault(path) }
                         .padding(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 6))
                 }
-                .background(selected ? PassLook.peach : PassLook.surface)
+                .background(selected ? look.recentSelectionFill : look.isPaper ? .clear : theme.panel)
+                .border(selected ? look.recentSelectionBorder : .clear, width: 1.5)
                 .cornerRadius(18)
             }
             HStack(padding: 0, alignment: .center) {
@@ -179,7 +185,7 @@ struct PassView: View {
     private var unlockForm: some View {
         VStack(padding: 20, spacing: 10) {
             Text(session.creating ? "New vault" : "Unlock your vault",
-                 color: PassLook.text, font: fonts.heading)
+                 color: theme.textPrimary, font: fonts.heading)
             labeled("Vault file") {
                 inputPill("file", focused: session.vaultPathFocused) {
                     TextField(text: $session.vaultPath, placeholder: "Choose a .kdbx file",
@@ -195,7 +201,7 @@ struct PassView: View {
                 labeled("Key file · optional") {
                     inputPill("key") {
                         Text(session.keyFilePath.isEmpty ? "No key file" : session.keyFilePath,
-                             color: session.keyFilePath.isEmpty ? PassLook.muted : PassLook.text,
+                             color: session.keyFilePath.isEmpty ? theme.textMuted : theme.textPrimary,
                              lineLimit: 1)
                             .flexGrow(1).flexShrink(1)
                         if !session.keyFilePath.isEmpty {
@@ -220,7 +226,7 @@ struct PassView: View {
                            id: "reveal-master-password", icon: session.showMasterPassword ? "eye-off" : "eye",
                            style: .icon, enabled: !session.busy) { session.toggleMasterPasswordVisibility() }
                 }
-                Text(session.unlockError ?? "", color: PassLook.brown, font: fonts.caption, lineLimit: 1)
+                Text(session.unlockError ?? "", color: look.emphasisInk, font: fonts.caption, lineLimit: 1)
                     .padding(EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 4))
                     .frame(height: .pt(18))
                     .agentId("unlock-error")
@@ -239,8 +245,9 @@ struct PassView: View {
             }
             Toggle("Remember in desktop keyring", isOn: $session.rememberMaster,
                    style: ToggleStyle(trackWidth: 42, trackHeight: 24, knobInset: 3,
-                                      offTrack: PassLook.faint, onTrack: PassLook.sage, knob: .white,
-                                      disabledTrack: PassLook.faint, disabledKnob: PassLook.card,
+                                      offTrack: look.isPaper ? Color(rgb24: 0xc0_b6_a5) : nil,
+                                      knob: look.isPaper ? .white : nil,
+                                      disabledTrack: theme.inset,
                                       labelGap: 12, duration: 0.15),
                    isEnabled: !session.isDemo && !session.busy)
             HStack(padding: 0, alignment: .center, spacing: 8) {
@@ -259,8 +266,8 @@ struct PassView: View {
             if !session.creating {
                 Divider()
                 HStack(padding: 0, alignment: .center, spacing: 10) {
-                    statusDot(PassLook.muted)
-                    Text("Desktop keyring", color: PassLook.soft, font: fonts.caption)
+                    statusDot(theme.textMuted)
+                    Text("Desktop keyring", color: theme.textSecondary, font: fonts.caption)
                     Spacer()
                     action("Forget", id: "forget-password", style: .ghost, height: 26,
                            enabled: !session.busy && !session.vaultPath.isEmpty && !session.isDemo) {
@@ -270,12 +277,12 @@ struct PassView: View {
                 .padding(EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 0))
             }
         }
-        .background(PassLook.surface)
+        .background(theme.panel)
         .cornerRadius(28)
         .underlay {
             Canvas(width: .pct(100), height: .pct(100)) { list, box in
                 list.shadow(x: box.x, y: box.y, w: box.w, h: box.h,
-                            cornerRadius: 28, blur: 3, color: PassLook.text.opacity(0.14), offsetY: 1)
+                            cornerRadius: 28, blur: 3, color: .black.opacity(0.14), offsetY: 1)
             }
         }
         .shake(trigger: session.unlockShake)
@@ -284,23 +291,23 @@ struct PassView: View {
 
     private func labeled<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(padding: 0, spacing: 4) {
-            Text(label, color: PassLook.soft, font: fonts.strong)
+            Text(label, color: theme.textSecondary, font: fonts.strong)
                 .padding(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 0))
             content()
         }
     }
 
     private func inputPill<Content: View>(
-        _ icon: String, focused: Bool = false, error: Bool = false, fill: Color = PassLook.card,
+        _ icon: String, focused: Bool = false, error: Bool = false,
         @ViewBuilder content: () -> Content
     ) -> some View {
         HStack(height: .pt(40), padding: 0, alignment: .center, spacing: 6) {
-            PassIcon(symbol: icon, color: PassLook.muted, size: 15)
+            PassIcon(symbol: icon, color: theme.textMuted, size: 15)
             content()
         }
         .padding(EdgeInsets(top: 0, leading: 14, bottom: 0, trailing: 6))
-        .background(fill)
-        .border(error ? PassLook.orange : focused ? PassLook.accent : PassLook.divider,
+        .background(theme.inset)
+        .border(error ? theme.selected : focused ? theme.accent : theme.border,
                 width: error || focused ? 1.5 : 1)
         .cornerRadius(20)
     }
@@ -310,16 +317,23 @@ struct PassView: View {
     private func action(_ title: String, id: String, icon: String? = nil,
                         style: ActionStyle = .plain, height: Float = 36,
                         enabled: Bool = true, run: @escaping () -> Void) -> some View {
-        let ink = !enabled ? PassLook.muted : style == .primary ? PassLook.card
-            : style == .ghost || style == .warm ? PassLook.orange : PassLook.text
+        let ink: Color
+        if !enabled { ink = theme.textSecondary }
+        else {
+            switch style {
+            case .primary: ink = theme.background
+            case .ghost: ink = look.accentInk
+            case .warm: ink = look.emphasisInk
+            case .plain, .icon: ink = theme.textPrimary
+            }
+        }
         let fill: Color = switch style {
-        case .primary: enabled ? PassLook.orange : PassLook.faint
-        case .plain: PassLook.card
-        case .warm: PassLook.peach
+        case .primary: enabled ? look.accentInk : theme.inset
+        case .plain: theme.background
+        case .warm: theme.selectionFill
         case .ghost, .icon: .clear
         }
-        let hover = style == .primary ? PassLook.brown
-            : style == .warm ? PassLook.peachHover : PassLook.well
+        let hover = style == .primary ? look.emphasisInk : style == .warm ? look.warmHover : theme.hover
         let h: Float = style == .icon ? 30 : height
         let inset: Float = style == .icon ? 0 : style == .primary ? 18 : 12
         return HStack(width: style == .icon ? .pt(h) : .auto, height: .pt(h), padding: 0,
@@ -331,7 +345,7 @@ struct PassView: View {
         }
         .padding(EdgeInsets(top: 0, leading: inset, bottom: 0, trailing: inset))
         .background(fill)
-        .border(style == .plain ? PassLook.divider : .clear)
+        .border(style == .plain ? theme.border : .clear)
         .hoverBackground(enabled ? hover : .clear)
         .cornerRadius(h / 2)
         .cursor(enabled ? .pointer : .arrow)
@@ -340,7 +354,7 @@ struct PassView: View {
     }
 
     private func kicker(_ title: String) -> some View {
-        Text(title.uppercased(), color: PassLook.muted, font: fonts.kicker)
+        Text(title.uppercased(), color: theme.textMuted, font: fonts.kicker)
     }
 
     private func statusDot(_ color: Color) -> some View {
@@ -397,21 +411,23 @@ struct PassView: View {
                 }
             }
         }
-        .background(PassLook.surface)
+        .background(theme.panel)
     }
 
     private func groupRow(_ title: String, id: String, icon: String, count: Int?,
                           selected: Bool, indent: Float = 0, run: @escaping () -> Void) -> some View {
         HStack(height: .pt(34), padding: 0, alignment: .center, spacing: 9, onClick: run) {
-            PassIcon(symbol: icon, color: selected ? PassLook.orange : PassLook.soft, size: 15)
-            Text(title, color: selected ? PassLook.brown : PassLook.text, font: fonts.strong, lineLimit: 1)
+            PassIcon(symbol: icon, color: selected ? look.emphasisInk : theme.textSecondary, size: 15)
+            Text(title, color: selected ? look.emphasisInk : theme.textPrimary, font: fonts.strong, lineLimit: 1)
                 .flexShrink(1)
             Spacer()
-            if let count { Text(String(count), color: PassLook.soft, font: fonts.caption) }
+            if let count {
+                Text(String(count), color: selected ? theme.textPrimary : theme.textSecondary, font: fonts.caption)
+            }
         }
         .padding(EdgeInsets(top: 0, leading: 12 + indent, bottom: 0, trailing: 12))
-        .background(selected ? PassLook.peach : .clear)
-        .hoverBackground(selected ? PassLook.peachHover : PassLook.well)
+        .background(selected ? theme.selectionFill : .clear)
+        .hoverBackground(selected ? theme.selectionFill : theme.hover)
         .cornerRadius(17)
         .cursor(.pointer)
         .agentId(id)
@@ -419,16 +435,16 @@ struct PassView: View {
 
     private var entryList: some View {
         VStack(flexGrow: 1, padding: 10, spacing: 8) {
-            inputPill("search", focused: session.searchFocused, fill: PassLook.well) {
+            inputPill("search", focused: session.searchFocused) {
                 TextField(text: $session.search, placeholder: "Search entries",
                           focusRing: FocusRingStyle.none, restingOutline: false)
                     .background(.clear)
                     .flexGrow(1)
                     .focused($session.searchFocused)
                     .agentId("search-entries")
-                Text("Ctrl+F", color: PassLook.soft, font: fonts.caption)
+                Text("Ctrl+F", color: theme.textSecondary, font: fonts.caption)
                     .padding(5)
-                    .background(PassLook.card)
+                    .background(theme.background)
                     .cornerRadius(10)
             }
             ScrollView(.vertical) {
@@ -438,13 +454,13 @@ struct PassView: View {
                     }
                     if session.visibleEntries.isEmpty {
                         Text(session.search.isEmpty ? "No entries yet" : "No matching entries",
-                             color: PassLook.soft, align: .center)
+                             color: theme.textSecondary, align: .center)
                             .padding(16)
                     }
                 }
             }
         }
-        .background(PassLook.card)
+        .background(theme.background)
     }
 
     private func entryRow(_ entry: VaultEntry) -> some View {
@@ -454,15 +470,16 @@ struct PassView: View {
             entryTile(entry, size: 36)
             VStack(padding: 0, spacing: 2) {
                 Text(entry.title.isEmpty ? "Untitled" : entry.title,
-                     color: selected ? PassLook.brown : PassLook.text, font: fonts.strong, lineLimit: 1)
-                Text(entry.username.isEmpty ? entry.group : entry.username, color: PassLook.soft,
+                     color: selected ? look.emphasisInk : theme.textPrimary, font: fonts.strong, lineLimit: 1)
+                Text(entry.username.isEmpty ? entry.group : entry.username,
+                     color: selected ? theme.textPrimary : theme.textSecondary,
                      font: fonts.caption, lineLimit: 1)
             }
             .flexShrink(1)
             Spacer()
         }
-        .background(selected ? PassLook.peach : .clear)
-        .hoverBackground(selected ? PassLook.peachHover : PassLook.well)
+        .background(selected ? theme.selectionFill : .clear)
+        .hoverBackground(selected ? theme.selectionFill : theme.hover)
         .cornerRadius(16)
         .cursor(.pointer)
         .agentId("entry-\(entry.id)")
@@ -470,8 +487,8 @@ struct PassView: View {
 
     private func entryTile(_ entry: VaultEntry, size: Float) -> some View {
         let palettes: [(Color, Color)] = [
-            (PassLook.peach, PassLook.brown), (PassLook.sagePale, PassLook.sageInk),
-            (PassLook.faint, PassLook.soft), (PassLook.orange, PassLook.card)
+            (theme.selectionFill, look.emphasisInk), (look.successFill, look.successInk),
+            (theme.canvas, theme.textPrimary), (look.accentInk, theme.background)
         ]
         let (fill, ink) = palettes[Int(entry.id.uuid.0) % palettes.count]
         return Text(entry.title.first.map { String($0).uppercased() } ?? "?", color: ink,
@@ -490,8 +507,8 @@ struct PassView: View {
             } else if session.selectedEntry == nil {
                 VStack(flexGrow: 1, padding: 24, alignment: .center, spacing: 8) {
                     Spacer()
-                    Text("Nothing selected", color: PassLook.text, font: fonts.heading)
-                    Text("Pick an entry on the left, or add a new one.", color: PassLook.soft)
+                    Text("Nothing selected", color: theme.textPrimary, font: fonts.heading)
+                    Text("Pick an entry on the left, or add a new one.", color: theme.textSecondary)
                     Spacer()
                 }
             }
@@ -499,17 +516,19 @@ struct PassView: View {
                 HStack(padding: 0, alignment: .center) {
                     Spacer()
                     HStack(padding: 0, alignment: .center, spacing: 6) {
-                        PassIcon(symbol: "check", color: PassLook.sagePale, size: 14)
-                        Text(message, color: PassLook.card, font: fonts.caption, lineLimit: 1)
+                        PassIcon(symbol: "check", color: look.isPaper ? look.successFill : theme.accent, size: 14)
+                        Text(message, color: look.isPaper ? theme.background : theme.textPrimary, font: fonts.caption, lineLimit: 1)
                             .flexShrink(1)
-                        Text("Clear now", color: PassLook.card, font: fonts.strong, hoverFill: PassLook.soft,
+                        Text("Clear now", color: look.isPaper ? theme.background : theme.textPrimary,
+                             font: fonts.strong, hoverFill: look.isPaper ? theme.textSecondary : theme.hover,
                              align: .center, onClick: { session.clearClipboard() })
                             .padding(6)
                             .cornerRadius(14)
                             .cursor(.pointer)
                     }
                     .padding(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 6))
-                    .background(PassLook.text)
+                    .background(look.isPaper ? theme.textPrimary : theme.panel)
+                    .border(theme.border)
                     .cornerRadius(18)
                     .agentId("clipboard-toast")
                     Spacer()
@@ -517,7 +536,7 @@ struct PassView: View {
                 .padding(8)
             }
         }
-        .background(PassLook.card)
+        .background(theme.background)
     }
 
     private var editDetails: some View {
@@ -526,10 +545,10 @@ struct PassView: View {
                 VStack(padding: 22, spacing: 14) {
                     HStack(padding: 0, alignment: .center, spacing: 8) {
                         Text(session.draft?.id == nil ? "New entry" : "Edit entry",
-                             color: PassLook.text, font: fonts.detail)
+                             color: theme.textPrimary, font: fonts.detail)
                         Spacer()
-                        Text("Unsaved", color: PassLook.brown, font: fonts.caption)
-                            .padding(6).background(PassLook.peach).cornerRadius(12)
+                        Text("Unsaved", color: look.emphasisInk, font: fonts.caption)
+                            .padding(6).background(theme.selectionFill).cornerRadius(12)
                     }
                     field("Title", key: \.title, id: "entry-title")
                     field("Username", key: \.username, id: "entry-username")
@@ -550,11 +569,11 @@ struct PassView: View {
                             HStack(padding: 0, alignment: .center, spacing: 4) {
                                 action("Shorter", id: "password-shorter", icon: "minus", style: .icon,
                                        enabled: session.generatedLength > 12) { session.generatedLength -= 1 }
-                                Text("\(session.generatedLength) chars", color: PassLook.text, font: fonts.caption)
+                                Text("\(session.generatedLength) chars", color: theme.textPrimary, font: fonts.caption)
                                 action("Longer", id: "password-longer", icon: "plus", style: .icon,
                                        enabled: session.generatedLength < 64) { session.generatedLength += 1 }
                             }
-                            .background(PassLook.well)
+                            .background(theme.inset)
                             .cornerRadius(15)
                             generatorOption("ABC", id: "uppercase", option: .uppercase)
                             generatorOption("abc", id: "lowercase", option: .lowercase)
@@ -566,8 +585,8 @@ struct PassView: View {
                     labeled("Notes") {
                         EditorView(text: draftBinding(\.notes), showLineNumbers: false, wraps: true, visibleLines: 8)
                             .frame(height: .pt(114))
-                            .background(PassLook.well)
-                            .border(PassLook.divider)
+                            .background(theme.inset)
+                            .border(theme.border)
                             .cornerRadius(18)
                             .agentId("entry-notes")
                     }
@@ -584,7 +603,7 @@ struct PassView: View {
             }
             Divider()
             HStack(padding: 12, alignment: .center, spacing: 8) {
-                Text("Saved to the encrypted vault file.", color: PassLook.soft, font: fonts.caption)
+                Text("Saved to the encrypted vault file.", color: theme.textSecondary, font: fonts.caption)
                     .flexShrink(1)
                 Spacer()
                 action("Cancel", id: "cancel-entry", enabled: !session.busy) {
@@ -613,9 +632,9 @@ struct PassView: View {
                 HStack(padding: 0, alignment: .center, spacing: 12) {
                     entryTile(entry, size: 52)
                     VStack(padding: 0, spacing: 3) {
-                        Text(entry.title.isEmpty ? "Untitled" : entry.title, color: PassLook.text,
+                        Text(entry.title.isEmpty ? "Untitled" : entry.title, color: theme.textPrimary,
                              font: fonts.detail, lineLimit: 1)
-                        Text(entry.group, color: PassLook.soft, font: fonts.caption, lineLimit: 1)
+                        Text(entry.group, color: theme.textSecondary, font: fonts.caption, lineLimit: 1)
                     }
                     .flexShrink(1)
                     Spacer()
@@ -631,7 +650,7 @@ struct PassView: View {
                 .padding(EdgeInsets(top: 0, leading: 0, bottom: 10, trailing: 0))
                 if session.confirmRecycle {
                     detailCard {
-                        Text("Move this entry to the Recycle Bin?", color: PassLook.brown)
+                        Text("Move this entry to the Recycle Bin?", color: look.emphasisInk)
                             .flexShrink(1)
                         Spacer()
                         action("Cancel", id: "cancel-recycle", style: .ghost,
@@ -655,7 +674,7 @@ struct PassView: View {
                                 strengthMeter(content.passwordStrength)
                             }
                         }
-                        Text(session.revealedPassword ?? "••••••••••••", color: PassLook.text, lineLimit: 1)
+                        Text(session.revealedPassword ?? "••••••••••••", color: theme.textPrimary, lineLimit: 1)
                     }
                     .flexShrink(1)
                     Spacer()
@@ -673,12 +692,12 @@ struct PassView: View {
                         VStack(padding: 0, spacing: 4) {
                             kicker("Website")
                             if let link {
-                                Text(entry.url, color: PassLook.orange, hoverColor: PassLook.brown, lineLimit: 1,
+                                Text(entry.url, color: look.accentInk, hoverColor: look.emphasisInk, lineLimit: 1,
                                      onClick: entryAction(details) { session.openWebsite(link) })
                                     .cursor(.pointer)
                                     .tooltip("Open website")
                             } else {
-                                Text(entry.url, color: PassLook.text, lineLimit: 1)
+                                Text(entry.url, color: theme.textPrimary, lineLimit: 1)
                             }
                         }
                         .flexShrink(1)
@@ -692,13 +711,13 @@ struct PassView: View {
                     attachmentCard(content, details: details)
                     if let modified = content.modified {
                         Text("Modified \(modified.formatted(date: .abbreviated, time: .omitted))",
-                             color: PassLook.soft, font: fonts.caption)
+                             color: theme.textSecondary, font: fonts.caption)
                     }
                 } else {
-                    Text("Could not load entry details.", color: PassLook.soft, font: fonts.caption)
+                    Text("Could not load entry details.", color: theme.textSecondary, font: fonts.caption)
                 }
                 if entry.customFieldCount > 0 {
-                    Text("\(entry.customFieldCount) custom fields preserved", color: PassLook.soft, font: fonts.caption)
+                    Text("\(entry.customFieldCount) custom fields preserved", color: theme.textSecondary, font: fonts.caption)
                 }
             }
         }
@@ -714,14 +733,14 @@ struct PassView: View {
 
     private func detailCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         HStack(padding: 12, alignment: .center, spacing: 8, content: content)
-            .background(PassLook.surface)
+            .background(theme.panel)
             .cornerRadius(20)
     }
 
     private func valueLabel(_ label: String, value: String) -> some View {
         VStack(padding: 0, spacing: 4) {
             kicker(label)
-            Text(value, color: PassLook.text, lineLimit: 1)
+            Text(value, color: theme.textPrimary, lineLimit: 1)
         }
         .flexShrink(1)
     }
@@ -745,21 +764,21 @@ struct PassView: View {
                 }
             }
             Text(content.notes.isEmpty ? "No notes" : content.notes,
-                 color: content.notes.isEmpty ? PassLook.soft : PassLook.text)
+                 color: content.notes.isEmpty ? theme.textSecondary : theme.textPrimary)
                 .agentId("entry-notes-display")
         }
-        .background(PassLook.surface)
+        .background(theme.panel)
         .cornerRadius(20)
     }
 
     private func attachmentCard(_ content: VaultEntryContent, details: PassSession.EntryDetails) -> some View {
         VStack(padding: 12, spacing: 8) {
             HStack(padding: 0, alignment: .center, spacing: 10) {
-                PassIcon(symbol: "attachment", color: PassLook.muted, size: 16)
+                PassIcon(symbol: "attachment", color: theme.textMuted, size: 16)
                 VStack(padding: 0, spacing: 3) {
-                    Text("Attachments", color: PassLook.text, font: fonts.strong)
+                    Text("Attachments", color: theme.textPrimary, font: fonts.strong)
                     Text(content.attachments.isEmpty ? "No files attached. Drop a file here or add one."
-                         : "\(content.attachments.count) attached", color: PassLook.soft, font: fonts.caption)
+                         : "\(content.attachments.count) attached", color: theme.textSecondary, font: fonts.caption)
                 }
                 .flexShrink(1)
                 Spacer()
@@ -770,7 +789,7 @@ struct PassView: View {
                 attachmentRow(attachment, details: details)
             }
         }
-        .border(PassLook.faint)
+        .border(look.subtleBorder)
         .cornerRadius(20)
         .onDrop { files in
             guard session.canAct(on: details), let file = files.first else { return }
@@ -779,24 +798,26 @@ struct PassView: View {
     }
 
     private func strengthMeter(_ strength: PasswordStrength) -> some View {
-        HStack(padding: 0, alignment: .center, spacing: 4) {
+        let filled = strength.rawValue > 2 ? look.success : look.isPaper ? theme.accent : theme.selected
+        let empty = look.subtleBorder
+        return HStack(padding: 0, alignment: .center, spacing: 4) {
             Canvas(width: .pt(68), height: .pt(5)) { list, box in
                 for bar in 0..<4 {
-                    let fill = bar < strength.rawValue ? (strength.rawValue > 2 ? PassLook.sage : PassLook.accent) : PassLook.faint
+                    let fill = bar < strength.rawValue ? filled : empty
                     list.roundedRect(x: box.x + Float(bar) * 17, y: box.y, w: 14, h: 4, color: fill, radius: 2)
                 }
             }
-            Text(strength.label, color: strength.rawValue > 2 ? PassLook.sageInk : PassLook.brown, font: fonts.caption)
+            Text(strength.label, color: strength.rawValue > 2 ? look.successInk : look.emphasisInk, font: fonts.caption)
         }
         .tooltip("Estimate based on length and character variety")
     }
 
     private func attachmentRow(_ attachment: VaultAttachment, details: PassSession.EntryDetails) -> some View {
         VStack(padding: 10, spacing: 8) {
-            Text(attachment.name, color: Theme.current.textPrimary)
+            Text(attachment.name, color: theme.textPrimary)
                 .agentId("attachment-name-\(attachment.id)")
             Text(ByteCountFormatter.string(fromByteCount: Int64(attachment.size), countStyle: .file),
-                 color: Theme.current.textDim)
+                 color: theme.textDim)
             HStack(padding: 0, alignment: .center, spacing: 6) {
                 Button("Open", isEnabled: !session.busy,
                        action: entryAction(details) { session.openAttachment(attachment) })
@@ -811,7 +832,7 @@ struct PassView: View {
                     .agentId("remove-attachment-\(attachment.id)")
             }
             if session.attachmentPendingRemoval?.id == attachment.id {
-                Text("Remove this attachment? The previous copy remains in entry history.", color: Theme.current.textSecondary)
+                Text("Remove this attachment? The previous copy remains in entry history.", color: theme.textSecondary)
                 HStack(padding: 0, alignment: .center, spacing: 6) {
                     Button("Cancel", action: entryAction(details) { session.attachmentPendingRemoval = nil })
                     Spacer()
@@ -821,7 +842,7 @@ struct PassView: View {
                 }
             }
         }
-        .background(Theme.current.inset)
+        .background(theme.inset)
         .cornerRadius(6)
     }
 

@@ -344,7 +344,9 @@ The panel always puts the application name first, after the lava button
 start with File/Edit. It supplies a name-over-Quit menu from
 the focused app's desktop entry when needed. An exported application menu is
 kept with its original actions and short title (for example, Explorer), matched
-by its name or its About/Quit item. Imported command menus stay in their order.
+by its name or its About/Quit item. A first menu such as Vault can also use a
+plain Quit command. File and Edit still get the fallback when Quit is the only
+match. Imported command menus stay in their order.
 
 ### Chromium's empty stubs
 

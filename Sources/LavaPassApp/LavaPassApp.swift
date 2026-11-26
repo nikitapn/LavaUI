@@ -10,12 +10,7 @@ struct LavaPassApp {
         let demo = CommandLine.arguments.contains("--demo")
         if !demo { unsetenv("LAVA_AGENT_PORT") }
         AppSettings.configure(appName: demo ? "LavaPassDemo" : "LavaPass")
-        Theme.current = PassLook.theme
         guard let editor = LavaHost.open(title: "LavaPass", width: 1120, height: 700) else { return }
-        // Client startup reads the compositor's theme. Keep the vault's
-        // palette for its own controls and for the in-window menu.
-        Theme.current = PassLook.theme
-        Theme.onSystemUpdate = { _ in Theme.current = PassLook.theme }
         LavaHost.setMinimumSize(editor: editor, width: 900, height: 560)
         let fonts = PassFonts(editor: editor)
         let path = CommandLine.arguments.dropFirst().first { !$0.hasPrefix("-") }
@@ -68,7 +63,8 @@ struct LavaPassApp {
             }
             return false
         }, makeRoot: {
-            PassView(session: session, fonts: fonts)
+            let look = PassLook(system: Theme.current)
+            return PassView(session: session, fonts: fonts, look: look).theme(look.theme)
         })
         session.lock()
     }

@@ -67,7 +67,7 @@ struct LavaPlayerApp {
                         ) { session.dialog = .settings }
                         MenuSeparator()
                         MenuItem(
-                            "Quit Player", id: "app.quit",
+                            "Quit", id: "app.quit",
                             shortcut: KeyShortcut(KeyCode.q, .primary)
                         ) {
                             session.savePlaybackPosition()

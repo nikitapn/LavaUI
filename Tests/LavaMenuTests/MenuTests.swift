@@ -266,6 +266,11 @@ final class MenuTests: XCTestCase {
         XCTAssertEqual(bar.adding(applicationMenu: node("LavaExplorer", ["shell.quit"])), bar)
     }
 
+    func testApplicationMenuRecognizesPlainQuitUnderADistinctTitle() {
+        let bar = MenuModel(menus: [node("Vault", ["Open…", "&Quit"]), node("Entry")])
+        XCTAssertEqual(bar.adding(applicationMenu: node("LavaPass", ["shell.quit"])), bar)
+    }
+
     func testApplicationMenuRecognizesMnemonicName() {
         let bar = MenuModel(menus: [node("&Code", ["settings"]), node("File")])
         XCTAssertEqual(bar.adding(applicationMenu: node("Code", ["shell.quit"])), bar)

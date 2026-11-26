@@ -169,10 +169,15 @@ public struct MenuModel: Equatable, Sendable {
         }
         if let first = menus.first {
             let title = plain(first.title)
-            let names = [title, plain(menu.title)].flatMap { ["about \($0)", "quit \($0)"] }
-            if title == plain(menu.title) || first.items.contains(where: {
+            let appName = plain(menu.title)
+            let namedCommands = [title, appName].flatMap { ["about \($0)", "quit \($0)"] }
+            // File and Edit can have a Quit of their own. A distinct title
+            // such as Vault can use plain Quit as its application command.
+            let acceptsPlainQuit = title != "file" && title != "edit"
+            if title == appName || first.items.contains(where: {
                 guard case .item(let item) = $0 else { return false }
-                return names.contains(plain(item.title))
+                let command = plain(item.title)
+                return namedCommands.contains(command) || (acceptsPlainQuit && command == "quit")
             }) {
                 return self
             }
