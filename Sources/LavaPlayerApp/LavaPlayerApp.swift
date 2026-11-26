@@ -24,6 +24,9 @@ enum Layout {
 
 @main
 struct LavaPlayerApp {
+    // SwiftPM executables have no bundle version. Use the Lava release version.
+    static let version = "0.1.0"
+
     static func main() {
         AppSettings.configure(appName: "LavaPlayer")
 
@@ -34,15 +37,11 @@ struct LavaPlayerApp {
         LavaHost.setMinimumSize(
             editor: editor, width: Layout.minWidth, height: Layout.minHeight
         )
-        Theme.current = .nebula
 
         let paths = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
         let session = PlayerSession(
             host: editor.resources, playlist: Playlist.from(paths: Array(paths))
         )
-        if let opened = session.playlist.current, !paths.isEmpty {
-            LavaHost.noteOpened(opened, appId: "LavaPlayer")
-        }
 
         // Started from the first frame rather than here: in client mode the
         // compositor connection — and with it the video target — is only
@@ -58,16 +57,53 @@ struct LavaPlayerApp {
             menu: {
                 MenuBar {
                     Menu("Player", id: "app") {
+                        MenuItem("About LavaPlayer", id: "app.about") {
+                            session.dialog = .about
+                        }
+                        MenuSeparator()
                         MenuItem(
-                            "Quit", id: "app.quit",
+                            "Settings…", id: "app.settings",
+                            shortcut: KeyShortcut(KeyCode.comma, .primary)
+                        ) { session.dialog = .settings }
+                        MenuSeparator()
+                        MenuItem(
+                            "Quit Player", id: "app.quit",
                             shortcut: KeyShortcut(KeyCode.q, .primary)
-                        ) { editor.requestClose() }
+                        ) {
+                            session.savePlaybackPosition()
+                            editor.requestClose()
+                        }
                     }
                     Menu("File", id: "file") {
                         MenuItem(
                             "Open…", id: "file.open",
                             shortcut: KeyShortcut(KeyCode.o, .primary)
                         ) { session.openDialog() }
+                        Menu("Open Recent", id: "file.recent") {
+                            if session.recentFiles.isEmpty {
+                                MenuItem("No Recent Files", id: "file.recent.empty", isEnabled: false) {}
+                            }
+                            for path in session.recentFiles {
+                                MenuItem(path, id: "file.recent.path.\(path)") {
+                                    session.openRecentFile(path)
+                                }
+                            }
+                            MenuSeparator()
+                            MenuItem(
+                                "Clear Recent", id: "file.recent.clear",
+                                isEnabled: !session.recentFiles.isEmpty
+                            ) { session.clearRecentFiles() }
+                        }
+                        MenuSeparator()
+                        MenuItem(
+                            "Reveal in File Manager", id: "file.reveal",
+                            isEnabled: session.currentFile != nil
+                        ) { session.revealCurrentFile() }
+                        MenuItem(
+                            "Close Media", id: "file.close",
+                            shortcut: KeyShortcut(KeyCode.w, .primary),
+                            isEnabled: session.hasMedia
+                        ) { session.closeMedia() }
                     }
                     Menu("Playback", id: "playback") {
                         MenuItem("Play / Pause", id: "playback.pause") { session.togglePause() }

@@ -12,9 +12,24 @@ import Observation
 /// be pure waste.
 @Observable
 final class PlayerSession: @unchecked Sendable {
+    enum Dialog {
+        case about
+        case settings
+    }
+
+    private static let recentFilesKey = "recentFiles"
+    private static let resumePlaybackKey = "resumePlayback"
+
     private(set) var playlist = Playlist()
     private(set) var state = Player.State()
     private(set) var error: String?
+    private(set) var recentFiles = Array(
+        (AppSettings.value(forKey: recentFilesKey, as: [String].self) ?? []).prefix(10)
+    )
+    private(set) var resumePlayback = AppSettings.bool(forKey: resumePlaybackKey) ?? false
+    private(set) var mpvVersion: String?
+    var dialog: Dialog?
+    @ObservationIgnored private var lastCheckpoint = FrameScheduler.now()
 
     /// Whether the window covers the screen. The bars hide while it does,
     /// and come back while the pointer moves.
@@ -47,18 +62,28 @@ final class PlayerSession: @unchecked Sendable {
         player = Player(host: host)
         self.playlist = playlist
         player.onState = { [unowned self] next in
-            state = next
-            if next.position != nil { error = nil }
+            let justPaused = next.paused && !state.paused
+            state = hasMedia ? next : Player.State(volume: next.volume, muted: next.muted)
+            // Client windows can be closed by the compositor without
+            // returning through the app's main loop.
+            if justPaused || FrameScheduler.now() - lastCheckpoint >= 10 {
+                savePlaybackPosition(wait: false)
+            }
         }
         player.onEndOfFile = { [unowned self] in endOfFile() }
         player.onError = { [unowned self] message in
+            guard hasMedia else { return }
             error = "Could not play \(currentName): \(message)"
         }
     }
 
     func start() -> Bool {
-        guard player.start() else { return false }
-        if let current = playlist.current { player.load(current) }
+        guard player.start(resumePlayback: resumePlayback) else { return false }
+        mpvVersion = player.version
+        if let current = playlist.current {
+            player.load(current)
+            rememberOpenedFile()
+        }
         return true
     }
 
@@ -71,6 +96,10 @@ final class PlayerSession: @unchecked Sendable {
     }
 
     var hasMedia: Bool { playlist.current != nil }
+    var currentFile: String? {
+        guard let path = playlist.current, path.hasPrefix("/") else { return nil }
+        return path
+    }
     var hasVideo: Bool { state.videoWidth > 0 && state.videoHeight > 0 }
 
     /// Where the seek bar is being dragged to, 0…1; nil when it is not.
@@ -110,10 +139,71 @@ final class PlayerSession: @unchecked Sendable {
     private func openMedia(_ paths: [String]) {
         let next = Playlist.from(paths: paths)
         guard let current = next.current else { return }
+        savePlaybackPosition()
         playlist = next
         error = nil
         player.load(current)
-        LavaHost.noteOpened(current, appId: "LavaPlayer")
+        rememberOpenedFile()
+    }
+
+    private func rememberOpenedFile() {
+        guard let path = currentFile else { return }
+        var updated: [String] = []
+        AppSettings.update([String].self, forKey: Self.recentFilesKey) { stored in
+            updated = Array(([path] + (stored ?? []).filter { $0 != path }).prefix(10))
+            return updated
+        }
+        recentFiles = updated
+        LavaHost.noteOpened(path, appId: "LavaPlayer")
+    }
+
+    func openRecentFile(_ path: String) {
+        var directory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &directory),
+              !directory.boolValue else {
+            error = "File no longer exists: \((path as NSString).lastPathComponent)"
+            return
+        }
+        openMedia([path])
+    }
+
+    func clearRecentFiles() {
+        recentFiles = []
+        AppSettings.set(recentFiles, forKey: Self.recentFilesKey)
+    }
+
+    func revealCurrentFile() {
+        guard let path = currentFile else { return }
+        let folder = (path as NSString).deletingLastPathComponent
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["xdg-open", folder]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { [weak self] process in
+            guard process.terminationStatus != 0 else { return }
+            MainQueue.async { [weak self] in
+                self?.error = "Could not open file location"
+            }
+        }
+        do {
+            try process.run()
+        } catch {
+            self.error = "Could not open file location"
+        }
+    }
+
+    func closeMedia() {
+        guard hasMedia else { return }
+        savePlaybackPosition()
+        player.unload()
+        playlist = Playlist()
+        state = Player.State(volume: state.volume, muted: state.muted)
+        error = nil
+        scrub = nil
+        scrubbing = false
+        closeTrackMenu()
+        leaveFullscreen()
     }
 
     func openDialog() {
@@ -137,13 +227,30 @@ final class PlayerSession: @unchecked Sendable {
     func step(_ by: Int) {
         let next = playlist.stepped(by: by)
         guard next.index != playlist.index, let current = next.current else { return }
+        savePlaybackPosition()
         playlist = next
         error = nil
         player.load(current)
     }
 
     private func endOfFile() {
+        guard state.path == playlist.current else { return }
+        if let path = currentFile { player.forgetPlaybackPosition(path) }
         if playlist.playsThrough, playlist.hasNext { step(1) }
+    }
+
+    func setResumePlayback(_ enabled: Bool) {
+        resumePlayback = enabled
+        AppSettings.set(enabled, forKey: Self.resumePlaybackKey)
+        player.setResumePlayback(enabled)
+        if enabled { savePlaybackPosition() }
+    }
+
+    func savePlaybackPosition(wait: Bool = true) {
+        guard resumePlayback, let path = currentFile, state.path == path,
+              let position = state.position, position > 0, !state.eofReached else { return }
+        player.savePlaybackPosition(wait: wait)
+        lastCheckpoint = FrameScheduler.now()
     }
 
     // MARK: - Transport
@@ -288,5 +395,8 @@ final class PlayerSession: @unchecked Sendable {
 
     func dismissError() { error = nil }
 
-    func shutdown() { player.stop() }
+    func shutdown() {
+        savePlaybackPosition()
+        player.stop()
+    }
 }

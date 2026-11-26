@@ -23,6 +23,7 @@ final class Player: @unchecked Sendable {
     /// What mpv says, as the main thread last heard it. Applied to the session
     /// by `onState`; the player itself keeps no opinion about it.
     struct State: Equatable {
+        var path: String?
         var position: Double?
         var duration: Double?
         var paused = false
@@ -94,7 +95,7 @@ final class Player: @unchecked Sendable {
 
     /// Brings mpv up. False with a reason on stderr when even the software
     /// path will not start — mpv itself refusing to initialise.
-    func start() -> Bool {
+    func start(resumePlayback: Bool) -> Bool {
         let target = videoHost?.videoTarget()
         let context = Unmanaged.passUnretained(self).toOpaque()
         var callbacks = LavaVideoCallbacks()
@@ -127,7 +128,12 @@ final class Player: @unchecked Sendable {
         }
 
         var error = [CChar](repeating: 0, count: 256)
-        let options: [String?] = Self.options()
+        let options: [String?] = Self.options() + [
+            "resume-playback=\(resumePlayback ? "yes" : "no")",
+            "resume-playback-check-mtime=yes",
+            "watch-later-options=start",
+            "watch-later-directory=\(Self.watchLaterDirectory.path)",
+        ]
         // The trailing nil only keeps the array non-empty; the count says
         // where it ends.
         let made: OpaquePointer? = withCStrings(options + [nil]) { optionPointers in
@@ -171,6 +177,19 @@ final class Player: @unchecked Sendable {
     private static func options() -> [String] {
         let raw = ProcessInfo.processInfo.environment["LAVA_PLAYER_MPV"] ?? ""
         return raw.split(separator: " ").map(String.init).filter { $0.contains("=") }
+    }
+
+    private static var watchLaterDirectory: URL {
+        let stateHome = ProcessInfo.processInfo.environment["XDG_STATE_HOME"]
+        let base = stateHome.flatMap { $0.hasPrefix("/") ? URL(fileURLWithPath: $0) : nil }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/state")
+        return base.appendingPathComponent("lavaplayer/watch-later")
+    }
+
+    var version: String? {
+        guard let mpv, let value = mpv_get_property_string(mpv, "mpv-version") else { return nil }
+        defer { mpv_free(value) }
+        return String(cString: value)
     }
 
     func stop() {
@@ -286,6 +305,20 @@ final class Player: @unchecked Sendable {
         setFlag("pause", false)
     }
 
+    func unload() { command(["stop"]) }
+
+    func setResumePlayback(_ enabled: Bool) {
+        setFlag("resume-playback", enabled)
+    }
+
+    func savePlaybackPosition(wait: Bool) {
+        command(["write-watch-later-config"], wait: wait)
+    }
+
+    func forgetPlaybackPosition(_ path: String) {
+        command(["delete-watch-later-config", path])
+    }
+
     func togglePause() {
         if state.eofReached {
             // At the end, play means from the start — what every player does.
@@ -350,10 +383,15 @@ final class Player: @unchecked Sendable {
         command(["osd-msg", "sub-add", path, "select"])
     }
 
-    private func command(_ arguments: [String]) {
+    private func command(_ arguments: [String], wait: Bool = false) {
         guard let mpv else { return }
-        _ = withCStrings(arguments + [nil]) { pointers in
-            mpv_command_async(mpv, 0, UnsafeMutablePointer(mutating: pointers))
+        withCStrings(arguments + [nil]) { pointers in
+            let argv = UnsafeMutablePointer(mutating: pointers)
+            if wait {
+                _ = mpv_command(mpv, argv)
+            } else {
+                _ = mpv_command_async(mpv, 0, argv)
+            }
         }
     }
 
@@ -373,7 +411,7 @@ final class Player: @unchecked Sendable {
 
     private enum Watched: UInt64, CaseIterable {
         case position = 1, duration, pause, volume, mute, title, eof, idle,
-             width, height, tracks, subtitlesVisible
+             width, height, tracks, subtitlesVisible, path
 
         var name: String {
             switch self {
@@ -383,6 +421,7 @@ final class Player: @unchecked Sendable {
             case .volume: "volume"
             case .mute: "mute"
             case .title: "media-title"
+            case .path: "path"
             case .eof: "eof-reached"
             case .idle: "idle-active"
             case .width: "dwidth"
@@ -396,7 +435,7 @@ final class Player: @unchecked Sendable {
             switch self {
             case .position, .duration, .volume: MPV_FORMAT_DOUBLE
             case .pause, .mute, .eof, .idle, .subtitlesVisible: MPV_FORMAT_FLAG
-            case .title: MPV_FORMAT_STRING
+            case .title, .path: MPV_FORMAT_STRING
             case .width, .height: MPV_FORMAT_INT64
             case .tracks: MPV_FORMAT_NODE
             }
@@ -454,6 +493,11 @@ final class Player: @unchecked Sendable {
         func int() -> Int {
             present ? Int(change.data.assumingMemoryBound(to: Int64.self).pointee) : 0
         }
+        func string() -> String? {
+            guard present else { return nil }
+            return change.data.assumingMemoryBound(to: UnsafePointer<CChar>?.self)
+                .pointee.map { String(cString: $0) }
+        }
         switch which {
         // Quarter seconds: `time-pos` changes every frame, and every change is
         // a body pass for the readout and the slider. Four a second is as
@@ -472,11 +516,8 @@ final class Player: @unchecked Sendable {
             state.tracks = present
                 ? Self.tracks(change.data.assumingMemoryBound(to: mpv_node.self).pointee)
                 : []
-        case .title:
-            state.title = present
-                ? change.data.assumingMemoryBound(to: UnsafePointer<CChar>?.self).pointee
-                    .map { String(cString: $0) }
-                : nil
+        case .title: state.title = string()
+        case .path: state.path = string()
         }
     }
 }

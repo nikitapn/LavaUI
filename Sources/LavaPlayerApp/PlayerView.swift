@@ -40,6 +40,62 @@ struct PlayerView: View {
         }
         .background(Palette.mat)
         .onDrop { urls in session.open(paths: urls.map(\.path)) }
+        .overlay(
+            isPresented: Binding(
+                get: { session.dialog != nil },
+                set: { if !$0 { session.dialog = nil } }
+            ),
+            placement: OverlayPlacement { context in
+                let width = min(360, context.viewport.width)
+                let height = context.idealSize.height
+                return OverlayFrame(
+                    x: (context.viewport.width - width) / 2,
+                    y: (context.viewport.height - height) / 2,
+                    width: width, height: height
+                )
+            },
+            style: dialogStyle
+        ) {
+            dialogContent
+        }
+    }
+
+    private var dialogStyle: OverlayStyle {
+        var style = OverlayStyle(padding: 16, scrim: .black.opacity(0.4), modal: true)
+        style.onKey = { key in
+            guard key.key == KeyCode.escape else { return false }
+            session.dialog = nil
+            return true
+        }
+        return style
+    }
+
+    private var dialogContent: some View {
+        VStack(spacing: 12) {
+            if session.dialog == .about {
+                Text("About LavaPlayer", color: Theme.current.textPrimary)
+                Text("LavaPlayer \(LavaPlayerApp.version)", color: Theme.current.textSecondary)
+                if let version = session.mpvVersion {
+                    Text(version, color: Theme.current.textSecondary)
+                }
+            } else {
+                Text("Player Settings", color: Theme.current.textPrimary)
+                Toggle(
+                    "Resume playback on reopen",
+                    isOn: Binding(
+                        get: { session.resumePlayback },
+                        set: { session.setResumePlayback($0) }
+                    )
+                )
+                .agentId("resume-playback")
+            }
+            HStack {
+                Spacer()
+                Button("Done") { session.dialog = nil }
+                    .agentId("player-dialog-done")
+            }
+        }
+        .agentId("player-dialog")
     }
 
     // MARK: - The video
