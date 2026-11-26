@@ -37,6 +37,7 @@ values and removes comments and trailing commas.
 | `tabSize` | Integer from 1 to 32 | `4` |
 | `insertSpaces` | Boolean | `true` |
 | `detectIndentation` | Boolean | `true` |
+| `warmSemanticTokens` | Boolean | `true` |
 | `languages` | Object keyed by language ID | `{}` |
 
 Font settings apply to the document. If fontconfig can't locate the requested
@@ -72,6 +73,14 @@ setting. Use `c` for C and `cpp` for C++ and shared `.h` headers.
   }
 }
 ```
+
+Language-server colours are cached per file, so a file opened again is
+coloured at once rather than when its server has warmed up.
+`warmSemanticTokens` also fills that cache for files not yet opened, while the
+editor is idle: one file at a time, through the servers already running, the
+tabs of the session first, then their folders, then the rest of the project as
+ripgrep lists it. It pauses while you type, while a server reports its own
+progress (indexing), and on battery.
 
 ## Language servers
 

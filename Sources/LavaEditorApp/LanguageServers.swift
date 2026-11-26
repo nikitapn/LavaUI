@@ -1,6 +1,8 @@
 import Foundation
 import LavaEditorSettings
 import LavaLSPCore
+import LavaProjectCore
+import LavaShell
 import LavaText
 import LavaUI
 import Observation
@@ -40,9 +42,14 @@ final class LanguageServers {
 
     final class Server {
         let client: LSPClient
+        /// What the config says it serves — which files it can warm.
+        let languages: Set<String>
         var capabilities: ServerCapabilities?
         var reportedFailure = false
-        init(client: LSPClient) { self.client = client }
+        init(client: LSPClient, languages: Set<String>) {
+            self.client = client
+            self.languages = languages
+        }
     }
 
     /// What one server has been told about one tab.
@@ -102,6 +109,12 @@ final class LanguageServers {
         _ documents: [EditorDocument], active: Int, configs: [LanguageServerConfig], workspaceRoot: URL?
     ) {
         var live = Set<Int>()
+        warm.tabs = documents.compactMap { $0.url?.standardizedFileURL.path }
+        if documents.contains(where: { document in
+            opened[document.id].map { $0.text != document.text && !$0.text.isEmpty } ?? false
+        }) {
+            warm.lastActivity = Date()
+        }
         for document in documents {
             guard document.isLoaded, document.loadError == nil, let url = document.url else { continue }
             let path = url.standardizedFileURL.path
@@ -202,6 +215,9 @@ final class LanguageServers {
             } else {
                 semanticRetries[id] = nil
                 if let open = opened[id], open.text == text, !open.modified { remember(id, open) }
+                // Past its warm-up: a server that answers a tab will answer
+                // the files nobody has opened yet.
+                if warm.answered.insert(key).inserted { scheduleWarm(after: 2) }
             }
         case .success(nil):
             retrySemantic(id)
@@ -256,6 +272,180 @@ final class LanguageServers {
         DispatchQueue.global(qos: .utility).async {
             cache.store(path: path, text: text, server: server, encoding: encoding, tokens: tokens)
         }
+    }
+
+    // MARK: Warming the cache
+
+    /// Off with `editor.warmSemanticTokens: false`.
+    @ObservationIgnored var warmEnabled = true
+
+    /// Filling the token cache for files nobody has opened, so they open
+    /// coloured too: one file at a time, through the server that would
+    /// serve it, only while the editor is idle — nothing typed for a few
+    /// seconds, nothing of the user's waiting on a server, no server busy
+    /// with its own progress, not on battery — and only through servers
+    /// that have already answered a tab, which is how a server's warm-up
+    /// (sourcekit-lsp's empty answers) is told from a file with nothing in
+    /// it. A file is opened, asked for, and closed again at once, so the
+    /// server does not keep its AST. Files whose entry is current
+    /// (`SemanticTokenCache.isCurrent`) cost a `stat` and one line of the
+    /// entry, so a warm cache is checked in moments at every start.
+    private struct Warmup {
+        var queue: [String] = []
+        var queued: Set<String> = []
+        /// Server roots whose files have been listed.
+        var listed: Set<String> = []
+        /// The session's tabs, opened or not, which go first.
+        var tabs: [String] = []
+        var inFlight: String?
+        var scheduled = false
+        var lastActivity = Date.distantPast
+        var answered: Set<Key> = []
+        /// Servers a warm request crashed: left alone for the session, so
+        /// warming never spends more than one of the client's restarts.
+        var crashed: Set<Key> = []
+        var progress: [Key: Set<String>] = [:]
+        var battery: (checked: Date, onBattery: Bool)?
+    }
+
+    @ObservationIgnored private var warm = Warmup()
+
+    /// Seconds without typing before warming resumes.
+    private static let warmIdle: TimeInterval = 3
+    /// Larger files are left until they are opened.
+    private static let warmLargestFile = 2 << 20
+
+    private func scheduleWarm(after seconds: Double = 0.2) {
+        guard warmEnabled, !warm.scheduled else { return }
+        warm.scheduled = true
+        let owner = LanguageServersRef(self)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + seconds) {
+            MainQueue.async { owner.servers?.warmStep() }
+        }
+    }
+
+    private var warmIdleNow: Bool {
+        guard Date().timeIntervalSince(warm.lastActivity) > Self.warmIdle,
+              semanticWanted.isEmpty, semanticInFlight.isEmpty, lookingUp.isEmpty,
+              warm.progress.values.allSatisfy(\.isEmpty) else { return false }
+        if warm.battery.map({ Date().timeIntervalSince($0.checked) > 30 }) ?? true {
+            warm.battery = (Date(), PowerSupply.read().map { !$0.pluggedIn } ?? false)
+        }
+        return warm.battery?.onBattery != true
+    }
+
+    private func warmStep() {
+        warm.scheduled = false
+        guard warmEnabled, warm.inFlight == nil else { return }
+        guard warmIdleNow else { return scheduleWarm(after: 2) }
+        for key in warm.answered where !warm.listed.contains(key.root) {
+            warm.listed.insert(key.root)
+            listForWarming(key.root)
+        }
+        while !warm.queue.isEmpty {
+            let path = warm.queue.removeFirst()
+            guard !opened.values.contains(where: { $0.path == path }),
+                  let (key, language) = warmServer(for: path) else { continue }
+            warm.inFlight = path
+            let cache = tokenCache
+            let owner = LanguageServersRef(self)
+            DispatchQueue.global(qos: .utility).async {
+                var read: String?
+                if !cache.isCurrent(path: path, server: key.name),
+                   let data = FileManager.default.contents(atPath: path), data.count <= Self.warmLargestFile {
+                    read = String(data: data, encoding: .utf8)
+                }
+                let text = read
+                MainQueue.async { owner.servers?.warmRequest(path, key: key, language: language, text: text) }
+            }
+            return
+        }
+    }
+
+    /// The running server that would serve `path`, if it has answered a tab.
+    private func warmServer(for path: String) -> (Key, String)? {
+        guard let language = Self.languageID(for: URL(fileURLWithPath: path)) else { return nil }
+        let key = servers.first { key, server in
+            path.hasPrefix(key.root + "/") && server.languages.contains(language)
+                && warm.answered.contains(key) && !warm.crashed.contains(key) && !semanticUnsupported.contains(key)
+                && server.capabilities?.supportsSemanticTokensFull == true
+        }?.key
+        return key.map { ($0, language) }
+    }
+
+    private func listForWarming(_ root: String) {
+        let tabs = warm.tabs.filter { $0.hasPrefix(root + "/") }
+        let owner = LanguageServersRef(self)
+        DispatchQueue.global(qos: .utility).async {
+            let files = (ProjectFiles.list(root: URL(fileURLWithPath: root)) ?? [])
+                .filter { Self.languageID(for: URL(fileURLWithPath: $0)) != nil }
+            let ordered = SemanticTokenWarmup.order(files: files, tabs: tabs)
+            MainQueue.async {
+                guard let servers = owner.servers else { return }
+                for path in ordered where servers.warm.queued.insert(path).inserted {
+                    servers.warm.queue.append(path)
+                }
+                servers.scheduleWarm()
+            }
+        }
+    }
+
+    /// `text` is nil for a file whose entry is current, or that could not be
+    /// read: nothing to ask.
+    private func warmRequest(_ path: String, key: Key, language: String, text: String?) {
+        guard let text else {
+            warm.inFlight = nil
+            return scheduleWarm(after: 0)
+        }
+        guard warmIdleNow, let server = servers[key], let capabilities = server.capabilities,
+              !opened.values.contains(where: { $0.path == path }) else {
+            // Busy again: put it back at the front for later.
+            warm.inFlight = nil
+            if servers[key] != nil, warm.queued.contains(path) { warm.queue.insert(path, at: 0) }
+            return scheduleWarm(after: 2)
+        }
+        let uri = URL(fileURLWithPath: path).absoluteString
+        let encoding = capabilities.positionEncoding
+        server.client.didOpen(uri: uri, languageID: language, text: text)
+        let owner = LanguageServersRef(self)
+        server.client.semanticTokens(uri: uri) { result in
+            MainQueue.async {
+                owner.servers?.warmArrived(path, uri: uri, key: key, text: text, encoding: encoding, result: result)
+            }
+        }
+    }
+
+    private func warmArrived(
+        _ path: String, uri: String, key: Key, text: String, encoding: PositionEncoding,
+        result: Result<DecodedSemanticTokens?, LSPClientError>
+    ) {
+        warm.inFlight = nil
+        // Unless a tab opened it meanwhile, which now owns the document.
+        if let server = servers[key], !opened.values.contains(where: { $0.path == path }) {
+            server.client.didClose(uri: uri)
+        }
+        let cache = tokenCache
+        let name = key.name
+        switch result {
+        case .success(let decoded?) where !decoded.tokens.isEmpty:
+            DispatchQueue.global(qos: .utility).async {
+                cache.store(path: path, text: text, server: name, encoding: encoding, tokens: decoded.tokens)
+            }
+        case .failure(.serverExited), .failure(.timedOut):
+            // Servers have bugs on particular files: sourcekit-lsp crashes on
+            // some in this repository whether a tab or the warmer opens them.
+            // A timeout is the same thing seen earlier — the server dying on
+            // this file in the background — and whatever is asked next only
+            // finds out; so both mean: not this file again until it changes,
+            // and not this server again this session.
+            DispatchQueue.global(qos: .utility).async { cache.quarantine(path: path, server: name) }
+            warm.crashed.insert(key)
+            report("\(name) failed on \(URL(fileURLWithPath: path).lastPathComponent) while caching colours in the background; "
+                   + "it will not be asked about that file again until it changes.")
+        default:
+            break
+        }
+        scheduleWarm()
     }
 
     /// Asks again later, backing off, for a tab the server had nothing for
@@ -393,7 +583,7 @@ final class LanguageServers {
         ) { event in
             MainQueue.async { owner.servers?.handle(event, from: key) }
         }
-        let server = Server(client: client)
+        let server = Server(client: client, languages: Set(config.languages))
         servers[key] = server
         client.start()
         return server
@@ -419,6 +609,7 @@ final class LanguageServers {
         semantic.removeAll()
         semanticRetries.removeAll()
         cacheLooked.removeAll()
+        warm = Warmup()
         refreshes.removeAll()
     }
 
@@ -436,6 +627,8 @@ final class LanguageServers {
             diagnostics[path] = published.diagnostics.isEmpty ? nil : published.diagnostics
         case .exited(let exit, let willRestart):
             server.capabilities = nil
+            warm.answered.remove(key)
+            warm.progress[key] = nil
             if !willRestart, !server.reportedFailure {
                 server.reportedFailure = true
                 report("\(key.name) stopped (\(exit)).")
@@ -444,6 +637,17 @@ final class LanguageServers {
             if !server.reportedFailure {
                 server.reportedFailure = true
                 report("\(key.name): \(error)")
+            }
+        case .notification(method: "$/progress", let params):
+            // A server busy with its own work — indexing, loading a package —
+            // is left to it.
+            let token = params?["token"].map { $0.string ?? $0.integer.map(String.init) ?? "" } ?? ""
+            switch params?["value"]?["kind"]?.string {
+            case "begin":
+                warm.progress[key, default: []].insert(token)
+            case "end":
+                warm.progress[key]?.remove(token)
+            default: break
             }
         case .notification:
             break

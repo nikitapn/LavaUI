@@ -16,6 +16,11 @@ import Foundation
 /// One small file per source file, written atomically, so two editors racing
 /// to write one leave one whole entry; anything unreadable is a miss. The
 /// directory keeps the `maximumEntries` most recently written.
+///
+/// Its first line is a header on its own, with the source file's size and
+/// modification time as they were when the tokens were written — enough for
+/// `isCurrent` to tell, for a whole project, which entries are missing or
+/// out of date by reading one line of each and nothing of the sources.
 public struct SemanticTokenCache: Sendable {
     public let directory: URL
     public let maximumEntries: Int
@@ -41,9 +46,11 @@ public struct SemanticTokenCache: Sendable {
     /// The tokens `server` gave for `text` at `path`, if they are on disk.
     public func load(path: String, text: String, server: String) -> Entry? {
         guard let data = try? Data(contentsOf: file(for: path)),
-              let stored = try? JSONDecoder().decode(Stored.self, from: data),
-              stored.version == Stored.currentVersion, stored.path == path, stored.server == server,
-              stored.length == text.utf8.count, stored.hash == Self.hash(text),
+              let newline = data.firstIndex(of: 0x0a),
+              let header = try? JSONDecoder().decode(Header.self, from: data[..<newline]),
+              header.version == Header.currentVersion, header.path == path, header.server == server,
+              header.length == text.utf8.count, header.hash == Self.hash(text),
+              let stored = try? JSONDecoder().decode(Stored.self, from: data[(newline + 1)...]),
               stored.data.count.isMultiple(of: 5)
         else { return nil }
         var tokens: [SemanticToken] = []
@@ -58,6 +65,41 @@ public struct SemanticTokenCache: Sendable {
             ))
         }
         return Entry(encoding: stored.encoding, tokens: tokens)
+    }
+
+    /// Whether `server`'s entry for `path` was written for the file as it is
+    /// on disk now, judged by its size and modification time — the one line
+    /// of the entry, and a `stat` of the source.
+    public func isCurrent(path: String, server: String) -> Bool {
+        guard let source = Self.sourceStamp(path), let header = readHeader(path) else { return false }
+        return header.version == Header.currentVersion && header.path == path && header.server == server
+            && header.sourceSize == source.size && header.sourceModified == source.modified
+    }
+
+    /// Records that asking `server` about `path`, as it is on disk now, went
+    /// wrong — it crashed the server or never answered — so that filling the
+    /// cache in the background does not ask again, this session or the next,
+    /// until the file changes. `isCurrent` is true for it; `load` finds
+    /// nothing. A file the user opens is still asked: this is only for
+    /// asking unprompted.
+    public func quarantine(path: String, server: String) {
+        guard let stamp = Self.sourceStamp(path) else { return }
+        let header = Header(
+            version: Header.currentVersion, path: path, server: server, length: stamp.size, hash: "",
+            sourceSize: stamp.size, sourceModified: stamp.modified, quarantined: true
+        )
+        guard let head = try? JSONEncoder().encode(header) else { return }
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try (head + Data([0x0a])).write(to: file(for: path), options: .atomic)
+        } catch {
+            return
+        }
+    }
+
+    /// Whether `path` is quarantined for `server` as the file is now.
+    public func isQuarantined(path: String, server: String) -> Bool {
+        isCurrent(path: path, server: server) && readHeader(path)?.quarantined == true
     }
 
     /// Records `tokens` as what `server` gave for `text` at `path`.
@@ -89,11 +131,16 @@ public struct SemanticTokenCache: Sendable {
             }
             data += [token.line, token.start, token.length, type, bits]
         }
-        let stored = Stored(
-            version: Stored.currentVersion, path: path, server: server, length: text.utf8.count,
-            hash: Self.hash(text), encoding: encoding, types: types, modifiers: modifiers, data: data
+        // The source's stamp only when it is the text being recorded: a
+        // buffer with unsaved edits is not what is on disk.
+        let stamp = Self.sourceStamp(path).flatMap { $0.size == text.utf8.count ? $0 : nil }
+        let header = Header(
+            version: Header.currentVersion, path: path, server: server, length: text.utf8.count,
+            hash: Self.hash(text), sourceSize: stamp?.size, sourceModified: stamp?.modified
         )
-        guard let encoded = try? JSONEncoder().encode(stored) else { return }
+        let stored = Stored(encoding: encoding, types: types, modifiers: modifiers, data: data)
+        guard let head = try? JSONEncoder().encode(header), let body = try? JSONEncoder().encode(stored) else { return }
+        let encoded = head + Data([0x0a]) + body
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try encoded.write(to: file(for: path), options: .atomic)
@@ -130,16 +177,40 @@ public struct SemanticTokenCache: Sendable {
         return String(value, radix: 16)
     }
 
-    /// Positions absolute rather than delta-encoded, so an entry can be read
-    /// without the server's legend. Types and modifiers are this entry's own
-    /// tables.
-    private struct Stored: Codable {
-        static let currentVersion = 1
+    private func readHeader(_ path: String) -> Header? {
+        guard let handle = FileHandle(forReadingAtPath: file(for: path).path) else { return nil }
+        defer { try? handle.close() }
+        guard let head = try? handle.read(upToCount: 16 * 1024),
+              let newline = head.firstIndex(of: 0x0a) else { return nil }
+        return try? JSONDecoder().decode(Header.self, from: head[..<newline])
+    }
+
+    private static func sourceStamp(_ path: String) -> (size: Int, modified: Double)? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let size = (attributes[.size] as? NSNumber)?.intValue,
+              let modified = attributes[.modificationDate] as? Date else { return nil }
+        return (size, modified.timeIntervalSince1970)
+    }
+
+    /// The first line: what the entry is for.
+    private struct Header: Codable {
+        static let currentVersion = 2
         let version: Int
         let path: String
         let server: String
         let length: Int
         let hash: String
+        /// The source as it was when written, if the text was what it held.
+        let sourceSize: Int?
+        let sourceModified: Double?
+        /// Asking about this file went wrong; see `quarantine`.
+        var quarantined: Bool? = nil
+    }
+
+    /// The second: the tokens. Positions absolute rather than delta-encoded,
+    /// so an entry can be read without the server's legend; types and
+    /// modifiers are this entry's own tables.
+    private struct Stored: Codable {
         let encoding: PositionEncoding
         let types: [String]
         let modifiers: [String]

@@ -35,12 +35,15 @@ public struct EditorPreferences: Equatable, Sendable {
     public let insertSpaces: Bool
     /// Whether a file's own indentation outranks `tabSize`/`insertSpaces`.
     public let detectIndentation: Bool
+    /// Whether idle time fills the semantic-token cache for files not yet
+    /// opened, through the language servers already running.
+    public let warmSemanticTokens: Bool
     public let languageIndentation: [String: EditorIndentationPreferences]
 
     public static let defaults = Self(
         fontFamily: "Noto Sans Mono", fontSize: 14, lineHeight: 1.5,
         wordWrap: false, lineNumbers: true, highlightChangedLines: true,
-        tabSize: 4, insertSpaces: true, detectIndentation: true, languageIndentation: [:]
+        tabSize: 4, insertSpaces: true, detectIndentation: true, warmSemanticTokens: true, languageIndentation: [:]
     )
 
     public func indentation(for language: String) -> EditorIndentationPreferences {
@@ -54,6 +57,7 @@ public struct EditorPreferences: Equatable, Sendable {
             "lineNumbers": .bool(lineNumbers), "highlightChangedLines": .bool(highlightChangedLines),
             "tabSize": .number(String(tabSize)), "insertSpaces": .bool(insertSpaces),
             "detectIndentation": .bool(detectIndentation),
+            "warmSemanticTokens": .bool(warmSemanticTokens),
             "languages": .object(languageIndentation.mapValues {
                 .object(["tabSize": .number(String($0.tabSize)), "insertSpaces": .bool($0.insertSpaces)])
             }),
@@ -318,6 +322,9 @@ private struct SettingsValidator {
             tabSize: tabSize, insertSpaces: insertSpaces,
             detectIndentation: read(
                 path("detectIndentation"), "a Boolean", fallback: fallback.detectIndentation, Self.bool
+            ),
+            warmSemanticTokens: read(
+                path("warmSemanticTokens"), "a Boolean", fallback: fallback.warmSemanticTokens, Self.bool
             ),
             languageIndentation: readLanguageIndentation(tabSize: tabSize, insertSpaces: insertSpaces)
         )

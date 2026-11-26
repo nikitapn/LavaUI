@@ -567,6 +567,7 @@ var targets: [Target] = [
             "CExtensionHost",
             "LavaUI", "LavaHost", "LavaText", "LavaDiffCore", "LavaGitCore", "LavaProjectCore", "LavaAgentCore",
             "LavaExplorerCore", "LavaLSPCore", "LavaEditorSettings", "LavaTerminal", "LavaEditorSyntax",
+            "LavaShell",
         ] + (haveNprpc ? [Target.Dependency("LavaClient"), "LavaEditorExtensionAPI",
                            .product(name: "NPRPC", package: "nprpc_swift")] : []),
         resources: [.copy("Resources")],

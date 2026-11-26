@@ -24,6 +24,7 @@ extension EditorSession {
 
     func syncLanguageServers() {
         languageSyncScheduled = false
+        languageServers.warmEnabled = settingsFiles.effective.editor.warmSemanticTokens
         languageServers.sync(
             documents, active: active.id, configs: LanguageServerConfig.from(settingsFiles.effective),
             workspaceRoot: project?.tree.root

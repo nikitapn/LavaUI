@@ -74,3 +74,57 @@ import Testing
         #expect(cache.load(path: "/p/4.swift", text: "x", server: "s") != nil)
     }
 }
+
+@Suite struct SemanticTokenWarmupTests {
+    @Test func tabsThenTheirNeighboursThenTheRest() {
+        let files = ["/p/z/last.swift", "/p/a/one.swift", "/p/b/near.swift", "/p/b/tab.swift", "/p/a/two.swift"]
+        let order = SemanticTokenWarmup.order(files: files, tabs: ["/p/b/tab.swift", "/q/elsewhere.cpp"])
+        #expect(order == [
+            "/p/b/tab.swift", "/q/elsewhere.cpp",
+            "/p/b/near.swift",
+            "/p/a/one.swift", "/p/a/two.swift", "/p/z/last.swift",
+        ])
+    }
+}
+
+extension SemanticTokenCacheTests {
+    @Test func anEntryIsCurrentWhileItsFileIsUnchanged() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let source = directory.appendingPathComponent("source.swift")
+        try Data("let a = 1\n".utf8).write(to: source)
+        let cache = SemanticTokenCache(directory: directory.appendingPathComponent("cache"))
+        #expect(!cache.isCurrent(path: source.path, server: "s"), "nothing stored yet")
+
+        cache.store(path: source.path, text: "let a = 1\n", server: "s", encoding: .utf8, tokens: try tokens())
+        #expect(cache.isCurrent(path: source.path, server: "s"))
+        #expect(!cache.isCurrent(path: source.path, server: "clangd"))
+
+        try Data("let a = 22\n".utf8).write(to: source)
+        #expect(!cache.isCurrent(path: source.path, server: "s"), "the file changed on disk")
+
+        // Tokens for unsaved text say nothing about the file.
+        cache.store(path: source.path, text: "let a = 333\n", server: "s", encoding: .utf8, tokens: try tokens())
+        #expect(!cache.isCurrent(path: source.path, server: "s"))
+        #expect(cache.load(path: source.path, text: "let a = 333\n", server: "s") != nil, "still usable for that text")
+    }
+}
+
+extension SemanticTokenCacheTests {
+    @Test func aQuarantinedFileIsCurrentButHasNoTokensUntilItChanges() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let source = directory.appendingPathComponent("crashes.swift")
+        try Data("let a = 1\n".utf8).write(to: source)
+        let cache = SemanticTokenCache(directory: directory.appendingPathComponent("cache"))
+        cache.quarantine(path: source.path, server: "s")
+        #expect(cache.isCurrent(path: source.path, server: "s"), "nothing to warm")
+        #expect(cache.isQuarantined(path: source.path, server: "s"))
+        #expect(cache.load(path: source.path, text: "let a = 1\n", server: "s") == nil)
+        #expect(!cache.isQuarantined(path: source.path, server: "clangd"))
+
+        try Data("let a = 2\n".utf8).write(to: source)
+        #expect(!cache.isCurrent(path: source.path, server: "s"), "changed: worth asking again")
+        #expect(!cache.isQuarantined(path: source.path, server: "s"))
+    }
+}
