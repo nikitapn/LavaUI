@@ -983,6 +983,7 @@ enum NodeRegistries {
         FocusableRouter.unregisterAll(ids: ids)
         FocusTargets.unregisterAll(ids: ids)
         FocusBindings.unregisterAll(ids: ids)
+        FocusLoss.unregisterAll(ids: ids)
         HoverState.unregisterAll(ids: ids)
         PointerCapture.discard(ids: ids)
     }

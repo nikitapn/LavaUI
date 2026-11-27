@@ -523,6 +523,8 @@ final class LeafNode: YogaBoxNode {
     var focusRingColor: Color?
     /// Per-field override of `Theme.restingOutline`.
     var restingOutline: Bool?
+    /// What focus leaving does to a text control's selection.
+    var unfocusedSelection: UnfocusedSelection = .cleared
     /// Button-only payload.
     var buttonStyle: ButtonStyle?
     var isPressed = false

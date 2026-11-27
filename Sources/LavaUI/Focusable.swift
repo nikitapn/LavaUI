@@ -132,6 +132,22 @@ enum FocusTargets {
     }
 }
 
+/// What a text control does with its selection when focus leaves it — see
+/// `UnfocusedSelection`. Fired by `FocusManager` for the node that lost it.
+enum FocusLoss {
+    nonisolated(unsafe) private static var handlers: [NodeID: () -> Void] = [:]
+
+    static func register(_ id: NodeID, _ handler: @escaping () -> Void) {
+        handlers[id] = handler
+    }
+
+    static func unregisterAll(ids: Set<NodeID>) {
+        for id in ids { handlers[id] = nil }
+    }
+
+    static func fire(_ id: NodeID) { handlers[id]?() }
+}
+
 /// `.focused($flag)` registrations: which flag mirrors which focus target.
 ///
 /// Two directions, and they meet in one rule — **a flag is written back the

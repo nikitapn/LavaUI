@@ -13,6 +13,22 @@ import Foundation
 /// Focus chrome comes from `Theme.focusRingStyle` by default (a full rounded
 /// outline). Pass `focusRing:` / `focusRingWidth:` / `focusRingColor:` to
 /// override per field — e.g. `.underline` for the historical top+bottom bars.
+/// What a text control shows of its selection once focus has moved
+/// elsewhere. Only focus moving inside the window counts: switching to
+/// another window leaves every control's focus, and selection, as it was.
+public enum UnfocusedSelection: Equatable, Sendable {
+    /// The selection collapses to its caret when focus leaves. Right for a
+    /// form, where a highlight left behind in the field before reads as the
+    /// field still being the one typed into. `TextField`'s default.
+    case cleared
+    /// Kept, and drawn halfway to the background — the selection is still
+    /// there for a command to act on, but plainly not where keys go.
+    /// `EditorView`'s default, as in most code editors.
+    case dimmed
+    /// Kept and drawn as if focused.
+    case kept
+}
+
 public struct TextField: PrimitiveView {
     /// The text being edited.
     @Binding public var text: String
@@ -73,6 +89,8 @@ public struct TextField: PrimitiveView {
     public var restingOutline: Bool?
     /// Shows a dot per character instead of the text — a password.
     public var isSecure: Bool
+    /// What happens to the selection when focus moves to another control.
+    public var unfocusedSelection: UnfocusedSelection = .cleared
 
     /// Creates a text field.
     /// - Parameters:
@@ -173,6 +191,13 @@ public struct TextField: PrimitiveView {
         }
     }
 
+    /// The same field, doing `policy` with its selection when focus leaves.
+    public func unfocusedSelection(_ policy: UnfocusedSelection) -> TextField {
+        var copy = self
+        copy.unfocusedSelection = policy
+        return copy
+    }
+
     public func reconcilePrimitive(_ node: any AnyViewNode) -> any AnyViewNode {
         guard let leaf = node as? LeafNode, leaf.kind == .textField else {
             return mountPrimitive()
@@ -208,6 +233,7 @@ public struct TextField: PrimitiveView {
         leaf.focusRingWidth = focusRingWidth
         leaf.focusRingColor = focusRingColor
         leaf.restingOutline = restingOutline
+        leaf.observeFocusLoss(unfocusedSelection)
         // Measure against the placeholder when empty so an empty field still
         // reserves a sensible line box.
         leaf.text = leaf.editing.text.isEmpty ? placeholder : leaf.editing.text
@@ -1115,6 +1141,24 @@ extension LeafNode {
             editing.setCursor(mask.index(mask.startIndex, offsetBy: caretAfter))
         }
         return String(real)
+    }
+
+    /// Applies `policy` when focus leaves this control: a `.cleared` one
+    /// collapses its selection to the caret. Drawing reads the policy too
+    /// (`.dimmed`), so it is kept on the node.
+    func observeFocusLoss(_ policy: UnfocusedSelection) {
+        unfocusedSelection = policy
+        FocusLoss.register(id) { [weak self] in
+            guard let self, self.unfocusedSelection == .cleared, self.editing.hasSelection else { return }
+            self.editing.setCursor(self.editing.focus)
+            ViewInvalidation.markNeedsRedraw()
+        }
+    }
+
+    /// The selection's fill, as `unfocusedSelection` says to draw it.
+    func selectionColor(focused: Bool) -> Color {
+        guard !focused, unfocusedSelection == .dimmed else { return theme.selectionFill }
+        return theme.selectionFill.mixed(with: fillColor ?? theme.inset, 0.5)
     }
 
     func focusSelf(binding: Binding<String>, onSubmit: (() -> Void)?) {

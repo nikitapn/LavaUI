@@ -2658,7 +2658,7 @@ extension DrawList {
                     below: row + 1 < lines.count ? lines[row + 1].selection : nil,
                     radius: Self.selectionCornerRadius
                 )
-                ring(inner: slice.left, outer: slice.right, color: theme.selectionFill,
+                ring(inner: slice.left, outer: slice.right, color: leaf.selectionColor(focused: focused),
                      bottomUnderNext: slice.joinsBelow)
             }
 
@@ -3129,7 +3129,7 @@ extension DrawList {
                 )
                 // Drawn top to bottom, so a slice that continues runs under
                 // the next one's antialiased top edge instead of fading too.
-                ring(inner: slice.left, outer: slice.right, color: leaf.theme.selectionFill,
+                ring(inner: slice.left, outer: slice.right, color: leaf.selectionColor(focused: focused),
                      bottomUnderNext: slice.joinsBelow)
             }
 

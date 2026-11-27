@@ -35,7 +35,8 @@ public enum FocusManager {
         onChar: @escaping (Character) -> Bool
     ) {
         let scope = WindowScope.currentOrMain
-        let moved = scope.focused != id
+        let previous = scope.focused
+        let moved = previous != id
         if moved {
             ViewInvalidation.markDirty()
             // A field that has just been focused shows its caret at once.
@@ -45,6 +46,7 @@ public enum FocusManager {
         scope.keyHandler = onKey
         scope.charHandler = onChar
         scope.keysBeforeShortcuts = keysBeforeShortcuts
+        if moved, let previous { FocusLoss.fire(previous) }
         if moved { FocusBindings.focusChanged(in: scope) }
     }
 
@@ -57,12 +59,14 @@ public enum FocusManager {
     /// Clears focus in the current window, so keys go to the default handler, if any.
     public static func clear() {
         let scope = WindowScope.currentOrMain
-        let moved = scope.focused != nil
+        let previous = scope.focused
+        let moved = previous != nil
         if moved { ViewInvalidation.markDirty() }
         scope.focused = nil
         scope.keyHandler = nil
         scope.charHandler = nil
         scope.keysBeforeShortcuts = false
+        if let previous { FocusLoss.fire(previous) }
         if moved { FocusBindings.focusChanged(in: scope) }
     }
 

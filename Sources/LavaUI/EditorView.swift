@@ -609,6 +609,13 @@ public final class EditorScrollLink {
 /// type is presentation plus a gutter, which is why it is a component rather
 /// than a rewrite of `TextField`.
 extension EditorView {
+    /// The same editor, doing `policy` with its selection when focus leaves.
+    public func unfocusedSelection(_ policy: UnfocusedSelection) -> EditorView {
+        var copy = self
+        copy.unfocusedSelection = policy
+        return copy
+    }
+
     /// Seconds a frame may spend wrapping lines it does not show yet, once the
     /// lines it does show are wrapped. A soft-wrapped editor breaks what is on
     /// screen at once and the rest of the document over the frames after it,
@@ -702,6 +709,10 @@ public struct EditorView: PrimitiveView {
     /// line, so a multi-megabyte document is a real cost per keystroke where
     /// the same document costs nothing unwrapped.
     public var wraps: Bool
+    /// What happens to the selection when focus moves to another control.
+    /// Dimmed by default: an editor's selection outlives a trip to its find
+    /// bar or a panel beside it.
+    public var unfocusedSelection: UnfocusedSelection = .dimmed
     /// Most lines the editor grows to show before it scrolls. Layout can give it less.
     public var visibleLines: Int
     /// The find state whose matches are highlighted.
@@ -941,6 +952,7 @@ public struct EditorView: PrimitiveView {
         leaf.color = style.text
         leaf.fillColor = theme.inset
         leaf.isReadOnly = isReadOnly
+        leaf.observeFocusLoss(unfocusedSelection)
         leaf.isMultiline = true
         if leaf.wraps != wraps || fontChanged {
             // Before anything is cleared: `rowLogicalLine` still describes the
