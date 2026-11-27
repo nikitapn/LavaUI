@@ -302,6 +302,10 @@ public enum PointerCapture {
     /// Whether some node holds the pointer capture.
     public static var isActive: Bool { owner != nil }
 
+    /// The node holding the capture, which also decides the pointer image
+    /// until release — see `CursorBridge.hover`.
+    static var holder: NodeID? { owner }
+
     /// Routes pointer motion to `id` until release, wherever the pointer goes.
     ///
     /// `onMove` gets window coordinates. `onUp` runs on release, after the

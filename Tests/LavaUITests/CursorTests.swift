@@ -110,6 +110,43 @@ final class CursorTests: XCTestCase {
         ])
     }
 
+    /// A drag holds the pointer image: whatever the pointer crosses while a
+    /// node has the capture, the image stays that node's until release.
+    func testCaptureHoldsTheCursorAcrossWhatThePointerCrosses() throws {
+        let editor = try XCTUnwrap(Editor.openClient(width: 100, height: 100))
+        let host = LayoutHost()
+        host.setRoot(VStack {
+            Text("grip").cursor(.resizeLeftRight)
+            Text("field").cursor(.text)
+        })
+        _ = host.calculateLayout(width: 200, height: 100)
+        let root = try XCTUnwrap(host.rootNode)
+        let grip = try XCTUnwrap(node(labelled: "Text \"grip", in: root)).id
+        let field = try XCTUnwrap(node(labelled: "Text \"field", in: root)).id
+
+        let requests = CursorRequests()
+        let originalRequest = CursorBridge.request
+        CursorBridge.invalidate()
+        CursorBridge.request = { shape, _ in requests.shapes.withLock { $0.append(shape) } }
+        defer {
+            CursorBridge.request = originalRequest
+            CursorBridge.invalidate()
+            PointerCapture.release()
+        }
+
+        CursorBridge.hover(grip, in: root, window: .main, editor: editor)
+        PointerCapture.capture(grip, onMove: { _, _ in })
+        CursorBridge.hover(field, in: root, window: .main, editor: editor)
+        CursorBridge.hover(nil, in: root, window: .main, editor: editor)
+        XCTAssertEqual(requests.shapes.withLock { $0 }, [CursorShape.resizeLeftRight.rawValue])
+
+        PointerCapture.release()
+        CursorBridge.hover(field, in: root, window: .main, editor: editor)
+        XCTAssertEqual(requests.shapes.withLock { $0 }, [
+            CursorShape.resizeLeftRight.rawValue, CursorShape.text.rawValue,
+        ])
+    }
+
     /// The pointer image changes when the pointer *enters* a view, and only a
     /// hit-testable node is ever reported as entered.
     func testStatingACursorMakesTheNodeHitTestable() throws {

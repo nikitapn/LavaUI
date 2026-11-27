@@ -99,8 +99,35 @@ public enum CursorBridge {
     /// An empty hover report or a live node with no stated cursor uses the arrow.
     /// A report for a removed node can arrive while the renderer is still
     /// showing the previous draw list. Keep the cursor until its next report.
+    ///
+    /// While a node holds `PointerCapture` its cursor wins over whatever is
+    /// under the pointer. A drag carries the pointer away from the node that
+    /// started it — a split's divider lags the hand by a frame, a selection
+    /// runs off the end of its field — and the renderer goes on reporting
+    /// the nodes it crosses, so without this the resize arrow turned into an
+    /// I-beam or a hand over every pane it passed. The window resolves the
+    /// node under the pointer again on release.
     static func hover(
-        _ id: NodeID?, in root: (any AnyViewNode)?,
+        _ hovered: NodeID?, in root: (any AnyViewNode)?,
+        window: WindowID, editor: Editor
+    ) {
+        if let holder = PointerCapture.holder, let root, holds(holder, in: root) {
+            hover(resolving: holder, in: root, window: window, editor: editor)
+            return
+        }
+        hover(resolving: hovered, in: root, window: window, editor: editor)
+    }
+
+    /// Whether `id` is in `root` or one of its presented overlays.
+    private static func holds(_ id: NodeID, in root: any AnyViewNode) -> Bool {
+        if resolve(id, in: root) != nil { return true }
+        return OverlayScan.presented(in: root).contains { attachment in
+            attachment.root.map { resolve(id, in: $0) != nil } ?? false
+        }
+    }
+
+    private static func hover(
+        resolving id: NodeID?, in root: (any AnyViewNode)?,
         window: WindowID, editor: Editor
     ) {
         guard let id else {

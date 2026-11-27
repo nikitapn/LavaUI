@@ -724,6 +724,10 @@ public final class LavaWindow {
             }
             PointerCapture.release()
             PointerRelease.fire()
+            // The drag held the pointer image (`CursorBridge.hover`); hand it
+            // back to whatever the pointer stopped over, which may not move
+            // again to say so.
+            CursorBridge.hover(HoverState.current, in: host.rootNode, window: id, editor: editor)
         case .scroll:
             Tooltips.dismiss()
             // Renderer-owned ScrollViews consume this before it reaches us, so
