@@ -753,8 +753,13 @@ public final class DrawList {
     /// Fills a ring segment (annulus sector) between two arcs of equal point
     /// count — the shape a donut-chart wedge needs, where a hole in the
     /// middle means no single point can fan to the whole boundary.
+    ///
+    /// `bottomUnderNext`: the edge between the two arcs' last points meets a
+    /// shape drawn after this one, which antialiases the seam — this one runs
+    /// half a pixel under it rather than fading too (see `PieSliceEdges`).
     public func ring(
-        inner: [(x: Float, y: Float)], outer: [(x: Float, y: Float)], color: Color
+        inner: [(x: Float, y: Float)], outer: [(x: Float, y: Float)], color: Color,
+        bottomUnderNext: Bool = false
     ) {
         guard inner.count == outer.count, inner.count >= 2 else { return }
         var points: [(x: Float, y: Float)] = []
@@ -763,7 +768,8 @@ public final class DrawList {
             points.append(inner[i])
             points.append(outer[i])
         }
-        emitMesh(points, color: color, isRing: true)
+        // `mesh`'s flag 8: the end side runs under the next shape.
+        emitMesh(points, color: color, isRing: true, seams: bottomUnderNext ? 8 : 0)
     }
 
     /// How a pie wedge's two straight sides meet the wedges beside it.
@@ -2991,6 +2997,45 @@ extension DrawList {
             hover: leaf.hoverCard?.anchor.lowerBound, completion: leaf.completion?.anchor
         )
 
+        // The selection's horizontal extent on each row it touches, a row
+        // either side of the window included: a row's slice of the rounded
+        // outline depends on its neighbours (see `selectionSlice`), and the
+        // loop below draws a row before it has seen the next one. Only the
+        // selected rows are walked, and the shaping is the font's cache hit
+        // when the loop asks for the same lines again.
+        var selectionSpans: [Int: (lo: Float, hi: Float)] = [:]
+        if selection != nil, let selFromOffset, let selToOffset {
+            let low = max(0, firstRow - 1), high = min(rows.count - 1, lastRow + 1)
+            var row = low
+            while row <= high, rows[row].upperBound <= selFromOffset { row += 1 }
+            if row <= high, rows[row].lowerBound < selToOffset {
+                var index = leaf.textIndex(atOffset: rows[row].lowerBound)
+                var indexOffset = rows[row].lowerBound
+                while row <= high, rows[row].lowerBound < selToOffset {
+                    let range = rows[row]
+                    if range.lowerBound > indexOffset {
+                        index = state.text.index(index, offsetBy: range.lowerBound - indexOffset)
+                    }
+                    let end = state.text.index(index, offsetBy: range.upperBound - range.lowerBound)
+                    let lineText = String(state.text[index..<end])
+                    index = end
+                    indexOffset = range.upperBound
+                    let run = font.shapedRun(lineText)
+                    func columnX(_ column: Int) -> Float {
+                        let clamped = max(0, min(column, lineText.count))
+                        return run.caretX(for: lineText.index(lineText.startIndex, offsetBy: clamped))
+                    }
+                    let a = columnX(max(selFromOffset, range.lowerBound) - range.lowerBound)
+                    let b = columnX(min(selToOffset, range.upperBound) - range.lowerBound)
+                    // A selection crossing a newline should show the break,
+                    // so an empty line inside one is still visibly selected.
+                    let spansNewline = selToOffset > range.upperBound
+                    selectionSpans[row] = (textX + a, textX + a + max(spansNewline ? 6 : 1, b - a))
+                    row += 1
+                }
+            }
+        }
+
         for row in firstRow...lastRow {
             let range = rows[row]
             let rowTop = rowTopOf(row)
@@ -3049,19 +3094,23 @@ extension DrawList {
                 )
             }
 
-            if let sel = selection, let selFromOffset, let selToOffset,
-               sel.lowerBound < hi, sel.upperBound > lo
-            {
-                let from = max(selFromOffset, range.lowerBound)
-                let to = min(selToOffset, range.upperBound)
-                let a = columnX(from - range.lowerBound)
-                let b = columnX(to - range.lowerBound)
-                let spansNewline = selToOffset > range.upperBound
-                rect(
-                    x: textX + a, y: rowTop,
-                    w: max(spansNewline ? 4 : 1, b - a), h: lineH,
-                    color: leaf.theme.selectionFill
+            if let span = selectionSpans[row] {
+                // A neighbour joins only if it is the next row on screen: a
+                // blank row (`lineGaps`) between the two separates them.
+                let above = selectionSpans[row - 1].flatMap {
+                    rowTopOf(row - 1) + lineH == rowTop ? $0 : nil
+                }
+                let below = selectionSpans[row + 1].flatMap {
+                    rowTopOf(row + 1) == rowTop + lineH ? $0 : nil
+                }
+                let slice = Self.selectionSlice(
+                    top: rowTop, height: lineH, span: span, above: above, below: below,
+                    radius: Self.selectionCornerRadius
                 )
+                // Drawn top to bottom, so a slice that continues runs under
+                // the next one's antialiased top edge instead of fading too.
+                ring(inner: slice.left, outer: slice.right, color: leaf.theme.selectionFill,
+                     bottomUnderNext: slice.joinsBelow)
             }
 
             var lineSpans: [HighlightSpan]
@@ -3542,5 +3591,83 @@ extension DrawList {
         withContentClip(true, x: x, y: y, w: w, h: h) {
             emitNode(zone.zoneBox, ox: x, oy: y + shift)
         }
+    }
+}
+
+extension DrawList {
+    /// Corner radius of an editor selection, in pixels.
+    static let selectionCornerRadius: Float = 4
+
+    /// One row's piece of a selection drawn as a single rounded outline.
+    ///
+    /// A selection over several rows is a staircase of spans. Its outer
+    /// corners are rounded; where a row meets a neighbour that reaches past
+    /// it, the inside corner is filled with a fillet curving the other way,
+    /// so the outline flows from one row into the next. Every curve lies
+    /// within a radius of the row boundary it belongs to, on one side of it,
+    /// so each row can draw its own band and the bands meet exactly — no
+    /// shape spans two rows, and the loop never has to look further than the
+    /// rows on either side.
+    ///
+    /// The piece is monotone in y: `left[i]` and `right[i]` are the edges at
+    /// the same height, top to bottom, ready for `ring(inner:outer:)`.
+    /// `joinsBelow` says the bottom edge is a seam with the next row's piece.
+    static func selectionSlice(
+        top: Float, height: Float, span: (lo: Float, hi: Float),
+        above: (lo: Float, hi: Float)?, below: (lo: Float, hi: Float)?, radius: Float
+    ) -> (left: [(x: Float, y: Float)], right: [(x: Float, y: Float)], joinsBelow: Bool) {
+        let width = span.hi - span.lo
+        let limit = max(0, min(radius, height / 2))
+
+        /// The radius and direction of the corner on one side of one edge:
+        /// `bulge` +1 rounds inward (an outer corner), −1 curves outward
+        /// (the fillet of an inside corner), 0 is straight down.
+        func corner(neighbour: (lo: Float, hi: Float)?, left: Bool) -> (r: Float, bulge: Float) {
+            let outer = min(limit, width / 2)
+            guard let n = neighbour, n.lo < span.hi, n.hi > span.lo else { return (outer, 1) }
+            // How far the neighbour reaches past this row on this side. A
+            // corner on each row shares that distance, so each takes half.
+            let reach = left ? span.lo - n.lo : n.hi - span.hi
+            if abs(reach) < 0.5 { return (0, 0) }
+            return reach > 0 ? (min(limit, reach / 2), -1) : (min(outer, -reach / 2), 1)
+        }
+        let topLeft = corner(neighbour: above, left: true)
+        let topRight = corner(neighbour: above, left: false)
+        let bottomLeft = corner(neighbour: below, left: true)
+        let bottomRight = corner(neighbour: below, left: false)
+
+        /// How far a corner moves the edge in, at `d` from its row boundary.
+        func inset(_ c: (r: Float, bulge: Float), _ d: Float) -> Float {
+            guard c.r > 0, d < c.r else { return 0 }
+            let e = c.r - d
+            return c.bulge * (c.r - (c.r * c.r - e * e).squareRoot())
+        }
+
+        // Heights to sample: spaced evenly in angle along every arc, so the
+        // flat end of a curve is not over-sampled and the steep end starved.
+        let steps = 6
+        var ds: [Float] = [0, height]
+        for c in [topLeft, topRight] where c.r > 0 {
+            for j in 1...steps {
+                ds.append(c.r * (1 - cos(Float.pi / 2 * Float(j) / Float(steps))))
+            }
+        }
+        for c in [bottomLeft, bottomRight] where c.r > 0 {
+            for j in 1...steps {
+                ds.append(height - c.r * (1 - cos(Float.pi / 2 * Float(j) / Float(steps))))
+            }
+        }
+        ds.sort()
+        var left: [(x: Float, y: Float)] = []
+        var right: [(x: Float, y: Float)] = []
+        var previous = -Float.infinity
+        for d in ds where d - previous > 1e-3 {
+            previous = d
+            let up = height - d
+            left.append((span.lo + inset(topLeft, d) + inset(bottomLeft, up), top + d))
+            right.append((span.hi - inset(topRight, d) - inset(bottomRight, up), top + d))
+        }
+        let joinsBelow = below.map { $0.lo < span.hi && $0.hi > span.lo } ?? false
+        return (left, right, joinsBelow)
     }
 }
