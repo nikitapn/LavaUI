@@ -7,12 +7,15 @@
 # GPU devices come from lava.conf [core], not from this script. Hardcoding
 # card0 here is how a hybrid laptop always came up on the wrong GPU.
 
+# The build directory containing the compiled compositor binaries.
+BUILD_DIR="${BUILD_DIR:-build-release}"
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$ROOT"
 
 SETUP="$SCRIPT_DIR/setup"
-COMPOSITOR="${LAVA_COMPOSITOR:-$ROOT/build-release/compositor/compositor}"
+COMPOSITOR="${LAVA_COMPOSITOR:-$ROOT/$BUILD_DIR/compositor/compositor}"
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
@@ -25,7 +28,7 @@ fi
 
 if [ ! -x "$COMPOSITOR" ] && [ ! -f "$COMPOSITOR" ]; then
   echo "start-lava-compositor: no compositor at $COMPOSITOR" >&2
-  echo "  meson compile -C build-release   or set LAVA_COMPOSITOR=" >&2
+  echo "  meson compile -C $BUILD_DIR or set LAVA_COMPOSITOR=" >&2
   exit 1
 fi
 
