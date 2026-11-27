@@ -4652,7 +4652,16 @@ class SurfaceRegistry : public lava::CompositorHost {
     // A tile that no longer matches the config is one no window may still be
     // showing — see `dropShadowTiles`. Reached only if something changed the
     // appearance without going through `setAppearance`.
-    dropShadowTiles();
+    //
+    // Only then: a tile for the *other* radius is not stale. Dropping it here
+    // made the rounded and the square tile evict each other whenever a Lava
+    // window and a foreign one were both on screen, which rebuilt a canvas
+    // surface and blanked every window's shadow on each open, close and focus.
+    const bool stale = std::any_of(
+        shadowTiles_.begin(), shadowTiles_.end(), [&](const ShadowTile &t) {
+          return t.blur != shadowBlur_ || t.opacity != shadowOpacity_;
+        });
+    if (stale) dropShadowTiles();
 
     ShadowTile tile;
     tile.radius = radius;

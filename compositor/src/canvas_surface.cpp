@@ -64,7 +64,15 @@ DmabufBuffer *from_buffer(wlr_buffer *buffer) {
   return reinterpret_cast<DmabufBuffer *>(buffer);
 }
 
-void buffer_destroy(wlr_buffer *buffer) { delete from_buffer(buffer); }
+// `wlr_buffer_finish` is the implementation's job, not wlroots': it is what
+// runs the buffer's addons, and the renderer's texture for this dmabuf is one.
+// Without it every import the scene ever made stayed alive — a `VkImage` and
+// its memory per buffer, and on RADV an entry in the BO list every submit
+// carries, so composition cost grew with each window opened and closed.
+void buffer_destroy(wlr_buffer *buffer) {
+  wlr_buffer_finish(buffer);
+  delete from_buffer(buffer);
+}
 
 bool buffer_get_dmabuf(wlr_buffer *buffer, wlr_dmabuf_attributes *attribs) {
   const canvas::DmabufImage *image = from_buffer(buffer)->image;

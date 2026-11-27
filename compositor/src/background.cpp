@@ -30,7 +30,12 @@ PixelBuffer *from_buffer(wlr_buffer *buffer) {
   return reinterpret_cast<PixelBuffer *>(buffer);
 }
 
-void buffer_destroy(wlr_buffer *buffer) { delete from_buffer(buffer); }
+// See `canvas_surface.cpp`: the addons, and the destroy listeners, only run
+// if the implementation finishes the buffer itself.
+void buffer_destroy(wlr_buffer *buffer) {
+  wlr_buffer_finish(buffer);
+  delete from_buffer(buffer);
+}
 
 bool buffer_begin_data_ptr_access(wlr_buffer *buffer, uint32_t flags,
                                   void **data, uint32_t *format,
