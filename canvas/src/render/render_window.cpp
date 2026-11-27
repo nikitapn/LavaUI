@@ -2333,7 +2333,9 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
         const auto &mv = list.meshVertices[first + i];
         meshPointScratch_.push_back({mv.x + ox, mv.y + oy});
       }
-      quads_.pushPolyline(meshPointScratch_.data(), count, faded(cmd.color));
+      // h is the stroke width; 0 from an emitter that predates it is 1px.
+      quads_.pushPolyline(meshPointScratch_.data(), count, faded(cmd.color),
+                          cmd.h > 0.f ? cmd.h : 1.f);
       break;
     }
     case canvas::DrawCommandKind::spatialTriangles: {

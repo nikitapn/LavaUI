@@ -7,13 +7,13 @@ import Foundation
 /// A design hands over path strings instead — `M5 12.55a11 11 0 0 1 14 0…`
 /// is the Wi-Fi glyph — and translating each into hand-placed lines is how a
 /// glyph drifts from the one in the mock-up. So the string is the source:
-/// parsed and flattened once per distinct path, then drawn as round-capped
-/// capsules (`DrawList.line`) one segment each, which gives the round caps
-/// and round joins these sets specify without a stroker.
+/// parsed and flattened once per distinct path, then drawn as one
+/// `DrawList.polyline` per subpath — capsules cut apart at each joint, which
+/// gives the round caps and round joins these sets specify without a stroker.
 ///
-/// Opaque colours only, in practice: neighbouring capsules overlap at every
-/// join, and a translucent stroke would show each overlap darker. The icons
-/// this is for are drawn in solid theme colours.
+/// Opaque colours only, in practice: where a path crosses itself (or turns
+/// back on itself) the overlap is drawn twice, and a translucent stroke
+/// shows it darker. The icons this is for are drawn in solid theme colours.
 public struct Icon: View {
     public var shapes: [IconShape]
     public var size: Float
@@ -129,19 +129,16 @@ extension DrawList {
                     polygon(subpath.map { (x + $0.x * scale, y + $0.y * scale) }, color: color)
                     continue
                 }
-                guard let first = subpath.first else { continue }
-                if subpath.count == 1 {
+                if subpath.count < 2 {
                     // A bare moveto draws nothing in SVG; `h.01` after it is
                     // how these sets draw a dot, and arrives as two points.
                     continue
                 }
-                var previous = first
-                for point in subpath.dropFirst() {
-                    line(x1: x + previous.x * scale, y1: y + previous.y * scale,
-                         x2: x + point.x * scale, y2: y + point.y * scale,
+                // One polyline, not a `line` per segment: the renderer cuts
+                // neighbouring capsules apart at each joint, where separate
+                // lines would blend their antialiased edges over each other.
+                polyline(subpath.map { (x + $0.x * scale, y + $0.y * scale) },
                          color: color, width: width)
-                    previous = point
-                }
             }
         }
     }
@@ -190,12 +187,13 @@ struct IconPoint: Equatable {
 /// SVG path data → polylines, one per subpath, in the path's own units.
 ///
 /// All of `M L H V C S Q T A Z`, absolute and relative, with implicit
-/// repeats (`M1 2 3 4` is a move and a line). Curves are cut into segments
-/// about half a unit long — a quarter of a pixel in a 12px icon — which is
-/// finer than anything these sets are drawn at needs.
+/// repeats (`M1 2 3 4` is a move and a line). Subdivision follows curvature:
+/// long, nearly straight spans need few chords, and tight bends need more.
 enum IconPathParser {
-    /// Longest flattened segment, in path units.
-    static let tolerance: Float = 0.5
+    /// Maximum distance from a curve to its chord in the 24-unit icon box.
+    /// A 30-point icon can deviate by at most 1/16 of a layout pixel.
+    static let tolerance: Float = 0.05
+    private static let maxSubdivisionDepth = 10
 
     static func flatten(_ d: String) -> [[IconPoint]] {
         var scanner = Tokens(d)
@@ -304,43 +302,65 @@ enum IconPathParser {
         current.isEmpty ? subpaths : subpaths + [current]
     }
 
-    private static func segments(forLength length: Float) -> Int {
-        max(2, min(64, Int((length / tolerance).rounded(.up))))
+    private static func midpoint(_ a: IconPoint, _ b: IconPoint) -> IconPoint {
+        IconPoint(x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5)
     }
 
-    private static func distance(_ a: IconPoint, _ b: IconPoint) -> Float {
-        ((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y)).squareRoot()
+    private static func nearChord(_ point: IconPoint, _ start: IconPoint, _ end: IconPoint) -> Bool {
+        let dx = end.x - start.x, dy = end.y - start.y
+        let x = point.x - start.x, y = point.y - start.y
+        let lengthSquared = dx * dx + dy * dy
+        // Measure against the finite segment so a collinear loop or an
+        // overshooting control point cannot collapse onto a shorter line.
+        let t = lengthSquared > 0 ? min(1, max(0, (x * dx + y * dy) / lengthSquared)) : 0
+        let ex = x - t * dx, ey = y - t * dy
+        return ex * ex + ey * ey <= tolerance * tolerance
     }
 
     private static func cubicTo(
         _ c1: IconPoint, _ c2: IconPoint, _ p: IconPoint,
         pen: inout IconPoint, into current: inout [IconPoint]
     ) {
-        let p0 = pen
-        if current.isEmpty { current.append(p0) }
-        // The control polygon is never shorter than the curve.
-        let n = segments(forLength: distance(p0, c1) + distance(c1, c2) + distance(c2, p))
-        for i in 1...n {
-            let t = Float(i) / Float(n), u = 1 - t
-            let a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t
-            current.append(IconPoint(x: a * p0.x + b * c1.x + c * c2.x + d * p.x,
-                                     y: a * p0.y + b * c1.y + c * c2.y + d * p.y))
-        }
+        if current.isEmpty { current.append(pen) }
+        flattenCubic(pen, c1, c2, p, depth: 0, into: &current)
         pen = p
+    }
+
+    private static func flattenCubic(
+        _ start: IconPoint, _ c1: IconPoint, _ c2: IconPoint, _ end: IconPoint,
+        depth: Int, into points: inout [IconPoint]
+    ) {
+        if depth == maxSubdivisionDepth || (nearChord(c1, start, end) && nearChord(c2, start, end)) {
+            points.append(end)
+            return
+        }
+        let a = midpoint(start, c1), b = midpoint(c1, c2), c = midpoint(c2, end)
+        let left = midpoint(a, b), right = midpoint(b, c)
+        let middle = midpoint(left, right)
+        flattenCubic(start, a, left, middle, depth: depth + 1, into: &points)
+        flattenCubic(middle, right, c, end, depth: depth + 1, into: &points)
     }
 
     private static func quadTo(
         _ c: IconPoint, _ p: IconPoint, pen: inout IconPoint, into current: inout [IconPoint]
     ) {
-        let p0 = pen
-        if current.isEmpty { current.append(p0) }
-        let n = segments(forLength: distance(p0, c) + distance(c, p))
-        for i in 1...n {
-            let t = Float(i) / Float(n), u = 1 - t
-            current.append(IconPoint(x: u * u * p0.x + 2 * u * t * c.x + t * t * p.x,
-                                     y: u * u * p0.y + 2 * u * t * c.y + t * t * p.y))
-        }
+        if current.isEmpty { current.append(pen) }
+        flattenQuad(pen, c, p, depth: 0, into: &current)
         pen = p
+    }
+
+    private static func flattenQuad(
+        _ start: IconPoint, _ control: IconPoint, _ end: IconPoint,
+        depth: Int, into points: inout [IconPoint]
+    ) {
+        if depth == maxSubdivisionDepth || nearChord(control, start, end) {
+            points.append(end)
+            return
+        }
+        let left = midpoint(start, control), right = midpoint(control, end)
+        let middle = midpoint(left, right)
+        flattenQuad(start, left, middle, depth: depth + 1, into: &points)
+        flattenQuad(middle, right, end, depth: depth + 1, into: &points)
     }
 
     /// SVG's endpoint arc, converted to centre form (SVG 1.1, F.6.5–F.6.6).
@@ -385,7 +405,10 @@ enum IconPathParser {
         if !sweep, delta > 0 { delta -= 2 * .pi }
         if sweep, delta < 0 { delta += 2 * .pi }
 
-        let n = segments(forLength: abs(delta) * max(rx, ry))
+        // Bound the sagitta using the larger radius: mapping a unit circle
+        // to this ellipse can stretch a chord's error by at most that radius.
+        let step = min(Float.pi / 2, 4 * asin(min(1, (tolerance / max(rx, ry) / 2).squareRoot())))
+        let n = Int(min(256, max(1, (abs(delta) / step).rounded(.up))))
         for i in 1...n {
             let t = theta1 + delta * Float(i) / Float(n)
             let ex = rx * cos(t), ey = ry * sin(t)

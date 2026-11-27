@@ -2,8 +2,10 @@
 #extension GL_EXT_nonuniform_qualifier : require
 
 // See quad.vert. Coverage / sample paths:
-//   kind 0 — rounded-box SDF (rect / round-rect / circle / stroked line).
+//   kind 0 — rounded-box SDF (rect / round-rect / circle).
 //            `vAux` > 0 makes it an outline of that width instead of a fill.
+//   kind 7 — round-capped stroke segment with a one-pixel coverage ramp,
+//            cut at polyline joints (`vAux` bits, slopes in `vUv`).
 //   kind 1 — glyph coverage from the R8 atlas (`.r` * tint).
 //   kind 2 — full-color image (RGBA sample * tint). The vertex selects an
 //            entry in the frame's bindless descriptor table.
@@ -158,6 +160,33 @@ void main() {
       // in the same encoded space the coverage is authored in, so 0.5 stays
       // 0.5 and the correction would be the distortion.
       cov = texture(uTextures[nonuniformEXT(vTextureIndex)], vLocal).r;
+    } else if (vKind == 7u) {
+      // Differentiate the local coordinates, not the capsule distance.
+      // Across the centreline the two distances can be identical, so
+      // fwidth(distance) would give a hard edge on alternating pixel rows.
+      float capX = sign(vLocal.x) * max(abs(vLocal.x) - (vHalfSize.x - vRadius), 0.0);
+      vec2 fromSpine = vec2(capX, vLocal.y);
+      float distanceToSpine = length(fromSpine);
+      vec2 normal = distanceToSpine > 0.0 ? fromSpine / distanceToSpine : vec2(0.0, 1.0);
+      float aa = max(abs(dot(normal, dFdx(vLocal))) + abs(dot(normal, dFdy(vLocal))), 1e-5);
+      cov = clamp(0.5 + (vRadius - distanceToSpine) / aa, 0.0, 1.0);
+      if (capX == 0.0) {
+        // A pixel can straddle both edges of a subpixel-width straight span.
+        cov -= clamp(0.5 - (vRadius + distanceToSpine) / aa, 0.0, 1.0);
+      }
+      // Joints of a polyline: keep this segment's side of each cut, so the
+      // neighbour's fringe and this one's never blend over the same pixel.
+      // The slack overlaps the two by a hair rather than risk a pixel that
+      // neither claims, which would be a hole in the middle of the stroke.
+      uint cuts = uint(vAux);
+      float halfSpan = vHalfSize.x - vRadius;
+      const float slack = 1e-3;
+      if ((cuts & 1u) != 0u && vLocal.x + halfSpan + vUv.x * vLocal.y < -slack) {
+        cov = 0.0;
+      }
+      if ((cuts & 2u) != 0u && vLocal.x - halfSpan + vUv.y * vLocal.y > slack) {
+        cov = 0.0;
+      }
     } else {
       float d = sdRoundBox(vLocal, vHalfSize, vRadius);
       // Taken before the fold below. `abs` creases the field along the middle

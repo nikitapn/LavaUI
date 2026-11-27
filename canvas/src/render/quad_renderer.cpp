@@ -1054,6 +1054,12 @@ void QuadRenderer::pushCircle(vec2 center, float radius, uint32_t rgba) {
 }
 
 void QuadRenderer::pushLine(vec2 p0, vec2 p1, float width, uint32_t rgba) {
+  pushStrokeSegment(p0, p1, width, rgba, nullptr, nullptr);
+}
+
+void QuadRenderer::pushStrokeSegment(vec2 p0, vec2 p1, float width,
+                                     uint32_t rgba, const vec2 *cutStart,
+                                     const vec2 *cutEnd) {
   ensureBatchTexture(glyphAtlasView_);
   const float dx  = p1.x - p0.x;
   const float dy  = p1.y - p0.y;
@@ -1085,23 +1091,92 @@ void QuadRenderer::pushLine(vec2 p0, vec2 p1, float width, uint32_t rgba) {
   const vec2 locals[4] = {
     {-extL, -extW}, {extL, -extW}, {extL, extW}, {-extL, extW},
   };
-  // halfSize spans the segment body; radius == halfW rounds the caps.
-  appendQuad(corners, locals, {halfL, halfW}, halfW, rgba, Kind::Sdf);
+  // A cut is the line through an end point across which the neighbouring
+  // segment takes over, given by its direction-of-travel normal `t`. In this
+  // segment's frame it is `(x ∓ halfL) + k·y = 0` with `k = t_y / t_x`, and
+  // the shader keeps the side this segment owns. `t_x` is positive for any
+  // turn the caller cuts at (under 120°), so `k` is finite.
+  vec2 uvs[4];
+  float cuts = 0.f;
+  vec2 slopes{0.f, 0.f};
+  auto slope = [&](const vec2 &t) {
+    const float tx = t.x * dir.x + t.y * dir.y;
+    const float ty = t.x * nrm.x + t.y * nrm.y;
+    return ty / tx;
+  };
+  // A cut steeper than the segment is long would carve into the body the
+  // segment must still draw; leaving it uncut only overlaps the neighbour.
+  if (cutStart != nullptr) {
+    const float k = slope(*cutStart);
+    if (std::abs(k) * halfW <= len) { slopes.x = k; cuts += 1.f; }
+  }
+  if (cutEnd != nullptr) {
+    const float k = slope(*cutEnd);
+    if (std::abs(k) * halfW <= len) { slopes.y = k; cuts += 2.f; }
+  }
+  for (auto &uv : uvs) uv = slopes;
+  // The rounded-box SDF takes the outer half-extents, including both caps.
+  // Its straight section therefore ends at the two input points.
+  appendQuad(corners, locals, {halfL + halfW, halfW}, halfW, rgba, Kind::Stroke,
+             cuts, uvs);
 }
 
 void QuadRenderer::pushPolyline(const vec2 *points, uint32_t count,
-                                uint32_t rgba) {
+                                uint32_t rgba, float width) {
   if (points == nullptr || count < 2) return;
-  // One antialiased capsule per segment, the same SDF `pushLine` draws.
-  // It used to be a native LINE_STRIP, which has no edge of its own and was
-  // smooth only while the main pass was multisampled; at one sample it is a
-  // staircase. One pixel wide, which is what the strip was.
+  // One antialiased capsule per segment. Drawn whole, neighbours overlap at
+  // every vertex, and where both are partly covering a pixel blending adds
+  // the two: c + c(1-c) instead of c. A flattened curve is many segments
+  // shorter than the stroke is wide, so that was every edge pixel along it —
+  // strokes a third too heavy, with round blobs at each joint.
   //
-  // Neighbouring capsules overlap in a round joint, so a translucent line
-  // is a shade darker at each vertex — invisible at a pixel's width, and the
-  // price of not building joins.
-  for (uint32_t i = 0; i + 1 < count; ++i) {
-    pushLine(points[i], points[i + 1], 1.0f, rgba);
+  // So each segment is cut at its joints along the bisector of the turn,
+  // the line where the two capsules' distance fields meet, and each pixel is
+  // drawn by one of them. Both sides of a cut evaluate the same distance
+  // there, so coverage is continuous across it and the join stays round.
+  // Turns of 120° or more are left uncut (the bisector runs nearly along
+  // the stroke), as is anything that is not adjacent: a path that crosses
+  // itself still darkens where it does.
+  auto unit = [](vec2 a, vec2 b, vec2 &out) {
+    const float dx = b.x - a.x, dy = b.y - a.y;
+    const float l = std::sqrt(dx * dx + dy * dy);
+    if (l <= 1e-4f) return false;
+    out = {dx / l, dy / l};
+    return true;
+  };
+  const vec2 &first = points[0], &last = points[count - 1];
+  const bool closed = count > 2 && std::abs(first.x - last.x) < 1e-3f &&
+                      std::abs(first.y - last.y) < 1e-3f;
+  // The cut at the joint between `in` and `out`, if the turn allows one.
+  auto cutAt = [](vec2 in, vec2 out, vec2 &cut) {
+    if (in.x * out.x + in.y * out.y < -0.5f) return false;
+    const float x = in.x + out.x, y = in.y + out.y;
+    const float l = std::sqrt(x * x + y * y);
+    if (l <= 1e-4f) return false;
+    cut = {x / l, y / l};
+    return true;
+  };
+  // Direction of segment i, skipping degenerate ones by reporting false.
+  auto direction = [&](uint32_t i, vec2 &out) {
+    return unit(points[i], points[i + 1], out);
+  };
+  const uint32_t segments = count - 1;
+  for (uint32_t i = 0; i < segments; ++i) {
+    vec2 here;
+    if (!direction(i, here)) continue;
+    vec2 cutStart, cutEnd, other;
+    bool hasStart = false, hasEnd = false;
+    if (i > 0 ? direction(i - 1, other)
+              : (closed && direction(segments - 1, other))) {
+      hasStart = cutAt(other, here, cutStart);
+    }
+    if (i + 1 < segments ? direction(i + 1, other)
+                         : (closed && direction(0, other))) {
+      hasEnd = cutAt(here, other, cutEnd);
+    }
+    pushStrokeSegment(points[i], points[i + 1], width, rgba,
+                      hasStart ? &cutStart : nullptr,
+                      hasEnd ? &cutEnd : nullptr);
   }
 }
 

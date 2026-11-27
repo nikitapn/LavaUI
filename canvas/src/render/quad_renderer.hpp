@@ -116,6 +116,10 @@ class QuadRenderer {
     /// shape it is cut to. The one kind that needs both, which is what the
     /// separate `uv` attribute is for.
     BlurComposite = 6,
+    /// Round-capped segment. Its antialiasing spans one pixel, so a thin
+    /// stroke stays sharp. `aux` bit 1/2 = cut at the start/end, with the
+    /// cut lines' slopes in `uv` (see `pushStrokeSegment`).
+    Stroke = 7,
   };
 
   // Must match the vertex input layout in quad.vert.
@@ -284,10 +288,17 @@ class QuadRenderer {
 
   /// Stroked segment with round caps, emitted as a rotated capsule quad.
   void pushLine(vec2 p0, vec2 p1, float width, uint32_t rgba);
+  /// `pushLine`, keeping only the side of each given cut this segment owns.
+  /// A cut is the unit normal of the line through that end point.
+  void pushStrokeSegment(vec2 p0, vec2 p1, float width, uint32_t rgba,
+                         const vec2 *cutStart, const vec2 *cutEnd);
 
-  /// Connected native 1px line strip. A dedicated pipeline is required
-  /// because primitive topology is baked into a Vulkan graphics pipeline.
-  void pushPolyline(const vec2 *points, uint32_t count, uint32_t rgba);
+  /// Connected round-capped, round-joined stroke, `width` pixels wide. Each
+  /// segment is a capsule cut at its joints so neighbours never blend over
+  /// each other; see the definition. A closed path (last point == first)
+  /// is joined at its start as well.
+  void pushPolyline(const vec2 *points, uint32_t count, uint32_t rgba,
+                    float width = 1.0f);
 
   /// Already projected window-space triangles with Vulkan depth in 0...1.
   /// Uses a dedicated depth-tested pipeline while remaining in batch order.

@@ -98,6 +98,25 @@ final class IconPathTests: XCTestCase {
         XCTAssertLessThan(quad.map(\.y).min() ?? 0, -1)
     }
 
+    func testFlatBezierUsesOneChordAndKeepsAnOvershoot() {
+        let straight = flatten("M0 0C4 0 18 0 24 0")[0]
+        XCTAssertEqual(straight, [IconPoint(x: 0, y: 0), IconPoint(x: 24, y: 0)])
+
+        let overshoot = flatten("M0 0Q20 0 10 0")[0]
+        XCTAssertGreaterThan(overshoot.map(\.x).max() ?? 0, 13)
+        assertNear(overshoot.last, 10, 0)
+    }
+
+    func testArcChordErrorIsSubpixel() {
+        let radius: Float = 8
+        let points = flatten(IconShape.circle(cx: 0, cy: 0, r: radius).pathData)[0]
+        for (a, b) in zip(points, points.dropFirst()) {
+            let x = (a.x + b.x) / 2, y = (a.y + b.y) / 2
+            let sagitta = radius - (x * x + y * y).squareRoot()
+            XCTAssertLessThanOrEqual(sagitta, IconPathParser.tolerance + 0.001)
+        }
+    }
+
     /// The Wi-Fi fan's ink runs from the top arc's crest (y≈5, less the
     /// stroke) to the dot (20, plus it), so it sits half a unit low.
     func testInkOffsetCentresTheFan() {

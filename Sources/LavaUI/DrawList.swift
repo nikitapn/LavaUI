@@ -713,12 +713,16 @@ public final class DrawList {
         append(kind: .line, x: x1, y: y1, w: x2, h: y2, color: color, aux: max(0.5, width))
     }
 
-    /// Draws connected points with one non-indexed `LINE_STRIP` GPU draw.
+    /// Strokes connected points, `width` pixels wide, with round caps and
+    /// round joins. Repeat the first point last to close the path, which
+    /// joins it there too.
     ///
-    /// This is intentionally 1px: portable Vulkan does not guarantee wide
-    /// native lines. A future thick-polyline API should expand joins/caps into
-    /// triangles rather than depend on the optional `wideLines` device feature.
-    public func polyline(_ points: [(x: Float, y: Float)], color: Color) {
+    /// Each segment is an antialiased capsule cut at its joints, so the
+    /// stroke has one edge rather than a fringe per segment — the reason to
+    /// prefer this over a `line` per segment for anything curved. Opaque
+    /// colours draw exactly; a translucent stroke still darkens where the
+    /// path crosses itself or turns 120° or more.
+    public func polyline(_ points: [(x: Float, y: Float)], color: Color, width: Float = 1) {
         guard points.count >= 2 else { return }
         let first = UInt32(meshVertexCount)
         if meshVertexCount + points.count > meshVertexCapacity {
@@ -731,7 +735,7 @@ public final class DrawList {
             appendMeshVertex(vertex)
         }
         append(
-            kind: .polyline, x: 0, y: 0, w: Float(points.count), h: 0,
+            kind: .polyline, x: 0, y: 0, w: Float(points.count), h: max(0.5, width),
             color: color, param: first
         )
     }
