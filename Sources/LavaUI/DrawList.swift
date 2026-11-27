@@ -2525,7 +2525,7 @@ extension DrawList {
         }
     }
 
-    /// Draws a field as: selection rects, then glyphs, then caret.
+    /// Draws a field as: selection, then glyphs, then caret.
     ///
     /// That order is the whole point of the unified pipeline — under the old
     /// three-renderer split the caret was geometry and text always drew last,
@@ -2611,6 +2611,12 @@ extension DrawList {
             ofOffset: state.offset(of: state.focus), affinity: state.affinity
         )
 
+        // Laid out before anything is drawn: a row's share of the rounded
+        // selection depends on the rows either side (`selectionSlice`), and
+        // the draw below reaches a row before the next. A field is a handful
+        // of rows, so each is shaped once and kept rather than walked twice.
+        var lines: [(top: Float, start: String.Index, text: String, run: ShapedRun,
+                     selection: (lo: Float, hi: Float)?)] = []
         for (row, rowRange) in rows.enumerated() {
             let lineTop = firstTop + Float(row) * lineH
             // Same rule as the editor for several rows: draw only rows that
@@ -2627,6 +2633,7 @@ extension DrawList {
 
             // Selection is a range over the whole buffer; clip it to this line
             // so each row draws only its own share.
+            var span: (lo: Float, hi: Float)?
             if let sel = selection, sel.lowerBound < lineEnd, sel.upperBound > lineStart {
                 let from = max(sel.lowerBound, lineStart)
                 let to = min(sel.upperBound, lineEnd)
@@ -2635,11 +2642,24 @@ extension DrawList {
                 // A selection crossing a newline should show the break, so an
                 // empty tail still paints a sliver.
                 let spansNewline = sel.upperBound > lineEnd
-                rect(
-                    x: textX + x0, y: lineTop,
-                    w: max(spansNewline ? 4 : 1, x1 - x0), h: lineH,
-                    color: theme.selectionFill
+                span = (textX + x0, textX + x0 + max(spansNewline ? 6 : 1, x1 - x0))
+            }
+            lines.append((lineTop, lineStart, lineText, run, span))
+        }
+
+        for (row, line) in lines.enumerated() {
+            let lineTop = line.top, lineStart = line.start
+            let lineText = line.text, run = line.run
+
+            if let span = line.selection {
+                let slice = Self.selectionSlice(
+                    top: lineTop, height: lineH, span: span,
+                    above: row > 0 ? lines[row - 1].selection : nil,
+                    below: row + 1 < lines.count ? lines[row + 1].selection : nil,
+                    radius: Self.selectionCornerRadius
                 )
+                ring(inner: slice.left, outer: slice.right, color: theme.selectionFill,
+                     bottomUnderNext: slice.joinsBelow)
             }
 
             if !lineText.isEmpty {
