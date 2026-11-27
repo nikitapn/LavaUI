@@ -57,6 +57,10 @@ extension EditorSession {
         let doubleClick = clicks > 1 && project.selected == path
         project.selected = path
         open([project.tree.url(of: path)], mode: doubleClick ? .treeDoubleClick : .treeClick)
+        // A click leaves the keyboard on the tree, for the arrows; a double
+        // click means "I want to work on this", so the keys go to the file.
+        // After the press, which is when the tree takes focus.
+        if doubleClick { FrameTasks.after { [controller] in controller.focus() } }
     }
 
     func revealInExplorer(_ url: URL) {

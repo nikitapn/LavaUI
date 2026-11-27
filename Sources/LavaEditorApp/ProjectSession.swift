@@ -40,6 +40,9 @@ final class ProjectSession {
     /// checkout — so the gutter's copy of HEAD can be fetched again.
     @ObservationIgnored var onRepositoryChanged: (() -> Void)?
     @ObservationIgnored let scroll = ScrollPosition()
+    /// The tree's visible height, from layout: what a page is, and what
+    /// "in sight" means for a row the keyboard moved to.
+    @ObservationIgnored var viewportHeight: Float = 0
     /// The Source Control panel's own state. See `SourceControlModel`.
     let sourceControl = SourceControlModel()
 
@@ -71,6 +74,39 @@ final class ProjectSession {
     func toggle(_ path: String) {
         tree.toggle(path)
         changed()
+    }
+
+    /// Carries out what a key worked out (`ProjectTree.step`), keeping a
+    /// newly selected row in sight.
+    func apply(_ step: ProjectTreeStep, rowHeight: Float) {
+        switch step {
+        case .none:
+            return
+        case .select(let path):
+            selected = path
+            keepInSight(path, rowHeight: rowHeight)
+        case .expand(let path):
+            tree.setExpanded(path, true)
+            changed()
+        case .collapse(let path):
+            tree.setExpanded(path, false)
+            changed()
+        }
+    }
+
+    /// Scrolls only as far as it takes, the way a list follows its keyboard:
+    /// a row above the view comes in at the top, one below at the bottom.
+    /// Through the scroll position, not `scrollIntoView`: the rows are lazy,
+    /// and a row past the end of the view has no node to ask.
+    private func keepInSight(_ path: String, rowHeight: Float) {
+        guard viewportHeight > 0, let index = rows.firstIndex(where: { $0.node.path == path })
+        else { return }
+        let top = Float(index) * rowHeight
+        if top < scroll.offset {
+            scroll.scroll(to: top)
+        } else if top + rowHeight > scroll.offset + viewportHeight {
+            scroll.scroll(to: top + rowHeight - viewportHeight)
+        }
     }
 
     /// Opens the folders above a file and selects it — what following the

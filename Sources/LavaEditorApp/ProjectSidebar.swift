@@ -106,16 +106,76 @@ struct ProjectExplorer: View {
         let font = session.fonts.tab ?? FontStore.default
         let rowH = session.projectRowHeight
         let colors = GitMarkColors(appearance)
+        // Read here, in the body, and handed to the rows: they are built by
+        // the lazy list as it lays out, outside this body's observation, so
+        // a selection read only there was never observed — the arrows moved
+        // it and the highlight stayed where it was until something else
+        // rebuilt the tree.
+        let selected = project.selected
         return VStack(flexGrow: 1, spacing: 0) {
             header(theme: theme)
             ScrollView(.vertical, position: project.scroll) {
                 LazyVStack(project.rows, rowHeight: rowH) { entry in
-                    row(entry, font: font, rowH: rowH, colors: colors, theme: theme)
+                    row(entry, isSelected: entry.node.path == selected,
+                        font: font, rowH: rowH, colors: colors, theme: theme)
                 }
             }
             .flexGrow(1)
+            .onFrame { [project] frame in project.viewportHeight = frame.h }
+            // A click on a row gives the tree the keyboard, as in any file
+            // tree; the arrows then walk it (`ProjectTree.step`).
+            .focusable(onKey: { [session, project] event in
+                Self.handleKey(event, session: session, project: project, rowHeight: rowH)
+            })
             .agentId("project-rows")
         }
+    }
+
+    /// Arrows, Home/End and the page keys move and fold (`ProjectTree.step`),
+    /// and a file they land on opens in the preview tab. Enter keeps that
+    /// file (the tab stops being a preview) and hands the keyboard to it, or
+    /// folds a folder; Space folds a folder too.
+    private static func handleKey(
+        _ event: KeyEvent, session: EditorSession, project: ProjectSession, rowHeight: Float
+    ) -> Bool {
+        // Anything held with the key is somebody else's shortcut.
+        guard event.mods == 0 else { return false }
+        let page = max(1, Int(project.viewportHeight / max(1, rowHeight)) - 1)
+        let key: ProjectTreeKey
+        switch event.key {
+        case KeyCode.up: key = .up
+        case KeyCode.down: key = .down
+        case KeyCode.left: key = .left
+        case KeyCode.right: key = .right
+        case KeyCode.home: key = .home
+        case KeyCode.end: key = .end
+        case KeyCode.pageUp: key = .pageUp(rows: page)
+        case KeyCode.pageDown: key = .pageDown(rows: page)
+        case KeyCode.enter, KeyCode.space:
+            guard let path = project.selected,
+                  let row = project.rows.first(where: { $0.node.path == path })
+            else { return true }
+            if row.node.isDirectory {
+                project.toggle(path)
+            } else if event.key == KeyCode.enter {
+                session.open([project.tree.url(of: path)], mode: .treeDoubleClick)
+                session.controller.focus()
+            }
+            return true
+        default:
+            return false
+        }
+        let step = ProjectTree.step(key, from: project.selected, in: project.rows)
+        project.apply(step, rowHeight: rowHeight)
+        // A file the arrows land on is shown at once, in the preview tab, so
+        // the editor beside the tree always says which row the keys are on —
+        // no second "keyboard is here" outline to tell apart from the
+        // selection. The keyboard stays on the tree.
+        if case .select(let path) = step,
+           project.rows.contains(where: { $0.node.path == path && !$0.node.isDirectory }) {
+            session.open([project.tree.url(of: path)], mode: .treeClick)
+        }
+        return true
     }
 
     private func header(theme: Theme) -> some View {
@@ -130,10 +190,10 @@ struct ProjectExplorer: View {
     }
 
     private func row(
-        _ row: ProjectRow, font: UIFont?, rowH: Float, colors: GitMarkColors, theme: Theme
+        _ row: ProjectRow, isSelected: Bool, font: UIFont?, rowH: Float, colors: GitMarkColors,
+        theme: Theme
     ) -> some View {
         let mark = project.decorations.mark(for: row.node)
-        let isSelected = project.selected == row.node.path
         let session = self.session
         let imageEditor = session.imageEditor
         let project = self.project
