@@ -202,24 +202,29 @@ enum FocusBindings {
     /// Once a loop turn, after input — a key handler that sets a flag has its
     /// answer before the frame is drawn.
     ///
-    /// Every flag is read before anything moves, and takes go before lets-go.
-    /// Both matter when one change sets two flags — a rename field closing
-    /// sets its own to `false` and the list's it came from to `true`. Acting
-    /// on them one at a time, in the dictionary's order, the field's `false`
-    /// sometimes went first: `clear()` re-mirrors every flag, which put the
-    /// list's `true` back to `false` before it was read, and the keyboard
-    /// went nowhere. Taking first moves focus off the field, which leaves its
-    /// `false` nothing to do.
+    /// Takes go before lets-go, and each flag is read when it is acted on.
+    /// Both matter when one change sets two flags. A rename field closing
+    /// sets its own to `false` and the list's it came from to `true`: acted
+    /// on in the dictionary's order, the field's `false` sometimes went
+    /// first, and `clear()` re-mirrors every flag — the list's `true` was
+    /// back to `false` before it was read, and the keyboard went nowhere.
+    /// And a search field handing over to its results sets theirs `true`
+    /// while its own is still `true` from holding focus: taking for the
+    /// results mirrors the field's to `false`, and a value read before that
+    /// took focus straight back, so the two traded it on every turn.
     static func sync(in scope: WindowScope) {
-        let flags = entries.filter { $0.value.scope === scope }
-            .map { (id: $0.key, entry: $0.value, wants: $0.value.binding.wrappedValue) }
-        for flag in flags where flag.wants && scope.focused != flag.id {
-            WindowScope.withCurrent(scope) { FocusTargets.take(flag.id) }
+        let ids = entries.filter { $0.value.scope === scope }.map(\.key)
+        for id in ids {
+            guard let entry = entries[id], entry.binding.wrappedValue, scope.focused != id
+            else { continue }
+            WindowScope.withCurrent(scope) { FocusTargets.take(id) }
             // A target that could not take it must not be asked again
             // every turn.
-            if scope.focused != flag.id { flag.entry.binding.wrappedValue = false }
+            if scope.focused != id { entry.binding.wrappedValue = false }
         }
-        for flag in flags where !flag.wants && scope.focused == flag.id {
+        for id in ids {
+            guard let entry = entries[id], !entry.binding.wrappedValue, scope.focused == id
+            else { continue }
             WindowScope.withCurrent(scope) { FocusManager.clear() }
         }
     }

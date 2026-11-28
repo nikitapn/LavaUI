@@ -41,18 +41,21 @@ extension EditorSession {
         projectSearch.search(root: project.tree.root, options: options, immediate: true)
     }
 
-    func openProjectMatch(_ url: URL, line: ProjectSearchLine, match: Int) {
+    /// Shows a match in the preview tab, selected. `focus` hands the keyboard
+    /// to it — a click, Enter — and is off while the results are walked with
+    /// the arrows, which keep it.
+    func openProjectMatch(_ url: URL, line: ProjectSearchLine, match: Int, focus: Bool = true) {
         open([url], mode: .preview)
         guard active.isLoaded, active.url?.standardizedFileURL == url.standardizedFileURL else { return }
         guard let range = line.selection(in: active.text, match: match) else {
             notice = "This line has changed. Run the search again to refresh the results."
             return
         }
-        select(range)
+        select(range, focus: focus)
     }
 
     /// Selects `range` in the document in front and scrolls it into view.
-    func select(_ range: Range<Int>) {
+    func select(_ range: Range<Int>, focus: Bool = true) {
         if visibleDiff != nil { closeDiff() }
 
         let destination = active.id
@@ -65,7 +68,7 @@ extension EditorSession {
         FrameTasks.after { [weak self] in
             guard let self, active.id == destination else { return }
             controller.reveal(range: range)
-            controller.focus()
+            if focus { controller.focus() }
         }
     }
 }

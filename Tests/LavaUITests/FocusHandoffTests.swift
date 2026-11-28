@@ -44,6 +44,36 @@ final class FocusHandoffTests: XCTestCase {
         }
     }
 
+    /// A field holding focus — its flag `true` — hands over to a list by
+    /// the list's flag going `true` alone, the way a search box passes Down
+    /// to its results. The list keeps it: the field's flag is mirrored to
+    /// `false` by the handover, and is not read from before it.
+    func testAHandoverWhileTheGiverStillSaysTrueStays() {
+        for _ in 0..<32 {
+            let field = NodeID.generate(), list = NodeID.generate()
+            let fieldFlag = Flag(), listFlag = Flag()
+            for id in [field, list] {
+                FocusTargets.register(id) {
+                    FocusManager.focus(id, onKey: { _ in false }, onChar: { _ in false })
+                }
+            }
+            FocusBindings.register(field, Binding(get: { fieldFlag.value }, set: { fieldFlag.value = $0 }))
+            FocusBindings.register(list, Binding(get: { listFlag.value }, set: { listFlag.value = $0 }))
+            defer {
+                FocusTargets.unregisterAll(ids: [field, list])
+                FocusBindings.unregisterAll(ids: [field, list])
+            }
+
+            fieldFlag.value = true
+            FocusBindings.sync(in: WindowScope.currentOrMain)
+            listFlag.value = true
+            FocusBindings.sync(in: WindowScope.currentOrMain)
+            FocusBindings.sync(in: WindowScope.currentOrMain)
+            XCTAssertEqual(FocusManager.focusedID, list)
+            XCTAssertFalse(fieldFlag.value)
+        }
+    }
+
     /// A press on a field inside a focusable view is the field's: the view
     /// does not take focus in between. A press beside the field is the view's.
     func testAPressOnAFieldInsideAFocusableViewIsLeftToTheField() throws {

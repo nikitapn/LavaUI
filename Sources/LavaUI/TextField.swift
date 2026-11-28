@@ -91,6 +91,9 @@ public struct TextField: PrimitiveView {
     public var isSecure: Bool
     /// What happens to the selection when focus moves to another control.
     public var unfocusedSelection: UnfocusedSelection = .cleared
+    /// Sees each key before the field does; returning true keeps it from the
+    /// field. Set with `.onKey(_:)`.
+    public var onKey: ((KeyEvent) -> Bool)?
 
     /// Creates a text field.
     /// - Parameters:
@@ -191,6 +194,16 @@ public struct TextField: PrimitiveView {
         }
     }
 
+    /// The same field, with `handler` seeing each key first — Down in a
+    /// search field moving into its results, say. Return true for a key the
+    /// handler used; anything else reaches the field as usual. Escape still
+    /// reaches `onCancel` when the handler declines it.
+    public func onKey(_ handler: @escaping (KeyEvent) -> Bool) -> TextField {
+        var copy = self
+        copy.onKey = handler
+        return copy
+    }
+
     /// The same field, doing `policy` with its selection when focus leaves.
     public func unfocusedSelection(_ policy: UnfocusedSelection) -> TextField {
         var copy = self
@@ -246,12 +259,12 @@ public struct TextField: PrimitiveView {
         leaf.isMultiline = isMultiline
         leaf.maxLines = maxLines
         leaf.wraps = wraps && isMultiline
-        leaf.keyInterceptor = onCancel.map { cancel in
-            { event in
-                guard event.key == KeyCode.escape else { return false }
-                cancel()
-                return true
-            }
+        let cancel = onCancel, handler = onKey
+        leaf.keyInterceptor = cancel == nil && handler == nil ? nil : { event in
+            if let handler, handler(event) { return true }
+            guard let cancel, event.key == KeyCode.escape else { return false }
+            cancel()
+            return true
         }
         // No wrapping or sizing here: only the Yoga measure callback knows
         // the resolved width, and setting `height` after installTextMeasure()

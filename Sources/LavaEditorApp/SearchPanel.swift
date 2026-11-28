@@ -17,21 +17,34 @@ struct SearchPanel: View {
         let font = session.fonts.tab ?? FontStore.default
         let rowHeight = ((font?.lineHeight ?? 18) + 8).rounded()
         return VStack(flexGrow: 1, spacing: 0) {
-            controls
+            controls(rowHeight: rowHeight)
             if model.root == root, let result = model.result {
                 let rows = model.rows
+                // Read in the body, not in the rows the lazy list builds, so a
+                // move of the selection alone redraws the highlight.
+                let selected = model.selected
                 ScrollView(.vertical, position: model.scroll) {
                     LazyVStack(rows, rowHeight: rowHeight) { entry in
                         switch entry.row {
                         case .file(let file):
-                            fileRow(result.files[file], font: font, height: rowHeight)
+                            fileRow(result.files[file], id: entry.id, selected: entry.id == selected,
+                                    font: font, height: rowHeight)
                         case .line(let file, let line):
                             lineRow(result.files[file].lines[line], path: result.files[file].path,
+                                    id: entry.id, selected: entry.id == selected,
                                     font: font, height: rowHeight)
                         }
                     }
                 }
                 .flexGrow(1)
+                .onFrame { [model] frame in model.viewportHeight = frame.h }
+                // A click on a result gives the list the keyboard; the arrows
+                // then walk it, showing each match as they reach it.
+                .focusable(onKey: { [session, project, model] event in
+                    Self.handleKey(event, session: session, project: project, model: model,
+                                   rowHeight: rowHeight)
+                })
+                .focused(Binding(get: { model.resultsFocused }, set: { model.resultsFocused = $0 }))
                 .agentId("search-results")
             } else {
                 Spacer()
@@ -40,11 +53,19 @@ struct SearchPanel: View {
         .agentId("search-panel")
     }
 
-    private var controls: some View {
+    private func controls(rowHeight: Float) -> some View {
         VStack(spacing: 7) {
             Text("Search", color: .primary, font: session.fonts.tabSelected)
             HStack(alignment: .center, spacing: 2) {
-                field(\.query, placeholder: "Search", id: "search-query", autoFocus: true)
+                field(\.query, placeholder: "Search", id: "search-query", autoFocus: true,
+                      selectionOnFocus: .all,
+                      onKey: { [session, project, model] event in
+                          // Down leaves the field for the results, as in
+                          // any search box with a list under it.
+                          guard event.key == KeyCode.down, event.mods == 0 else { return false }
+                          return Self.enterResults(session: session, project: project, model: model,
+                                                   rowHeight: rowHeight)
+                      })
                     .focused(Binding(get: { model.queryFocused }, set: { model.queryFocused = $0 }))
                 toggle("Aa", "Match Case", id: "search-case", option: \.caseSensitive)
                 toggle("ab", "Match Whole Word", id: "search-word", option: \.wholeWord)
@@ -63,9 +84,10 @@ struct SearchPanel: View {
 
     private func field(
         _ key: WritableKeyPath<ProjectSearchOptions, String>, placeholder: String,
-        id: String, autoFocus: Bool = false
+        id: String, autoFocus: Bool = false, selectionOnFocus: TextField.FocusSelection = .none,
+        onKey: ((KeyEvent) -> Bool)? = nil
     ) -> some View {
-        TextField(
+        let field = TextField(
             text: Binding(get: { model.options(for: root)[keyPath: key] }, set: { value in
                 var options = model.options(for: root)
                 guard options[keyPath: key] != value else { return }
@@ -73,9 +95,11 @@ struct SearchPanel: View {
                 model.search(root: root, options: options)
             }),
             placeholder: placeholder, font: session.fonts.tab, autoFocus: autoFocus,
+            selectionOnFocus: selectionOnFocus,
             restingOutline: true,
             onSubmit: { model.search(root: root, options: model.options(for: root), immediate: true) }
         )
+        return (onKey.map { field.onKey($0) } ?? field)
         .flexGrow(1)
         .flexShrink(1)
         .agentId(id)
@@ -102,13 +126,21 @@ struct SearchPanel: View {
             .agentId(id)
     }
 
-    private func fileRow(_ file: ProjectSearchFile, font: UIFont?, height: Float) -> some View {
+    private func fileRow(
+        _ file: ProjectSearchFile, id: String, selected: Bool, font: UIFont?, height: Float
+    ) -> some View {
         let name = file.path.split(separator: "/").last.map(String.init) ?? file.path
         let folder = String(file.path.dropLast(name.count + 1))
         let closed = model.collapsed.contains(file.path)
+        let model = self.model
+        let theme = self.theme
         return Canvas(label: "search-file", width: .pct(100), height: .pt(height),
-                      onTap: { model.toggle(file.path) }) { list, frame in
+                      onTap: {
+                          model.selected = id
+                          model.toggle(file.path)
+                      }) { list, frame in
             guard let font else { return }
+            if selected { Self.selection(in: list, frame: frame, theme: theme) }
             let mid = frame.y + frame.h / 2
             let y = mid - font.lineHeight / 2
             let chevron: IconShape = closed ? .path("m9 18 6-6-6-6") : .path("m6 9 6 6 6-6")
@@ -135,14 +167,19 @@ struct SearchPanel: View {
             }
             list.popClip()
         }
-        .hoverBackground(theme.hover)
+        .hoverBackground(selected ? .clear : theme.hover)
+        .hoverInset(horizontal: 4, vertical: 1)
+        .cornerRadius(5)
         .cursor(.pointer)
         .agentId("search-file/\(file.path)")
     }
 
     private func lineRow(
-        _ line: ProjectSearchLine, path: String, font: UIFont?, height: Float
+        _ line: ProjectSearchLine, path: String, id: String, selected: Bool,
+        font: UIFont?, height: Float
     ) -> some View {
+        let model = self.model
+        let theme = self.theme
         let font = font ?? FontStore.default
         let number = String(line.number)
         let numberWidth = font?.shapedRun(number).width ?? 0
@@ -157,9 +194,19 @@ struct SearchPanel: View {
             } else {
                 match = 0
             }
-            session.openProjectMatch(project.tree.url(of: path), line: line, match: match)
+            model.selected = id
+            // As in the project tree: a click shows the match and leaves the
+            // keyboard on the results, for the arrows; a double click keeps
+            // the tab and goes to work in it. Handing the editor the keyboard
+            // on every click took it straight back from the list the press
+            // had just focused, and the arrows went to the document.
+            let url = project.tree.url(of: path)
+            let opens = gesture.clickCount > 1
+            session.openProjectMatch(url, line: line, match: match, focus: opens)
+            if opens { Self.keepTab(of: url, session: session) }
         }) { list, frame in
             guard let font else { return }
+            if selected { Self.selection(in: list, frame: frame, theme: theme) }
             let x = frame.x + inset
             let y = frame.y + (frame.h - font.lineHeight) / 2
             list.text(number, x: x - numberWidth - 13, y: y, w: numberWidth, h: font.lineHeight,
@@ -175,9 +222,106 @@ struct SearchPanel: View {
                       color: theme.textPrimary, font: font)
             list.popClip()
         }
-        .hoverBackground(theme.hover)
+        .hoverBackground(selected ? .clear : theme.hover)
+        .hoverInset(horizontal: 4, vertical: 1)
+        .cornerRadius(5)
         .cursor(.pointer)
         .agentId("search-match/\(path):\(line.number)")
+    }
+
+    /// The selected row's plate, the shape of the hover chip around it —
+    /// the project tree's, so the sidebar's two lists read alike.
+    private static func selection(in list: DrawList, frame: CanvasFrame, theme: Theme) {
+        list.roundedRect(x: frame.x + 4, y: frame.y + 1, w: frame.w - 8, h: frame.h - 2,
+                         color: theme.selectionFill, radius: 5)
+    }
+
+    // MARK: - Keyboard
+
+    /// From the query field into the results: the first match is selected
+    /// and shown, and the list takes the keyboard.
+    private static func enterResults(
+        session: EditorSession, project: ProjectSession, model: SearchPanelModel, rowHeight: Float
+    ) -> Bool {
+        let rows = model.rows
+        guard !rows.isEmpty else { return false }
+        let target = rows.first { if case .line = $0.row { return true } else { return false } } ?? rows[0]
+        select(target.id, session: session, project: project, model: model, rowHeight: rowHeight)
+        model.resultsFocused = true
+        return true
+    }
+
+    /// Arrows, Home/End and the page keys walk the results
+    /// (`ProjectTree.step`, a file being a folder of its lines), and a match
+    /// they reach is shown with the keyboard left here. Enter on a match
+    /// opens it to work in; on a file it folds. Up from the first row goes
+    /// back to the query.
+    private static func handleKey(
+        _ event: KeyEvent, session: EditorSession, project: ProjectSession,
+        model: SearchPanelModel, rowHeight: Float
+    ) -> Bool {
+        guard event.mods == 0 else { return false }
+        let rows = model.rows
+        let page = max(1, Int(model.viewportHeight / max(1, rowHeight)) - 1)
+        let key: ProjectTreeKey
+        switch event.key {
+        case KeyCode.up:
+            if model.selected == nil || model.selected == rows.first?.id {
+                        model.queryFocused = true
+                return true
+            }
+            key = .up
+        case KeyCode.down: key = .down
+        case KeyCode.left: key = .left
+        case KeyCode.right: key = .right
+        case KeyCode.home: key = .home
+        case KeyCode.end: key = .end
+        case KeyCode.pageUp: key = .pageUp(rows: page)
+        case KeyCode.pageDown: key = .pageDown(rows: page)
+        case KeyCode.enter, KeyCode.space:
+            guard let id = model.selected else { return true }
+            if let hit = model.line(for: id) {
+                if event.key == KeyCode.enter {
+                    let url = project.tree.url(of: hit.path)
+                    session.openProjectMatch(url, line: hit.line, match: 0)
+                    keepTab(of: url, session: session)
+                }
+            } else {
+                model.toggle(id)
+            }
+            return true
+        default:
+            return false
+        }
+        switch ProjectTree.step(key, from: model.selected, in: model.navigationRows) {
+        case .select(let id):
+            select(id, session: session, project: project, model: model, rowHeight: rowHeight)
+        case .expand(let id), .collapse(let id):
+            model.toggle(id)
+        case .none:
+            break
+        }
+        return true
+    }
+
+    /// The preview tab on `url` stops being a preview.
+    private static func keepTab(of url: URL, session: EditorSession) {
+        let target = url.standardizedFileURL
+        if let index = session.documents.firstIndex(where: { $0.url?.standardizedFileURL == target }) {
+            session.keepTabOpen(index)
+        }
+    }
+
+    private static func select(
+        _ id: String, session: EditorSession, project: ProjectSession,
+        model: SearchPanelModel, rowHeight: Float
+    ) {
+        model.selected = id
+        model.keepInSight(id, rowHeight: rowHeight)
+        if let hit = model.line(for: id) {
+            session.openProjectMatch(project.tree.url(of: hit.path), line: hit.line, match: 0,
+                                     focus: false)
+        }
     }
 }
 

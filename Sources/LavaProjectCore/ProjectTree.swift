@@ -23,6 +23,12 @@ public struct ProjectRow: Equatable, Identifiable, Sendable {
     /// 0 for the root's own children.
     public var depth: Int
     public var isExpanded: Bool
+
+    public init(node: ProjectNode, depth: Int, isExpanded: Bool) {
+        self.node = node
+        self.depth = depth
+        self.isExpanded = isExpanded
+    }
 }
 
 /// The folder an editor has open, as far as anyone has looked into it.

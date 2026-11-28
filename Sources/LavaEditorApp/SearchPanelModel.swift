@@ -34,6 +34,12 @@ final class SearchPanelModel {
     private var searching = false
     private var failure: String?
     var queryFocused = false
+    /// The result row the keyboard is on, by `Entry.id`.
+    var selected: String?
+    /// Whether the results hold the keyboard.
+    var resultsFocused = false
+    /// The results' visible height, from layout: what a page is.
+    @ObservationIgnored var viewportHeight: Float = 0
 
     /// The documents with unsaved edits under a root, as they are now. The
     /// session supplies it; called on the main thread only.
@@ -137,6 +143,42 @@ final class SearchPanelModel {
                 model.syncScheduled = false
                 model.syncBuffers()
             }
+        }
+    }
+
+    /// The results as a tree for `ProjectTree.step`: a file heading is a
+    /// folder whose children are its matching lines, which is exactly how
+    /// the keys should treat it — Left folds a file or climbs to it from a
+    /// line, Right unfolds it or steps onto its first line.
+    var navigationRows: [ProjectRow] {
+        rows.map { entry in
+            switch entry.row {
+            case .file(let index):
+                let path = result?.files[index].path ?? entry.id
+                return ProjectRow(node: ProjectNode(name: path, path: entry.id, isDirectory: true),
+                                  depth: 0, isExpanded: !collapsed.contains(path))
+            case .line:
+                return ProjectRow(node: ProjectNode(name: entry.id, path: entry.id, isDirectory: false),
+                                  depth: 1, isExpanded: false)
+            }
+        }
+    }
+
+    /// The matching line a row id names, with its file's path.
+    func line(for id: String) -> (path: String, line: ProjectSearchLine)? {
+        guard let result, let entry = rows.first(where: { $0.id == id }),
+              case .line(let file, let index) = entry.row else { return nil }
+        return (result.files[file].path, result.files[file].lines[index])
+    }
+
+    /// Scrolls only as far as it takes to show the row `id`.
+    func keepInSight(_ id: String, rowHeight: Float) {
+        guard viewportHeight > 0, let index = rows.firstIndex(where: { $0.id == id }) else { return }
+        let top = Float(index) * rowHeight
+        if top < scroll.offset {
+            scroll.scroll(to: top)
+        } else if top + rowHeight > scroll.offset + viewportHeight {
+            scroll.scroll(to: top + rowHeight - viewportHeight)
         }
     }
 
