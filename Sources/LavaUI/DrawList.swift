@@ -3117,12 +3117,14 @@ extension DrawList {
             if let span = selectionSpans[row] {
                 // A neighbour joins only if it is the next row on screen: a
                 // blank row (`lineGaps`) between the two separates them.
-                let above = selectionSpans[row - 1].flatMap {
-                    rowTopOf(row - 1) + lineH == rowTop ? $0 : nil
+                // Decided on slots, which are whole numbers — comparing the
+                // rows' tops in Float failed on about one pair in a hundred
+                // at a fractional scroll offset, and the outline broke there.
+                func touches(_ a: Int, _ b: Int) -> Bool {
+                    gaps.isEmpty || gaps.slot(ofRow: b) == gaps.slot(ofRow: a) + 1
                 }
-                let below = selectionSpans[row + 1].flatMap {
-                    rowTopOf(row + 1) == rowTop + lineH ? $0 : nil
-                }
+                let above = selectionSpans[row - 1].flatMap { touches(row - 1, row) ? $0 : nil }
+                let below = selectionSpans[row + 1].flatMap { touches(row, row + 1) ? $0 : nil }
                 let slice = Self.selectionSlice(
                     top: rowTop, height: lineH, span: span, above: above, below: below,
                     radius: Self.selectionCornerRadius
