@@ -74,7 +74,11 @@ struct LavaEditorView: View {
         return VStack(flexGrow: 1, spacing: 0) {
             if let document = session.closingDocument { unsavedBar(document) }
             if session.active.preview == nil, session.gotoOpen { gotoBar }
-            if let notice = session.notice { noticeBar(notice) }
+            if session.findFile.chordPending {
+                noticeBar("C-x-") { session.findFile.resetChord() }
+            } else if let notice = session.notice {
+                noticeBar(notice) { session.notice = nil }
+            }
             editor(appearance)
                 .overlay(
                     alignment: .topTrailing, insets: EdgeInsets(top: 12, trailing: 32),
@@ -318,10 +322,10 @@ struct LavaEditorView: View {
         .background(Environment.current.theme.selectionFill)
     }
 
-    private func noticeBar(_ notice: String) -> some View {
+    private func noticeBar(_ notice: String, dismiss: @escaping () -> Void) -> some View {
         HStack(padding: 6, alignment: .center, spacing: 8) {
             Text(notice, color: .muted).flexGrow(1).agentId("notice")
-            HStack(padding: 4, alignment: .center, onClick: { session.notice = nil }) {
+            HStack(padding: 4, alignment: .center, onClick: dismiss) {
                 Mark(.cross, size: 8, color: .dim)
             }
                 .hoverBackground(Environment.current.theme.hover)

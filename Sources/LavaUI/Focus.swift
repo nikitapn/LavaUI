@@ -31,6 +31,7 @@ public enum FocusManager {
     public static func focus(
         _ id: NodeID,
         keysBeforeShortcuts: Bool = false,
+        hasTextSelection: (() -> Bool)? = nil,
         onKey: @escaping (KeyEvent) -> Bool,
         onChar: @escaping (Character) -> Bool
     ) {
@@ -46,6 +47,7 @@ public enum FocusManager {
         scope.keyHandler = onKey
         scope.charHandler = onChar
         scope.keysBeforeShortcuts = keysBeforeShortcuts
+        scope.hasTextSelection = hasTextSelection
         if moved, let previous { FocusLoss.fire(previous) }
         if moved { FocusBindings.focusChanged(in: scope) }
     }
@@ -79,14 +81,21 @@ public enum FocusManager {
         scope.keyHandler = nil
         scope.charHandler = nil
         scope.keysBeforeShortcuts = false
+        scope.hasTextSelection = nil
         if let previous { FocusLoss.fire(previous) }
         if moved { FocusBindings.focusChanged(in: scope) }
     }
 
     /// Whether what holds focus asked to see keys before menu shortcuts.
-    static var takesKeysBeforeShortcuts: Bool {
+    public static var takesKeysBeforeShortcuts: Bool {
         let scope = WindowScope.currentOrMain
         return scope.focused != nil && scope.keysBeforeShortcuts
+    }
+
+    /// Whether the focused text control has a nonempty selection. Raw shortcuts
+    /// can use this to leave editing keys such as Cut with the control.
+    public static var hasTextSelection: Bool {
+        WindowScope.currentOrMain.hasTextSelection?() ?? false
     }
 
     /// Whether what holds focus is something typed into — a field or an

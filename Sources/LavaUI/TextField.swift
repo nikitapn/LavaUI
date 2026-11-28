@@ -1177,6 +1177,7 @@ extension LeafNode {
     func focusSelf(binding: Binding<String>, onSubmit: (() -> Void)?) {
         FocusManager.focus(
             id,
+            hasTextSelection: { [weak self] in self?.editing.hasSelection ?? false },
             onKey: { [weak self] event in
                 guard let self else { return false }
                 if let intercept = self.keyInterceptor, intercept(event) { return true }
