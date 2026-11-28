@@ -273,13 +273,11 @@ final class ScrollNode: YogaBoxNode {
         ScrollPositions.anyPending = true
     }
 
-    /// Jumps to the position's pending offset, measured against the layout
-    /// just computed. True when lazy content has to settle again for it.
-    func applyPendingPosition() -> Bool {
-        guard let wanted = position?.pending
-            ?? (followsEnd && isFollowingEnd ? Float.greatestFiniteMagnitude : nil)
-        else { return false }
-        position?.pending = nil
+    /// Takes the viewport and content lengths from the layout just computed,
+    /// for a jump made before this frame's emit — which is otherwise where
+    /// they are recorded, so on a view's first frame they are still zero and
+    /// every offset clamps to the top.
+    private func measureFromLayout() {
         let vertical = axis == .vertical
         viewportLength = vertical
             ? YGNodeLayoutGetHeight(yogaStorage) : YGNodeLayoutGetWidth(yogaStorage)
@@ -291,6 +289,16 @@ final class ScrollNode: YogaBoxNode {
                 : YGNodeLayoutGetLeft(child) + YGNodeLayoutGetWidth(child))
         }
         contentLength = extent
+    }
+
+    /// Jumps to the position's pending offset, measured against the layout
+    /// just computed. True when lazy content has to settle again for it.
+    func applyPendingPosition() -> Bool {
+        guard let wanted = position?.pending
+            ?? (followsEnd && isFollowingEnd ? Float.greatestFiniteMagnitude : nil)
+        else { return false }
+        position?.pending = nil
+        measureFromLayout()
         let target = clamped(wanted)
         if followsEnd { isFollowingEnd = maxOffset - target <= 2 }
         // Assigned here as well as requested — unlike `requestOffset` — so
@@ -461,7 +469,17 @@ final class ScrollNode: YogaBoxNode {
         )
     }
 
-    func reveal(top: Float, bottom: Float, viewport: Float) {
+    /// Scrolls only as far as it takes to show `top..<bottom`.
+    ///
+    /// `immediate` is for a reveal that follows a keyboard selection: the
+    /// offset is adopted here and the renderer is told to be there on the
+    /// frame that carries it. Eased instead, the frame that moved the
+    /// selection still showed the old scroll, with the selected row just
+    /// past the edge — the highlight blinked out for a frame on every step
+    /// that scrolled. A lazy list asks from `settleWindow` just before it
+    /// works out which rows to mount, from `effectiveOffset` — this offset —
+    /// so it mounts for where the view is going in the same pass.
+    func reveal(top: Float, bottom: Float, viewport: Float, immediate: Bool = false) {
         guard viewport > 0 else { return }
         // The covered band is not part of the viewport for this question —
         // and a box whose top is inside the band at offset 0 is the first
@@ -478,7 +496,18 @@ final class ScrollNode: YogaBoxNode {
         let serial = nextRevealSerial
         nextRevealSerial &+= 1
         if nextRevealSerial == 0 { nextRevealSerial = 1 }
-        revealRequest = (max(0, target), serial, false)
+        if immediate {
+            measureFromLayout()
+            // A lazy list that just grew has its new height set but not yet
+            // laid out; the box being revealed is in the content regardless.
+            contentLength = max(contentLength, bottom)
+            let adopted = clamped(target)
+            scrollOffset = adopted
+            position?.offset = adopted
+            revealRequest = (adopted, serial, true)
+        } else {
+            revealRequest = (max(0, target), serial, false)
+        }
         ViewInvalidation.markNeedsRedraw()
     }
 

@@ -429,7 +429,7 @@ final class LazyGridNode: YogaBoxNode {
         let viewport = YGNodeLayoutGetHeight(scrollYoga)
         let row = index / columns
         let top = YGNodeLayoutGetTop(yogaStorage) + Float(row) * rowStride
-        scroll.reveal(top: top, bottom: top + laidOutCellHeight, viewport: viewport)
+        scroll.reveal(top: top, bottom: top + laidOutCellHeight, viewport: viewport, immediate: true)
     }
 
     /// Index range the viewport needs, in cells.

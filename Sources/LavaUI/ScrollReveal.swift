@@ -65,9 +65,9 @@ enum ScrollReveal {
                     let h = YGNodeLayoutGetHeight(yoga)
                     switch scroll.axis {
                     case .horizontal:
-                        scroll.reveal(top: x, bottom: x + w, viewport: scroll.boxWidth)
+                        scroll.reveal(top: x, bottom: x + w, viewport: scroll.boxWidth, immediate: true)
                     case .vertical:
-                        scroll.reveal(top: y, bottom: y + h, viewport: scroll.boxHeight)
+                        scroll.reveal(top: y, bottom: y + h, viewport: scroll.boxHeight, immediate: true)
                     }
                 }
             }
