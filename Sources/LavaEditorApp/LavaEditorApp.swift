@@ -39,6 +39,7 @@ struct LavaEditorApp {
             editor: editor,
             menu: { menuBar(session: session, fontDialog: fontDialog, editor: editor) },
             onRawKey: { event in
+                if session.pendingWorkspace == nil, session.handleKeyChord(event) { return true }
                 // Escape in the chat's field closes the chat, wherever the
                 // field's own handling would have sent it.
                 if let chat = session.inlineChat, chat.inputFocused, session.pendingWorkspace == nil,
@@ -97,6 +98,8 @@ struct LavaEditorApp {
                     "Open…", id: "file.open",
                     shortcut: KeyShortcut(KeyCode.o, .primary)
                 ) { session.openFileDialog() }
+                MenuItem("Find File…", id: "file.find-file") { session.showFindFile(.directory) }
+                MenuItem("Find File in Project…", id: "file.find-project-file") { session.showFindFile(.project) }
                 MenuItem(
                     "Open Folder…", id: "file.open-folder",
                     shortcut: KeyShortcut(KeyCode.o, [.primary, .shift])

@@ -74,6 +74,25 @@ final class FocusHandoffTests: XCTestCase {
         }
     }
 
+    func testTextSelectionFollowsTheFocusedField() {
+        var text = "name"
+        let field = TextField(text: Binding(get: { text }, set: { text = $0 }),
+                              autoFocus: true, selectionOnFocus: .all)
+        let node = field.mountPrimitive()
+        XCTAssertTrue(FocusManager.isFocused(node.id))
+        XCTAssertTrue(FocusManager.hasTextSelection)
+
+        FocusManager.handle(KeyEvent(key: KeyCode.end, mods: 0))
+        XCTAssertFalse(FocusManager.hasTextSelection)
+        FocusManager.handle(KeyEvent(key: KeyCode.a, mods: KeyMods.control))
+        XCTAssertTrue(FocusManager.hasTextSelection)
+
+        FocusManager.focus(NodeID.generate(), onKey: { _ in false }, onChar: { _ in false })
+        XCTAssertFalse(FocusManager.hasTextSelection)
+        FocusManager.clear()
+        XCTAssertFalse(FocusManager.hasTextSelection)
+    }
+
     /// A press on a field inside a focusable view is the field's: the view
     /// does not take focus in between. A press beside the field is the view's.
     func testAPressOnAFieldInsideAFocusableViewIsLeftToTheField() throws {

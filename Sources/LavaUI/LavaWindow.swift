@@ -57,12 +57,6 @@ public final class LavaWindow {
     /// A press on a `.onFileDrag` view that has not yet travelled far
     /// enough to be a drag: the source, and where the press was.
     private var pendingFileDrag: (source: NodeID, x: Float, y: Float)?
-    /// A menu shortcut or an overlay's key handler took the last key press, and the character that
-    /// press typed is not to be delivered. A compositor sends every press
-    /// as a key and, when the layout produced one, a character — Alt+X is
-    /// also an `x` — so without this a shortcut on Alt typed its letter into
-    /// whatever held focus once the action had run. GLFW drops those itself.
-    private var swallowShortcutText = false
 
     /// Asks the widget under the pointer where, inside itself, the pointer is.
     ///
@@ -819,8 +813,8 @@ public final class LavaWindow {
                 button: ev.button, x: ev.x, y: ev.y
             )
         case .text:
-            if swallowShortcutText {
-                swallowShortcutText = false
+            if scope.swallowShortcutText {
+                scope.swallowShortcutText = false
                 break
             }
             FocusManager.releaseIfGone { host.contains($0) }
@@ -847,11 +841,11 @@ public final class LavaWindow {
             // Cleared by every key event: a press's character comes between
             // its press and its release, and text arriving after a release —
             // an input method committing a word — was typed, not a shortcut.
-            swallowShortcutText = false
+            scope.swallowShortcutText = false
             let key = KeyEvent(key: ev.button, mods: Int32(ev.y), isRepeat: ev.x > 1)
             if let modal = keyboardModal {
                 if isPress, modal.onKey?(key) == true {
-                    swallowShortcutText = true
+                    scope.swallowShortcutText = true
                 } else if isPress, hasFocus(in: modal) {
                     FocusManager.handle(key)
                 }
@@ -866,7 +860,7 @@ public final class LavaWindow {
             if isPress, let menuHost,
                menuHost.activate(matchingKey: ev.button, mods: Int32(ev.y))
             {
-                swallowShortcutText = true
+                scope.swallowShortcutText = true
                 break
             }
             if isPress, FocusManager.handle(key) {

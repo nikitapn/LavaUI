@@ -109,6 +109,7 @@ final class EditorSession {
     var branchPicker: BranchPicker?
     /// Alt+X's list of commands, while it is up. See `CommandPalette`.
     var commandPalette: CommandPalette?
+    let findFile = FindFileState()
     /// The menu bar's builder, which is where the palette's commands come
     /// from. Set by the app before it runs.
     @ObservationIgnored var commandMenu: () -> MenuBar = { MenuBar(menus: []) }

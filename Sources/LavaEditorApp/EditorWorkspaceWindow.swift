@@ -78,6 +78,20 @@ struct EditorWorkspaceWindow: View {
             }
         }
         .overlay(
+            isPresented: Binding(get: { session.findFile.picker != nil }, set: { presented in
+                if !presented { session.closeFindFile() }
+            }),
+            placement: session.findFile.picker.map(FindFileView.placement(for:))
+                ?? OverlayPlacement { _ in OverlayFrame(x: 0, y: 0, width: 1, height: 1) },
+            style: session.findFile.picker.map {
+                FindFileView.style(session: session, picker: $0, theme: appearance.theme)
+            } ?? OverlayStyle()
+        ) {
+            if let picker = session.findFile.picker {
+                FindFileView(session: session, picker: picker, appearance: appearance)
+            }
+        }
+        .overlay(
             isPresented: Binding(get: { session.agentLaunch != nil }, set: { presented in
                 if !presented { session.cancelAgentLaunch() }
             }),

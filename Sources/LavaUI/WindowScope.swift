@@ -134,6 +134,10 @@ public final class WindowScope {
     var charHandler: ((Character) -> Bool)?
     /// `FocusManager.focus(keysBeforeShortcuts:)`.
     var keysBeforeShortcuts = false
+    var hasTextSelection: (() -> Bool)?
+    /// A compositor sends a character after the key that generated it, even
+    /// when a shortcut already consumed the key.
+    var swallowShortcutText = false
 
     /// Where keys go when nothing is focused. See `FocusManager.setDefault`.
     var defaultFocus: NodeID?
