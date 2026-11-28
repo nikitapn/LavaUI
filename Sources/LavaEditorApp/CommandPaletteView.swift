@@ -10,11 +10,20 @@ struct CommandPaletteView: View {
     let palette: CommandPalette
     let appearance: EditorAppearance
 
-    /// About a dozen rows, as a minibuffer shows; the list scrolls past that.
-    static let placement = OverlayPlacement { context in
-        let height = min(context.idealSize.height, max(80, context.viewport.height * 0.45))
-        return OverlayFrame(x: 0, y: context.viewport.height - height,
-                            width: context.viewport.width, height: height)
+    /// As tall as it has been since it opened — the whole list then, up to
+    /// 45% of the window — and no shorter as the matches narrow. A
+    /// minibuffer keeps its size while it is typed into, which is what keeps
+    /// the prompt from jumping on every key; no hits is an empty list, not a
+    /// smaller box.
+    static func placement(for palette: CommandPalette) -> OverlayPlacement {
+        let tallest = palette.height
+        return OverlayPlacement { context in
+            let cap = max(80, context.viewport.height * 0.45)
+            let height = min(cap, max(tallest.value, context.idealSize.height))
+            tallest.value = height
+            return OverlayFrame(x: 0, y: context.viewport.height - height,
+                                width: context.viewport.width, height: height)
+        }
     }
 
     static func style(session: EditorSession, palette: CommandPalette, theme: Theme) -> OverlayStyle {

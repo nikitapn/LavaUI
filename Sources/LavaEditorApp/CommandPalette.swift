@@ -23,6 +23,15 @@ final class CommandPalette {
     /// Ids run through the palette, most recent first.
     let recent: [MenuID]
     @ObservationIgnored let actions: MenuActionTable
+    /// The tallest it has been laid out since it opened. See
+    /// `CommandPaletteView.placement(for:)`.
+    @ObservationIgnored let height = TallestHeight()
+
+    /// Read and written by the overlay's placement, which must be
+    /// `@Sendable` and runs on the main thread, during emit.
+    final class TallestHeight: @unchecked Sendable {
+        var value: Float = 0
+    }
     /// Where the keyboard goes back to when the palette closes.
     @ObservationIgnored let returnFocus: ReturnFocus
 

@@ -67,7 +67,8 @@ struct EditorWorkspaceWindow: View {
             isPresented: Binding(get: { session.commandPalette != nil }, set: { presented in
                 if !presented, session.commandPalette != nil { session.closeCommandPalette() }
             }),
-            placement: CommandPaletteView.placement,
+            placement: session.commandPalette.map(CommandPaletteView.placement(for:))
+                ?? OverlayPlacement { _ in OverlayFrame(x: 0, y: 0, width: 1, height: 1) },
             style: session.commandPalette.map {
                 CommandPaletteView.style(session: session, palette: $0, theme: appearance.theme)
             } ?? OverlayStyle()
