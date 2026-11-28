@@ -43,14 +43,17 @@ enum ScrollReveal {
     /// which the window's pass may already have cleared this frame; an
     /// overlay is a few dozen nodes. Leaves the flag for that pass.
     static func resolveDetached(_ root: any AnyViewNode) {
-        walk(root, scroll: nil, x: 0, y: 0)
+        walk(root, scroll: nil, x: 0, y: 0, waitsForPositions: false)
     }
 
     /// `x`,`y` accumulate the box's position in its scroll container's content
     /// — which starts again at zero inside every container, because that is
     /// the space the container's offset is measured in.
+    /// `waitsForPositions` is off for an overlay, whose layout applies no
+    /// pending positions for a reveal to wait for.
     private static func walk(
-        _ node: any AnyViewNode, scroll: ScrollNode?, x: Float, y: Float
+        _ node: any AnyViewNode, scroll: ScrollNode?, x: Float, y: Float,
+        waitsForPositions: Bool = true
     ) {
         var scroll = scroll
         var x = x
@@ -58,7 +61,14 @@ enum ScrollReveal {
         if let box = node as? YogaBoxNode, let yoga = box.yoga {
             x += YGNodeLayoutGetLeft(yoga)
             y += YGNodeLayoutGetTop(yoga)
-            if box.revealPending {
+            if box.revealPending, waitsForPositions, let scroll, scroll.awaitsExplicitPosition {
+                // The app moved this view in the same frame — LavaEditor's
+                // tab strip goes to its start when a session is restored,
+                // and the restored session's tab is selected as it mounts.
+                // Applied first, positions would override this reveal; so it
+                // waits for the pass after them and is measured from there.
+                anyPending = true
+            } else if box.revealPending {
                 box.revealPending = false
                 if let scroll {
                     let w = YGNodeLayoutGetWidth(yoga)
@@ -78,7 +88,7 @@ enum ScrollReveal {
             }
         }
         for child in node.childNodes {
-            walk(child, scroll: scroll, x: x, y: y)
+            walk(child, scroll: scroll, x: x, y: y, waitsForPositions: waitsForPositions)
         }
     }
 }

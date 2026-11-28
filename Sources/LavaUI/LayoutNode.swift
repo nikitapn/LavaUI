@@ -2451,6 +2451,11 @@ public final class LayoutHost {
                 passes += 1
             }
         }
+        // Reveals that waited for a position the app asked for in the same
+        // frame, now measured from it (`ScrollReveal.walk`).
+        if ScrollReveal.anyPending {
+            ScrollReveal.resolve(in: root)
+        }
 
         var frames: [LayoutFrame] = []
         boxes[0].collectFrames(originX: 0, originY: 0, into: &frames)

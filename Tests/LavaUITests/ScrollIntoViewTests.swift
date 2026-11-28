@@ -13,9 +13,9 @@ final class ScrollIntoViewTests: XCTestCase {
         return nil
     }
 
-    private func strip(selected: Int) -> some View {
+    private func strip(selected: Int, position: ScrollPosition? = nil) -> some View {
         HStack(width: .pt(300), height: .pt(40), alignment: .start, spacing: 0) {
-            ScrollView(.horizontal, showsIndicator: false) {
+            ScrollView(.horizontal, showsIndicator: false, position: position) {
                 HStack(height: .pt(40), alignment: .start, spacing: 0) {
                     ForEach(Array(0..<10), id: \.self) { index in
                         Text("tab \(index)")
@@ -36,6 +36,32 @@ final class ScrollIntoViewTests: XCTestCase {
         // Tab 7 spans 700…800 in a 300-wide viewport: its right edge at the
         // viewport's right edge.
         XCTAssertEqual(request.offset, 500, accuracy: 0.5)
+    }
+
+    /// LavaEditor restoring a session: the strip is sent to its start and
+    /// the restored tab, far along it, is selected as it mounts. The reveal
+    /// is measured from the start rather than overridden by it.
+    func testARevealInTheSameFrameAsAnAskedForPositionIsMeasuredFromIt() throws {
+        let position = ScrollPosition(offset: 250)
+        position.scrollToTop()
+        let host = LayoutHost()
+        host.setRoot(strip(selected: 7, position: position))
+        _ = host.calculateLayout(width: 300, height: 40)
+        let scroll = try XCTUnwrap(host.rootNode.flatMap(scrollNode(in:)))
+        XCTAssertEqual(scroll.scrollOffset, 500, accuracy: 0.5)
+        XCTAssertEqual(position.offset, 500, accuracy: 0.5)
+    }
+
+    /// The asked-for position still stands when nothing asks to be revealed.
+    func testAnAskedForPositionWithNoRevealStaysPut() throws {
+        let position = ScrollPosition()
+        position.scroll(to: 120)
+        let host = LayoutHost()
+        host.setRoot(strip(selected: 2, position: position))
+        _ = host.calculateLayout(width: 300, height: 40)
+        let scroll = try XCTUnwrap(host.rootNode.flatMap(scrollNode(in:)))
+        // Tab 2 (200…300) is inside 120…420, so the reveal moves nothing.
+        XCTAssertEqual(scroll.scrollOffset, 120, accuracy: 0.5)
     }
 
     func testAViewAlreadyInSightMovesNothing() throws {

@@ -122,6 +122,11 @@ public final class ScrollPosition: @unchecked Sendable {
     /// Where the view last was, in points from the top (or leading edge).
     public internal(set) var offset: Float
     var pending: Float?
+    /// The app asked for `pending` (`scroll(to:)`), rather than the view
+    /// being handed this position (`bind`). A reveal asked in the same frame
+    /// is then measured from where this puts the view, instead of being
+    /// overridden by it — see `ScrollReveal.walk`.
+    var pendingIsExplicit = false
 
     /// Creates a position at `offset` points from the start.
     public init(offset: Float = 0) {
@@ -133,6 +138,7 @@ public final class ScrollPosition: @unchecked Sendable {
     /// are clamped against the content's length.
     public func scroll(to offset: Float) {
         pending = max(0, offset)
+        pendingIsExplicit = true
         ScrollPositions.anyPending = true
         ViewInvalidation.markNeedsLayout()
     }
@@ -269,6 +275,9 @@ final class ScrollNode: YogaBoxNode {
         guard let next else { return }
         if next.pending == nil {
             next.scroll(to: isFollowingEnd ? .greatestFiniteMagnitude : next.offset)
+            // Where that list was is not a request; a reveal made against
+            // the offset this box is leaving must not move it.
+            next.pendingIsExplicit = false
         }
         ScrollPositions.anyPending = true
     }
@@ -291,6 +300,11 @@ final class ScrollNode: YogaBoxNode {
         contentLength = extent
     }
 
+    /// The app asked for an offset this layout has yet to apply.
+    var awaitsExplicitPosition: Bool {
+        position?.pending != nil && position?.pendingIsExplicit == true
+    }
+
     /// Jumps to the position's pending offset, measured against the layout
     /// just computed. True when lazy content has to settle again for it.
     func applyPendingPosition() -> Bool {
@@ -298,6 +312,7 @@ final class ScrollNode: YogaBoxNode {
             ?? (followsEnd && isFollowingEnd ? Float.greatestFiniteMagnitude : nil)
         else { return false }
         position?.pending = nil
+        position?.pendingIsExplicit = false
         measureFromLayout()
         let target = clamped(wanted)
         if followsEnd { isFollowingEnd = maxOffset - target <= 2 }
