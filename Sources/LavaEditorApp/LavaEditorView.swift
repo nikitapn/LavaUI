@@ -74,11 +74,6 @@ struct LavaEditorView: View {
         return VStack(flexGrow: 1, spacing: 0) {
             if let document = session.closingDocument { unsavedBar(document) }
             if session.active.preview == nil, session.gotoOpen { gotoBar }
-            if session.findFile.chordPending {
-                noticeBar("C-x-") { session.findFile.resetChord() }
-            } else if let notice = session.notice {
-                noticeBar(notice) { session.notice = nil }
-            }
             editor(appearance)
                 .overlay(
                     alignment: .topTrailing, insets: EdgeInsets(top: 12, trailing: 32),
@@ -322,17 +317,39 @@ struct LavaEditorView: View {
         .background(Environment.current.theme.selectionFill)
     }
 
-    private func noticeBar(_ notice: String, dismiss: @escaping () -> Void) -> some View {
-        HStack(padding: 6, alignment: .center, spacing: 8) {
-            Text(notice, color: .muted).flexGrow(1).agentId("notice")
-            HStack(padding: 4, alignment: .center, onClick: dismiss) {
-                Mark(.cross, size: 8, color: .dim)
-            }
-                .hoverBackground(Environment.current.theme.hover)
+    /// The notice — what the last action has to say — and a pending `C-x`,
+    /// in the status bar after the file's name: a line of text in the bar
+    /// every window already has, rather than a bar of its own that pushed
+    /// the document down each time something had a word to say. The first
+    /// line of a long one; all of it in the tooltip.
+    @ViewBuilder
+    private func statusNotice(theme: Theme) -> some View {
+        let pending = session.findFile.chordPending
+        if let notice = pending ? "C-x-" : session.notice, !notice.isEmpty {
+            let line = notice.split(whereSeparator: \.isNewline).first.map(String.init) ?? notice
+            HStack(flexGrow: 1, padding: 0, alignment: .center, spacing: 6) {
+                Text(line, color: pending ? appearance.languageText : theme.textSecondary,
+                     font: session.fonts.status, lineLimit: 1)
+                    .flexShrink(1)
+                    .tooltip(notice)
+                    .agentId("notice")
+                HStack(padding: 4, alignment: .center, onClick: {
+                    if pending { session.findFile.resetChord() } else { session.notice = nil }
+                }) {
+                    Mark(.cross, size: 8, color: .dim)
+                }
+                .hoverBackground(theme.hover)
                 .cornerRadius(4)
                 .cursor(.pointer)
+                .flexShrink(0)
+                .agentId("notice-dismiss")
+                Spacer()
+            }
+            .flexShrink(1)
+            .padding(.horizontal, 6)
+        } else {
+            Spacer()
         }
-        .background(Environment.current.theme.panel)
     }
 
     private func statusBar(_ appearance: EditorAppearance) -> some View {
@@ -340,9 +357,10 @@ struct LavaEditorView: View {
         return HStack(height: .pt(46), padding: 0, alignment: .center, spacing: 6) {
             if let preview = session.active.preview {
                 Text(preview.tabTitle, color: theme.textSecondary, font: session.fonts.status)
-                Spacer()
+                statusNotice(theme: theme)
             } else {
                 pathLabel(theme: theme)
+                statusNotice(theme: theme)
                 if session.active.hasInvalidUTF8, session.active.isLoaded {
                     Text("Read-only · invalid UTF-8", color: theme.accent,
                          font: session.fonts.status, lineLimit: 1)
@@ -445,8 +463,8 @@ struct LavaEditorView: View {
     /// The path owns the right-click menu and keeps the filename emphasized.
     private func pathLabel(theme: Theme) -> some View {
         let url = session.active.url
+        // As wide as the path, not the bar: the notice follows it.
         return HStack(
-            flexGrow: 1,
             padding: 3,
             alignment: .center,
             spacing: 6,

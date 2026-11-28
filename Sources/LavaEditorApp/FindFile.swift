@@ -190,13 +190,14 @@ final class FindFile: @unchecked Sendable {
         rankGeneration += 1
     }
 
+    /// The field takes the keyboard with its caret at the end
+    /// (`selectionOnFocus: .end`), and a rewrite keeps a caret that was at
+    /// the end there (`TextField` follows the end of text it is handed).
+    /// This once sent the field an End key a frame later — which, while the
+    /// field was still taking focus, moved the caret of whatever had it.
     func focusAtEnd() {
         fieldFocused = true
-        FrameTasks.after { [weak self] in
-            guard let self else { return }
-            self.pendingRewrite = nil
-            if self.fieldFocused { FocusManager.handle(KeyEvent(key: KeyCode.end, mods: 0)) }
-        }
+        FrameTasks.after { [weak self] in self?.pendingRewrite = nil }
     }
 
     private func replaceText(_ value: String) {

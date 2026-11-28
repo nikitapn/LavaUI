@@ -65,7 +65,8 @@ struct FindFileView: View {
                 TextField(
                     text: Binding(get: { picker.text }, set: { picker.edit($0) }),
                     placeholder: picker.projectRoot == nil ? "Path" : "File name",
-                    font: session.fonts.tab, focusRing: FocusRingStyle.none, restingOutline: false
+                    font: session.fonts.tab, selectionOnFocus: .end,
+                    focusRing: FocusRingStyle.none, restingOutline: false
                 )
                 .focused(Binding(get: { picker.fieldFocused }, set: { picker.fieldFocused = $0 }))
                 .flexGrow(1)

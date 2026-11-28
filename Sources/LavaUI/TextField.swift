@@ -75,6 +75,9 @@ public struct TextField: PrimitiveView {
         case all
         /// The first this many characters: "report" of "report.pdf".
         case leading(Int)
+        /// Nothing selected, the caret after the last character — a field
+        /// that opens holding a path to add to, as a minibuffer does.
+        case end
     }
     /// Overrides `Theme.focusRingStyle` when set.
     public var focusRing: FocusRingStyle?
@@ -191,6 +194,8 @@ public struct TextField: PrimitiveView {
             )
             leaf.editing.setCursor(text.startIndex)
             leaf.editing.setCursor(end, extending: true)
+        case .end:
+            leaf.editing.moveToEnd()
         }
     }
 
@@ -226,7 +231,11 @@ public struct TextField: PrimitiveView {
                 leaf.editing.setText(LeafNode.masked(text.count), keepingCursor: true)
             }
         } else if leaf.editing.text != text {
-            leaf.editing.setText(text, keepingCursor: true)
+            // A caret at the end stays at the end: text the app rewrote
+            // under it — a path completed to `src/render/` — is text to go
+            // on typing after, not a place in the middle to keep.
+            let atEnd = !leaf.editing.hasSelection && leaf.editing.focus == leaf.editing.text.endIndex
+            leaf.editing.setText(text, keepingCursor: !atEnd)
         }
         configure(leaf)
         if !leaf.usesTextMeasure { leaf.installTextMeasure() }
