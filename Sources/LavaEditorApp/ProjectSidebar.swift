@@ -1,4 +1,5 @@
 import Foundation
+import LavaExplorerCore
 import LavaProjectCore
 import LavaUI
 
@@ -112,11 +113,14 @@ struct ProjectExplorer: View {
         // it and the highlight stayed where it was until something else
         // rebuilt the tree.
         let selected = project.selected
+        // The same for the row being renamed, which swaps that row for a field.
+        let renaming = project.renaming
         return VStack(flexGrow: 1, spacing: 0) {
             header(theme: theme)
             ScrollView(.vertical, position: project.scroll) {
                 LazyVStack(project.rows, rowHeight: rowH) { entry in
                     row(entry, isSelected: entry.node.path == selected,
+                        isRenaming: entry.node.path == renaming,
                         font: font, rowH: rowH, colors: colors, theme: theme)
                 }
             }
@@ -126,7 +130,10 @@ struct ProjectExplorer: View {
             // tree; the arrows then walk it (`ProjectTree.step`).
             .focusable(onKey: { [session, project] event in
                 Self.handleKey(event, session: session, project: project, rowHeight: rowH)
+            }, onChar: { [session, project] character in
+                Self.jump(character, session: session, project: project, rowHeight: rowH)
             })
+            .focused(Binding(get: { project.treeFocused }, set: { project.treeFocused = $0 }))
             .agentId("project-rows")
         }
     }
@@ -140,6 +147,23 @@ struct ProjectExplorer: View {
     ) -> Bool {
         // Anything held with the key is somebody else's shortcut.
         guard event.mods == 0 else { return false }
+        switch event.key {
+        case KeyCode.f2:
+            session.beginRename()
+            return true
+        case KeyCode.delete:
+            session.trashSelected()
+            // The row that took its place is shown, as one the arrows reach is.
+            if let path = project.selected,
+               project.rows.contains(where: { $0.node.path == path && !$0.node.isDirectory }) {
+                session.open([project.tree.url(of: path)], mode: .treeClick)
+            }
+            return true
+        default:
+            break
+        }
+        // A key that moves the selection ends a typed-name run.
+        project.typeAhead.reset()
         let page = max(1, Int(project.viewportHeight / max(1, rowHeight)) - 1)
         let key: ProjectTreeKey
         switch event.key {
@@ -178,6 +202,24 @@ struct ProjectExplorer: View {
         return true
     }
 
+    /// A letter typed at the tree goes to the row whose name starts with what
+    /// has been typed (`ProjectTypeAhead`); a file it reaches is shown, as the
+    /// arrows show one. Whitespace is left alone — Space folds a folder.
+    private static func jump(
+        _ character: Character, session: EditorSession, project: ProjectSession, rowHeight: Float
+    ) -> Bool {
+        guard !character.isWhitespace, !character.isNewline else { return false }
+        guard let path = project.typeAhead.type(
+            character, at: FrameScheduler.now(), from: project.selected, in: project.rows
+        ) else { return true }
+        if path == project.selected { return true }
+        project.apply(.select(path), rowHeight: rowHeight)
+        if project.rows.contains(where: { $0.node.path == path && !$0.node.isDirectory }) {
+            session.open([project.tree.url(of: path)], mode: .treeClick)
+        }
+        return true
+    }
+
     private func header(theme: Theme) -> some View {
         HStack(padding: 0, alignment: .center, spacing: 8) {
             // The workspace when one is open — it is what the user named this
@@ -190,14 +232,17 @@ struct ProjectExplorer: View {
     }
 
     private func row(
-        _ row: ProjectRow, isSelected: Bool, font: UIFont?, rowH: Float, colors: GitMarkColors,
+        _ row: ProjectRow, isSelected: Bool, isRenaming: Bool, font: UIFont?, rowH: Float, colors: GitMarkColors,
         theme: Theme
-    ) -> some View {
+    ) -> AnyView {
+        if isRenaming {
+            return AnyView(renameField(row, font: font, rowH: rowH, theme: theme))
+        }
         let mark = project.decorations.mark(for: row.node)
         let session = self.session
         let imageEditor = session.imageEditor
         let project = self.project
-        return Canvas(
+        return AnyView(Canvas(
             label: "project-row",
             width: .pct(100), height: .pt(rowH),
             onGesture: { gesture in
@@ -263,7 +308,34 @@ struct ProjectExplorer: View {
         .hoverInset(horizontal: 6, vertical: 1)
         .cornerRadius(5)
         .hoverSnap()
-        .cursor(.pointer)
+        .cursor(.pointer))
+    }
+
+    /// The row while its name is edited (F2): the name in a field where the
+    /// name was, the part before the extension selected. Enter renames,
+    /// Escape leaves it, and a click elsewhere keeps a changed name.
+    private func renameField(_ row: ProjectRow, font: UIFont?, rowH: Float, theme: Theme) -> some View {
+        let session = self.session
+        let project = self.project
+        let stem = Rename.stemLength(of: row.node.name, isDirectory: row.node.isDirectory)
+        // Where the name stands in a row (`indent + 14`), less the field's
+        // own inset, so the text does not jump when the field appears.
+        let lead = 12 + Float(row.depth) * 14 + 14 - 8
+        return HStack(spacing: 0) {
+            TextField(
+                text: Binding(get: { project.renameText }, set: { project.renameText = $0 }),
+                font: font, autoFocus: true, selectionOnFocus: .leading(stem),
+                onCancel: { session.endRename(keeping: false) },
+                onSubmit: { session.commitRename() }
+            )
+            .focused(Binding(get: { project.renaming == row.node.path }, set: { focused in
+                if !focused, project.renaming == row.node.path { session.endRename(keeping: true) }
+            }))
+            .flexGrow(1)
+            .agentId("project-rename")
+        }
+        .padding(EdgeInsets(top: 1, leading: lead, bottom: 1, trailing: 8))
+        .frame(height: .pt(rowH))
     }
 }
 

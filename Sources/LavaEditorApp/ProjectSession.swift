@@ -25,6 +25,13 @@ final class ProjectSession {
     private(set) var changes: [GitStatusEntry] = []
     /// The row the keyboard and the highlight are on.
     var selected: String?
+    /// The row whose name is being edited in place (F2), and the name so far.
+    var renaming: String?
+    var renameText = ""
+    /// Whether the tree holds the keyboard — set to hand it back after a
+    /// rename, which took it for the name field.
+    var treeFocused = false
+    @ObservationIgnored var typeAhead = ProjectTypeAhead()
 
     @ObservationIgnored private(set) var repository: GitRepository?
     /// `repository != nil`, observed: the repository is found on a worker
@@ -107,6 +114,30 @@ final class ProjectSession {
         } else if top + rowHeight > scroll.offset + viewportHeight {
             scroll.scroll(to: top + rowHeight - viewportHeight)
         }
+    }
+
+    /// `old` is now `new` on disk: the tree follows, keeping what was open,
+    /// and the selection goes with it.
+    func moved(_ old: String, to new: String) {
+        tree.moved(old, to: new)
+        if let selected, selected == old || selected.hasPrefix(old + "/") {
+            self.selected = new + selected.dropFirst(old.count)
+        }
+        changed()
+    }
+
+    /// `path` has gone from disk. The selection moves to the row that took
+    /// its place — the next one, or the one before at the end of a folder.
+    func removed(_ path: String) {
+        let before = rows
+        let index = before.firstIndex { $0.node.path == path }
+        tree.reload(ProjectTree.parent(of: path))
+        changed()
+        guard let index else { return }
+        let gone = path + "/"
+        let after = before[(index + 1)...].first { $0.node.path != path && !$0.node.path.hasPrefix(gone) }
+        let replacement = after?.depth == before[index].depth ? after : nil
+        selected = (replacement ?? before[..<index].last)?.node.path
     }
 
     /// Opens the folders above a file and selects it — what following the

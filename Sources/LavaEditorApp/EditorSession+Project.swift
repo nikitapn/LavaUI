@@ -1,4 +1,5 @@
 import Foundation
+import LavaExplorerCore
 import LavaProjectCore
 import LavaUI
 
@@ -61,6 +62,92 @@ extension EditorSession {
         // click means "I want to work on this", so the keys go to the file.
         // After the press, which is when the tree takes focus.
         if doubleClick { FrameTasks.after { [controller] in controller.focus() } }
+    }
+
+    // MARK: - Renaming and throwing away
+
+    /// Puts the selected row's name in a field in place (F2), with the part
+    /// before the extension selected — what gets retyped far more often than
+    /// the type.
+    func beginRename() {
+        guard let project, let path = project.selected, !path.isEmpty else { return }
+        project.renameText = String(path.split(separator: "/").last ?? "")
+        project.renaming = path
+    }
+
+    /// Renames on disk and takes everything that pointed at the old name
+    /// along: the tree, its open folders, and tabs on the file or on files
+    /// inside a renamed folder. A refusal — the name is taken, or not a name
+    /// — keeps the field open to fix it.
+    func commitRename() {
+        guard let project, let path = project.renaming else { return }
+        let old = project.tree.url(of: path)
+        let newPath: String
+        do {
+            newPath = try Rename.rename(old.path, to: project.renameText)
+        } catch {
+            notice = "Could not rename \(old.lastPathComponent): \(Self.describe(error))"
+            return
+        }
+        project.renaming = nil
+        project.treeFocused = true
+        let new = URL(fileURLWithPath: newPath)
+        guard let relative = project.tree.path(of: new), relative != path else { return }
+        for index in documents.indices {
+            guard let url = documents[index].url?.standardizedFileURL else { continue }
+            if url == old.standardizedFileURL {
+                documents[index].url = new
+            } else if url.path.hasPrefix(old.standardizedFileURL.path + "/") {
+                documents[index].url = URL(fileURLWithPath:
+                    new.path + url.path.dropFirst(old.standardizedFileURL.path.count))
+            }
+        }
+        project.moved(path, to: relative)
+        project.refreshStatus()
+        notice = "Renamed to \(new.lastPathComponent)"
+    }
+
+    /// Leaves the name as it was. Also what losing focus does when the name
+    /// was not changed; a changed one is kept, as a click elsewhere means
+    /// "done" more often than "never mind".
+    func endRename(keeping: Bool) {
+        guard let project, project.renaming != nil else { return }
+        let original = project.renaming.flatMap { $0.split(separator: "/").last }.map(String.init)
+        if keeping, project.renameText != original {
+            commitRename()
+            if project.renaming == nil { return }
+        }
+        project.renaming = nil
+        project.treeFocused = true
+    }
+
+    /// Moves the selected row to the Trash (Delete). The Trash is the undo,
+    /// so it is not asked about first — the way a file manager does it.
+    /// Unmodified tabs on what went are closed; a tab with edits stays, and
+    /// saving it puts the file back.
+    func trashSelected() {
+        guard let project, let path = project.selected, !path.isEmpty else { return }
+        let url = project.tree.url(of: path).standardizedFileURL
+        do {
+            try TrashCan().trash(url.path)
+        } catch {
+            notice = "Could not move \(url.lastPathComponent) to the Trash: \(Self.describe(error))"
+            return
+        }
+        let ids = documents.filter { document in
+            guard !document.isModified, let file = document.url?.standardizedFileURL else { return false }
+            return file == url || file.path.hasPrefix(url.path + "/")
+        }.map(\.id)
+        for id in ids {
+            if let index = documents.firstIndex(where: { $0.id == id }) { close(index) }
+        }
+        project.removed(path)
+        project.refreshStatus()
+        notice = "Moved \(url.lastPathComponent) to the Trash"
+    }
+
+    private static func describe(_ error: Error) -> String {
+        (error as? FileAccessError)?.message ?? error.localizedDescription
     }
 
     func revealInExplorer(_ url: URL) {

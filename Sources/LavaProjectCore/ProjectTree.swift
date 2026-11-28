@@ -173,6 +173,37 @@ public struct ProjectTree: Sendable {
         }
     }
 
+    /// `old` was renamed or moved to `new` on disk. Its listings and which
+    /// of its folders are open go with it, so a renamed folder stays open
+    /// with everything below it as it was, and both parents are re-read.
+    public mutating func moved(_ old: String, to new: String) {
+        guard !old.isEmpty, !new.isEmpty, old != new else { return }
+        func map(_ path: String) -> String {
+            if path == old { return new }
+            if path.hasPrefix(old + "/") { return new + path.dropFirst(old.count) }
+            return path
+        }
+        expanded = Set(expanded.map(map))
+        var moved: [String: [ProjectNode]] = [:]
+        for (path, nodes) in listings {
+            moved[map(path)] = nodes.map { node in
+                var node = node
+                node.path = map(node.path)
+                return node
+            }
+        }
+        listings = moved
+        let from = Self.parent(of: old), to = Self.parent(of: new)
+        reload(from)
+        if to != from, listings[to] != nil { reload(to) }
+    }
+
+    /// The folder `path` is in; `""` for the root's own children.
+    public static func parent(of path: String) -> String {
+        guard let slash = path.lastIndex(of: "/") else { return "" }
+        return String(path[..<slash])
+    }
+
     // MARK: - Showing
 
     /// The visible rows, top to bottom.
