@@ -1,5 +1,6 @@
 import Foundation
 import LavaDiffCore
+import LavaExplorerCore
 import LavaGitCore
 import LavaUI
 import Observation
@@ -43,7 +44,6 @@ final class BlameState: @unchecked Sendable {
     @ObservationIgnored private var overCard = false
     @ObservationIgnored private var deadline: Double?
     @ObservationIgnored private var watchedFile: URL?
-    @ObservationIgnored private var headProbe: DispatchWorkItem?
 
     func attribution(_ key: BlameKey, repository: GitRepository) -> GitBlame? {
         if let cached = files[key] { return cached }
@@ -63,40 +63,70 @@ final class BlameState: @unchecked Sendable {
         return nil
     }
 
-    /// Standalone files and linked worktrees may have no project ref watcher.
-    /// Check HEAD without waking the window unless it actually moved.
+    /// Says when HEAD of the repository holding `file` moves — a commit,
+    /// checkout or reset in a terminal — so the blame on screen is redone.
+    /// Event-driven: inotify on the folders git writes when HEAD moves
+    /// (`GitRepository.headFolders`), and HEAD is read only after one of them
+    /// changed. Standalone files and linked worktrees have no project watcher
+    /// of their own, which is why this exists; it used to read HEAD every 3
+    /// seconds, waking the loop for as long as blame was on.
     func watchHead(of file: URL?, onRead: @escaping (GitHead?) -> Void) {
         guard file != watchedFile else { return }
-        headProbe?.cancel()
-        headProbe = nil
         watchedFile = file
-        currentProbe = nil
-        if let file { scheduleHeadProbe(file, onRead: onRead) }
+        headWatch?.stop()
+        headWatch = file.map { HeadWatch(file: $0, onRead: onRead) }
     }
 
-    private func scheduleHeadProbe(_ file: URL, onRead: @escaping (GitHead?) -> Void) {
-        let operation = HeadProbe(callback: onRead)
-        let work = DispatchWorkItem { [weak self] in
+    @ObservationIgnored private var headWatch: HeadWatch?
+
+    /// One file's watch. Its handler runs on the watcher's thread, reads HEAD
+    /// there — a few file reads through libgit2 — and hands the answer to the
+    /// frame loop; a watch replaced meanwhile says nothing.
+    private final class HeadWatch: @unchecked Sendable {
+        private let file: URL
+        private let onRead: (GitHead?) -> Void
+        private var watcher: FolderWatcher?
+        private var stopped = false
+        private let lock = NSLock()
+
+        init(file: URL, onRead: @escaping (GitHead?) -> Void) {
+            self.file = file
+            self.onRead = onRead
+            // `index` is rewritten by every `git status`, in the folder HEAD
+            // lives in, so changes come in bursts; one read per burst.
+            watcher = FolderWatcher(quiet: 0.2, patience: 1.0) { [weak self] _ in self?.changed() }
+            DispatchQueue.global(qos: .utility).async { [weak self] in self?.rewatch() }
+        }
+
+        func stop() {
+            lock.withLock { stopped = true }
+            watcher?.stop()
+        }
+
+        /// The folders to watch now: a checkout may have moved HEAD to a
+        /// branch whose file is somewhere else.
+        private func rewatch() {
+            guard let repository = GitRepository.containing(file),
+                  let folders = try? repository.headFolders() else { return }
+            watcher?.watch(folders)
+        }
+
+        private func changed() {
+            guard !lock.withLock({ stopped }) else { return }
+            rewatch()
             let head = GitHead.read(containing: file)
-            MainQueue.async { [weak self] in
-                guard let self, self.currentProbe === operation else { return }
-                operation.callback(head)
-                self.scheduleHeadProbe(file, onRead: operation.callback)
+            let ref = HeadWatchRef(self)
+            MainQueue.async {
+                guard let watch = ref.watch, !watch.lock.withLock({ watch.stopped }) else { return }
+                watch.onRead(head)
             }
         }
-        currentProbe = operation
-        headProbe = work
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3, execute: work)
     }
 
-    // Carries a callback that is only invoked on the frame loop, and identifies
-    // its probe if the user switches away and back before the worker completes.
-    private final class HeadProbe: @unchecked Sendable {
-        let callback: (GitHead?) -> Void
-        init(callback: @escaping (GitHead?) -> Void) { self.callback = callback }
+    private final class HeadWatchRef: @unchecked Sendable {
+        weak var watch: HeadWatch?
+        init(_ watch: HeadWatch) { self.watch = watch }
     }
-
-    @ObservationIgnored private var currentProbe: HeadProbe?
 
     func invalidate(path: URL? = nil) {
         if let path {

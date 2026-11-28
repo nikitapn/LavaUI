@@ -108,6 +108,32 @@ final class GitRepositoryTests: XCTestCase {
                        "You, 5 minutes ago • Second subject")
     }
 
+    func testHeadFoldersAreWhereAMoveOfHeadIsWritten() throws {
+        let repo = try XCTUnwrap(GitRepository.containing(directory))
+        let git = directory.appendingPathComponent(".git").resolvingSymlinksInPath().path
+        func resolved(_ folders: Set<String>) -> Set<String> {
+            Set(folders.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path })
+        }
+        // On the default branch: the git folder and refs/heads.
+        var folders = resolved(try repo.headFolders())
+        XCTAssertTrue(folders.contains(git))
+        XCTAssertTrue(folders.contains(git + "/refs/heads"))
+        // A branch with a slash lives a folder down — once that folder exists.
+        try git_("checkout", "-q", "-b", "feature/x")
+        folders = resolved(try repo.headFolders())
+        XCTAssertTrue(folders.contains(git + "/refs/heads/feature"))
+        // A linked worktree: its own git folder for HEAD, the shared one for refs.
+        let linked = directory.deletingLastPathComponent()
+            .appendingPathComponent("lava-git-wt-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: linked) }
+        try git_("worktree", "add", "-q", "-b", "side", linked.path)
+        let worktree = try XCTUnwrap(GitRepository.containing(linked))
+        folders = resolved(try worktree.headFolders())
+        XCTAssertTrue(folders.contains { $0.hasPrefix(git + "/worktrees/") }, "\(folders)")
+        XCTAssertTrue(folders.contains(git))
+        XCTAssertTrue(folders.contains(git + "/refs/heads"))
+    }
+
     func testBlameDateRelativeUnits() {
         let now = Date(timeIntervalSince1970: 100_000_000)
         let day: TimeInterval = 86400

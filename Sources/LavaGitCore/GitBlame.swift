@@ -89,6 +89,46 @@ extension GitRepository {
         }
     }
 
+    /// The folders a move of HEAD writes into, for a file watcher to stand
+    /// in for asking every few seconds. git moves HEAD by renaming a new file
+    /// into place: `HEAD` itself in this working tree's git folder (a
+    /// checkout, a detached HEAD), the branch's file under `refs/heads` (a
+    /// commit, a reset, a pull), or `packed-refs` in the common folder (a
+    /// `gc`). A linked worktree has its own git folder and shares the common
+    /// one. The branch's folder may not exist yet — `refs/heads/feature/`
+    /// before the first commit on `feature/x` — so the nearest one that does
+    /// stands in, and the first commit creating it is seen there.
+    ///
+    /// Recompute after a change: a checkout moves HEAD to another branch,
+    /// whose file can be in another folder.
+    public func headFolders() throws -> Set<String> {
+        try withRepository { repo in
+            func folder(_ pointer: UnsafePointer<CChar>?) -> URL? {
+                pointer.map { URL(fileURLWithPath: String(cString: $0), isDirectory: true).standardizedFileURL }
+            }
+            var out = Set<String>()
+            guard let gitDirectory = folder(git_repository_path(repo)) else { return out }
+            let common = folder(git_repository_commondir(repo)) ?? gitDirectory
+            out.insert(gitDirectory.path)
+            out.insert(common.path)
+            var head: OpaquePointer?
+            if git_reference_lookup(&head, repo, "HEAD") == 0, let head {
+                defer { git_reference_free(head) }
+                if git_reference_type(head) == GIT_REFERENCE_SYMBOLIC,
+                   let target = git_reference_symbolic_target(head) {
+                    var directory = common.appendingPathComponent(String(cString: target))
+                        .deletingLastPathComponent()
+                    while !FileManager.default.fileExists(atPath: directory.path),
+                          directory.path.count > common.path.count {
+                        directory = directory.deletingLastPathComponent()
+                    }
+                    out.insert(directory.standardizedFileURL.path)
+                }
+            }
+            return out
+        }
+    }
+
     /// Pins blame to the same commit as the caller's baseline, even if HEAD moves
     /// while this runs. The caller can reuse commit metadata across files.
     public func blame(_ url: URL, at oid: String, commits: inout [String: GitBlameCommit]) throws -> GitBlame? {
