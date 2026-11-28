@@ -31,7 +31,25 @@
       "id": "overview",
       "title": "JSON Overview",
       "kind": "embeddedSurface",
-      "languages": ["json"]
+      "languages": [
+        "json"
+      ]
+    },
+    {
+      "id": "sort-lines",
+      "title": "Sort Lines",
+      "kind": "command",
+      "shortcut": "Ctrl+Alt+S"
+    },
+    {
+      "id": "word-count",
+      "title": "Count Words",
+      "kind": "command"
+    },
+    {
+      "id": "open-readme",
+      "title": "Open Project README",
+      "kind": "command"
     }
   ]
 }

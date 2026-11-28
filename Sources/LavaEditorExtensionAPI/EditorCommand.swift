@@ -20,6 +20,14 @@ public func runEditorCommand(_ reference: UnsafePointer<CChar>,
     runExtension(reference, as: SelectionCommand.self, body: body)
 }
 
+/// A general command (`"kind": "command"` in the manifest): reads the tab in
+/// front with `readContext`, and may propose edits, open files and show a
+/// message — all done by the editor after `body` returns.
+public func runCommand(_ reference: UnsafePointer<CChar>,
+                       body: @escaping @Sendable (CommandHost) async throws -> Void) -> Int32 {
+    runExtension(reference, as: CommandHost.self, body: body)
+}
+
 public func runDocumentActionProvider(_ reference: UnsafePointer<CChar>,
     body: @escaping @Sendable (DocumentActionProvider) async throws -> Void) -> Int32 {
     runExtension(reference, as: DocumentActionProvider.self, body: body)

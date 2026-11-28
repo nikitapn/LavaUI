@@ -716,6 +716,57 @@ final class EditorSession {
         }
     }
 
+    /// Whether File → Revert File can run: a file that has a copy on disk
+    /// and a buffer that may be written.
+    var canRevert: Bool {
+        documents.indices.contains(activeIndex) && active.url != nil && active.saveUnavailable == nil
+    }
+
+    /// Puts the file as it is on disk back into the buffer, as one edit.
+    ///
+    /// Unlike Reload from Disk, which reads the file in place of the buffer
+    /// and leaves nothing to undo, this is an edit like any other — Ctrl+Z
+    /// brings the discarded changes back. That is why it asks nothing first.
+    /// Only the part that differs is replaced, so the caret and the scroll
+    /// stay where they were.
+    func revertFile() {
+        guard canRevert, let url = active.url else { return }
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            notice = "Could not revert: \(error.localizedDescription)"
+            return
+        }
+        guard let disk = String(data: data, encoding: .utf8) else {
+            notice = "Could not revert: \(url.lastPathComponent) is not valid UTF-8 on disk."
+            return
+        }
+        let name = active.name
+        if !replaceWholeText(with: disk) {
+            guard active.text == disk else {
+                notice = "Could not revert \(name): the editor is not showing it."
+                return
+            }
+        }
+        documents[activeIndex].isModified = false
+        refreshBaseline(activeIndex)
+        notice = "Reverted \(name) — Ctrl+Z brings the changes back"
+    }
+
+    /// Makes the document in front read `new`, through the editor as one
+    /// undo step, replacing only the span that differs. False when nothing
+    /// was applied — the editor is not mounted, or the text is already `new`.
+    @discardableResult
+    func replaceWholeText(with new: String) -> Bool {
+        guard let splice = TextSplice.between(active.text, new),
+              controller.replace([splice.range], with: splice.replacement) == 1 else { return false }
+        revision &+= 1
+        markModified()
+        if find.isOpen { runSearch() }
+        return true
+    }
+
     // MARK: - Closing
 
     /// Asks first when there is something to lose. The question is the whole
@@ -974,9 +1025,86 @@ final class EditorSession {
         documents[activeIndex].isModified = true
     }
 
+    /// The Extensions menu's rows for the tab in front: selection edits and
+    /// commands for its language, and commands for any tab.
     var matchingExtensionCommands: [InstalledCommand] {
-        guard active.preview == nil else { return [] }
-        return extensions.commands.filter { $0.command.kind == .selectionEdit && $0.command.matches(language: active.language.rawValue, url: active.url) }
+        extensions.commands.filter { installed in
+            let command = installed.command
+            guard command.isMenuCommand else { return false }
+            if active.preview != nil || !active.isLoaded { return command.appliesWithoutDocument }
+            return command.matches(language: active.language.rawValue, url: active.url)
+        }
+    }
+
+    /// Runs an Extensions-menu row, whichever kind it is.
+    func runExtension(_ installed: InstalledCommand) {
+        switch installed.command.kind {
+        case .selectionEdit: formatSelection(using: installed)
+        case .command: runExtensionCommand(installed)
+        default: break
+        }
+    }
+
+    /// A general extension command: hands it the tab in front, then does
+    /// what it asked for — its edits as one undo step if the document has
+    /// not changed meanwhile, the files it opened, its message.
+    func runExtensionCommand(_ installed: InstalledCommand) {
+        guard !extensionRunning else { return }
+        let hasDocument = active.preview == nil && active.isLoaded
+            && active.text.utf8.count <= SelectionExtension.limit
+        guard hasDocument || installed.command.appliesWithoutDocument else { return }
+        let position = hasDocument ? controller.position() : nil
+        let anchor = position?.anchor ?? 0, focus = position?.focus ?? 0
+        let context = CommandExtension.Context(
+            documentID: active.id, revision: revision, path: active.url?.path ?? "",
+            language: active.language.rawValue, projectRoot: project?.tree.root.path ?? "",
+            text: hasDocument ? active.text : nil,
+            selection: min(anchor, focus)..<max(anchor, focus), caret: focus
+        )
+        let base = project?.tree.root ?? active.url?.deletingLastPathComponent()
+        let owner = LanguageSessionRef(self)
+        extensionRunning = true
+        notice = "Running \(installed.command.title)…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = Result { try CommandExtension.run(installed, context: context) }
+            MainQueue.async {
+                guard let session = owner.session else { return }
+                session.extensionRunning = false
+                session.notice = nil
+                switch result {
+                case .failure(let error):
+                    session.notice = "\(installed.command.title): \(error.localizedDescription)"
+                case .success(let outcome):
+                    session.apply(outcome, of: installed, base: base)
+                }
+            }
+        }
+    }
+
+    private func apply(_ outcome: CommandExtension.Outcome, of installed: InstalledCommand, base: URL?) {
+        if let edited = outcome.edited {
+            guard active.id == edited.documentID, revision == edited.revision, active.saveUnavailable == nil else {
+                notice = "\(installed.command.title): the document changed while it ran. Its edits were discarded."
+                return
+            }
+            replaceWholeText(with: edited.text)
+        }
+        for (path, line) in outcome.opens {
+            let url = path.hasPrefix("/") ? URL(fileURLWithPath: path)
+                : (base ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath)).appendingPathComponent(path)
+            open([url.standardizedFileURL])
+            guard line > 0, active.isLoaded, active.url?.standardizedFileURL == url.standardizedFileURL else { continue }
+            // The start of the line, in characters: the controller takes
+            // offsets, and still holds the previous tab's buffer this frame.
+            var offset = 0, newlines = 0
+            for character in active.text {
+                if newlines == line - 1 { break }
+                if character.isNewline { newlines += 1 }
+                offset += 1
+            }
+            select(offset..<offset)
+        }
+        if let message = outcome.message, !message.isEmpty { notice = message }
     }
 
     func reloadExtensions() {
@@ -986,8 +1114,18 @@ final class EditorSession {
         refreshActivePreview()
         actionSnapshot = nil
         refreshLineActions()
-        notice = extensions.errors.isEmpty ? "Loaded \(extensions.commands.count) extension commands"
-            : extensions.errors.joined(separator: "\n")
+        // A shortcut the editor already uses stays the editor's; say so,
+        // or the extension's author is left wondering why the key is dead.
+        let builtIn = Set(commandMenu().resolve().model.menus
+            .filter { $0.id.raw != "extensions" }
+            .flatMap(\.allItems).compactMap(\.shortcut))
+        let clashes = extensions.commands.compactMap { installed -> String? in
+            guard let shortcut = installed.command.keyShortcut, builtIn.contains(shortcut) else { return nil }
+            return "\(installed.command.title): \(shortcut.label) is the editor's own, so it was left off."
+        }
+        let problems = extensions.errors + clashes
+        notice = problems.isEmpty ? "Loaded \(extensions.commands.count) extension commands"
+            : problems.joined(separator: "\n")
     }
 
     func formatSelection(using installed: InstalledCommand) {

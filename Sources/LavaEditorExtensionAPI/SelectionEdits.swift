@@ -30,3 +30,38 @@ extension SelectionSnapshot {
         return String(decoding: output, as: UTF8.self)
     }
 }
+
+extension CommandContext {
+    /// The selected text, or nil with nothing selected.
+    public var selectedText: String? {
+        guard hasDocument, selectionEndByte > selectionStartByte else { return nil }
+        let bytes = Array(text.utf8)
+        guard selectionEndByte <= UInt64(bytes.count) else { return nil }
+        return String(decoding: bytes[Int(selectionStartByte)..<Int(selectionEndByte)], as: UTF8.self)
+    }
+
+    /// The byte range of the whole lines the selection touches — or the
+    /// caret's line — including the last line's newline. What a line
+    /// command (sort, join, duplicate) acts on.
+    public var selectedLines: Range<UInt64> {
+        let bytes = Array(text.utf8)
+        let low = Int(min(selectionStartByte, UInt64(bytes.count)))
+        var high = Int(min(selectionEndByte, UInt64(bytes.count)))
+        // A selection ending at the start of a line does not take that line.
+        if high > low, bytes[high - 1] == 0x0A { high -= 1 }
+        var start = low
+        while start > 0, bytes[start - 1] != 0x0A { start -= 1 }
+        var end = high
+        while end < bytes.count, bytes[end] != 0x0A { end += 1 }
+        if end < bytes.count { end += 1 }
+        return UInt64(start)..<UInt64(end)
+    }
+
+    /// The whole document after `edits`, nil when they are out of order,
+    /// overlap, split a character or reach past the end — what the editor
+    /// will refuse.
+    public func applying(_ edits: [SelectionEdit], limit: Int = 8 << 20) -> String? {
+        SelectionSnapshot(documentId: documentId, revision: revision, startByte: 0,
+                          endByte: UInt64(text.utf8.count), text: text).applying(edits, limit: limit)
+    }
+}

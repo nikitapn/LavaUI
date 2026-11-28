@@ -64,7 +64,7 @@ struct LavaEditorApp {
     /// it builds this again each time it opens, so a command is enabled
     /// there exactly when it is in the menu.
     static func menuBar(session: EditorSession, fontDialog: EditorFontDialog, editor: Editor) -> MenuBar {
-        MenuBar {
+        var bar = MenuBar {
             Menu("Editor", id: "app") {
                 MenuItem("About LavaEditor", id: "app.about") {
                     FileHandle.standardError.write(
@@ -140,6 +140,7 @@ struct LavaEditorApp {
                     shortcut: KeyShortcut(KeyCode.s, [.primary, .shift]),
                     isEnabled: session.active.saveUnavailable == nil
                 ) { session.saveAs() }
+                MenuItem("Revert File", id: "file.revert", isEnabled: session.canRevert) { session.revertFile() }
                 MenuItem("Reload from Disk", id: "file.reload", isEnabled: session.active.url != nil) { session.reload() }
                 // Not inside a workspace: the folder is part of it,
                 // and closing it there was a workspace that saved
@@ -154,17 +155,6 @@ struct LavaEditorApp {
                     "Close Tab", id: "file.close",
                     shortcut: KeyShortcut(KeyCode.w, .primary)
                 ) { session.requestClose() }
-            }
-            Menu("Extensions", id: "extensions") {
-                for installed in session.matchingExtensionCommands {
-                    MenuItem(installed.command.title, id: installed.menuID,
-                             isEnabled: !session.extensionRunning && session.active.saveUnavailable == nil) {
-                        session.formatSelection(using: installed)
-                    }
-                }
-                MenuItem("Reload Extensions", id: "extensions.reload") {
-                    session.reloadExtensions()
-                }
             }
             Menu("Search", id: "search") {
                 MenuItem(
@@ -278,6 +268,38 @@ struct LavaEditorApp {
                          isChecked: session.highlightsChangedLines) {
                     session.highlightsChangedLines.toggle()
                 }
+            }
+        }
+        // An extension's shortcut gives way to the editor's own: the
+        // Extensions menu comes before Search, Git and View, and the first
+        // match in the bar is the one a key runs.
+        let taken = Set(bar.menus.flatMap(Self.shortcuts(in:)))
+        bar.menus.insert(Self.extensionsMenu(session: session, taken: taken), at: min(2, bar.menus.count))
+        return bar
+    }
+
+    private static func extensionsMenu(session: EditorSession, taken: Set<KeyShortcut>) -> Menu {
+        Menu("Extensions", id: "extensions") {
+            for installed in session.matchingExtensionCommands {
+                MenuItem(installed.command.title, id: installed.menuID,
+                         shortcut: installed.command.keyShortcut.flatMap { taken.contains($0) ? nil : $0 },
+                         isEnabled: !session.extensionRunning
+                            && (installed.command.kind == .command || session.active.saveUnavailable == nil)) {
+                    session.runExtension(installed)
+                }
+            }
+            MenuItem("Reload Extensions", id: "extensions.reload") {
+                session.reloadExtensions()
+            }
+        }
+    }
+
+    private static func shortcuts(in menu: Menu) -> [KeyShortcut] {
+        menu.content.flatMap { content -> [KeyShortcut] in
+            switch content {
+            case .item(let item): return item.shortcut.map { [$0] } ?? []
+            case .submenu(let menu): return shortcuts(in: menu)
+            case .separator: return []
             }
         }
     }

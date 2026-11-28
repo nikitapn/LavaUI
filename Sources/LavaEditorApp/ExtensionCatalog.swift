@@ -1,13 +1,29 @@
 import Foundation
+import LavaMenu
 
 struct ExtensionCommand: Decodable, Sendable {
-    enum Kind: String, Decodable { case selectionEdit, documentActions, markdownPreview, embeddedSurface }
+    enum Kind: String, Decodable { case command, selectionEdit, documentActions, markdownPreview, embeddedSurface }
 
     let id: String
     let title: String
     let kind: Kind
     let languages: [String]?
     let fileExtensions: [String]?
+    /// `"Ctrl+Alt+J"`, as `KeyShortcut(label:)` reads it. Only for the kinds
+    /// that are menu items — `command` and `selectionEdit`.
+    let shortcut: String?
+
+    /// Whether it is a row of the Extensions menu, and so of Alt+X.
+    var isMenuCommand: Bool { kind == .command || kind == .selectionEdit }
+
+    var keyShortcut: KeyShortcut? { shortcut.flatMap(KeyShortcut.init(label:)) }
+
+    /// Whether it applies to a tab with no document — a preview or a
+    /// terminal: only a command that names no language or file type, since
+    /// one that does is about a kind of document.
+    var appliesWithoutDocument: Bool {
+        kind == .command && languages == nil && fileExtensions == nil
+    }
 
     func matches(language: String, url: URL?) -> Bool {
         if languages == nil && fileExtensions == nil { return true }
@@ -41,6 +57,15 @@ private struct ExtensionManifest: Decodable {
               !commands.isEmpty, Set(commands.map(\.id)).count == commands.count,
               commands.allSatisfy({ identifier($0.id) && !$0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
         else { throw SelectionExtension.Failure(message: "Invalid extension ID, library, commands or schema version.") }
+        for command in commands {
+            guard let shortcut = command.shortcut else { continue }
+            guard command.isMenuCommand else {
+                throw SelectionExtension.Failure(message: "\(command.id): only command and selectionEdit take a shortcut.")
+            }
+            guard KeyShortcut(label: shortcut) != nil else {
+                throw SelectionExtension.Failure(message: "\(command.id): cannot read the shortcut \"\(shortcut)\".")
+            }
+        }
         let url = bundle.appendingPathComponent(library)
         guard (try url.resourceValues(forKeys: [.isRegularFileKey])).isRegularFile == true else {
             throw SelectionExtension.Failure(message: "Expected a library file named \(library).")

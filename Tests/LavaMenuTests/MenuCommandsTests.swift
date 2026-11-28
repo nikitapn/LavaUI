@@ -91,3 +91,28 @@ final class MenuCommandsTests: XCTestCase {
         #endif
     }
 }
+
+final class ShortcutLabelParsingTests: XCTestCase {
+    func testReadsWhatLabelWrites() {
+        for shortcut in [KeyShortcut(74, .primary, .option), KeyShortcut(296, .shift), KeyShortcut(257, .primary, .shift),
+                         KeyShortcut(96, .primary), KeyShortcut(290), KeyShortcut(32, .primary)] {
+            XCTAssertEqual(KeyShortcut(label: shortcut.label), shortcut, shortcut.label)
+        }
+    }
+
+    func testCaseAndSpellingsDoNotMatter() {
+        XCTAssertEqual(KeyShortcut(label: "ctrl+alt+j"), KeyShortcut(74, .primary, .option))
+        XCTAssertEqual(KeyShortcut(label: "Control + Shift + PageDown"), KeyShortcut(267, .primary, .shift))
+        XCTAssertEqual(KeyShortcut(label: "Ctrl++"), KeyShortcut(43, .primary))
+    }
+
+    func testRefusesWhatCouldNotBeBoundSafely() {
+        XCTAssertNil(KeyShortcut(label: "J"))
+        XCTAssertNil(KeyShortcut(label: "Shift+J"))
+        XCTAssertNil(KeyShortcut(label: "Ctrl+"))
+        XCTAssertNil(KeyShortcut(label: "Hyper+J"))
+        XCTAssertNil(KeyShortcut(label: "Ctrl+F26"))
+        XCTAssertNil(KeyShortcut(label: "Ctrl+Ω"))
+        XCTAssertNil(KeyShortcut(label: ""))
+    }
+}

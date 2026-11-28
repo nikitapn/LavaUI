@@ -13,7 +13,7 @@ swift run LavaEditor
 
 Open a .json file, select some JSON, and choose **Extensions → Format JSON** or **Compact JSON**. Undo restores the original text. **Reload Extensions** rescans for added or removed libraries. Replacing a library takes effect on its next invocation.
 
-Each installed extension is a directory containing an `extension.json` manifest and its shared library. LavaEditor reads manifests at startup and on reload. The manifest declares a schema version, stable extension ID, library filename and commands. Each command has its own extension-local ID, menu title and contribution kind. Version 1 supports read-only `markdownPreview` providers, explicit `selectionEdit` commands and automatic `documentActions` providers. The [Swift test extension](../SwiftTestExtension/README.md) uses the latter to publish clickable gutter buttons and inline hints. Optional `languages` matches the editor’s language IDs and `fileExtensions` matches filename suffixes without a leading dot, case-insensitively. Either selector may match. Omit both for all documents, including untitled buffers. The `plain` language includes untitled buffers and unrecognized file formats.
+Each installed extension is a directory containing an `extension.json` manifest and its shared library. LavaEditor reads manifests at startup and on reload. The manifest declares a schema version, stable extension ID, library filename and commands. Each command has its own extension-local ID, menu title and contribution kind. Version 1 supports general `command`s, read-only `markdownPreview` providers, explicit `selectionEdit` commands and automatic `documentActions` providers. A `command` or `selectionEdit` is a row of the **Extensions** menu, and so of the command palette (Alt+X), and may name a `"shortcut"` such as `"Ctrl+Alt+S"` — written as the palette shows shortcuts; a printable key needs Ctrl, Alt or Super. A shortcut the editor already uses stays the editor's, and **Reload Extensions** says so. The [Swift test extension](../SwiftTestExtension/README.md) uses the latter to publish clickable gutter buttons and inline hints. Optional `languages` matches the editor’s language IDs and `fileExtensions` matches filename suffixes without a leading dot, case-insensitively. Either selector may match. Omit both for all documents, including untitled buffers. The `plain` language includes untitled buffers and unrecognized file formats.
 
 Right-click a JSON tab and choose **Open Preview · Formatted JSON** to see a formatted copy, including unsaved edits. The example's `preview` command uses `runMarkdownPreviewProvider`, calls `readDocument(invocation:)` for the path and current text, then submits one string with `setMarkdown(invocation:markdown:)`. Input and output each have an 8 MiB limit. The editor renders the result with its Markdown view. A Markdown file also has a built-in preview.
 
@@ -24,6 +24,18 @@ The wire contract lives in `idl/editor_extension.npidl`. Export `lava_editor_act
 The editor applies the proposal as one undo operation after the host exits successfully and the selection is still current. A crash, a five-second timeout, a stale selection or an absent proposal leaves the buffer alone. The headless host runs under the user's filesystem and network permissions.
 
 LavaEditor configures its NPRPC runtime before opening its window. Each accepted connection gets a 12 MiB ring in each direction and a 9 MiB message ceiling. Up to 8 MiB of selection or replacement text travels inline, leaving room for RPC headers. The child adopts these values from the ring headers. Format commands use a fresh worker per invocation. Discovery workers keep their connection between requests. Invocation IDs are random 64-bit tokens delivered over a private socket.
+
+### General commands
+
+A command advertising `command` is not tied to a selection or a preview: it uses `runCommand` and reads the tab in front with `readContext(invocation:)` — path, language ID, the open folder, the whole text with unsaved edits, and the selection and caret as UTF-8 byte offsets. `hasDocument` is false for a preview tab and for a document over 8 MiB. Without `languages` or `fileExtensions` a command is offered on every tab, previews included; with them, only on matching documents.
+
+It may then ask for three things, all done by the editor after the host returns successfully, in this order:
+
+- `proposeEdits` — one batch of ordered, nonoverlapping byte ranges anywhere in the document, applied as one undo step only if the document is still the revision it read. Only the span that changed is replaced, so the caret and scroll stay put.
+- `openFile(invocation:path:line:)` — a tab for a file; a relative path is taken from the open folder, or the document's own without one. `line` is one-based, 0 for none. Up to 16 per invocation.
+- `showMessage` — a line in the notice bar; the last one wins.
+
+`CommandContext.selectedText`, `selectedLines` and `applying(_:)` cover the usual arithmetic. A command gets 30 seconds and a fresh worker each time. The example's **Sort Lines** (Ctrl+Alt+S), **Count Words** and **Open Project README** show one of each.
 
 ### Embedded surfaces
 

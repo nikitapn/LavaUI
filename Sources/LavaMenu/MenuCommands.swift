@@ -208,3 +208,54 @@ extension KeyShortcut {
         }
     }
 }
+
+extension KeyShortcut {
+    /// Reads a shortcut written the way `label` writes one — `Ctrl+Alt+J`,
+    /// `Shift+F7`, `Ctrl+Shift+Enter` — for a shortcut that comes from a
+    /// file, such as an extension's manifest. Case does not matter; `Ctrl`
+    /// is the platform's primary modifier, as it is in the menu.
+    ///
+    /// Nil for anything else, and for a printable key with no modifier
+    /// other than Shift: bound, it could not be typed any more.
+    public init?(label: String) {
+        let parts = label.split(separator: "+", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        // "Ctrl++" names the plus key: the last part is empty.
+        var names = parts
+        var keyName = names.removeLast()
+        if keyName.isEmpty, names.last == "" {
+            names.removeLast()
+            keyName = "+"
+        }
+        guard !keyName.isEmpty else { return nil }
+        var modifiers: KeyShortcutModifier = []
+        for name in names {
+            switch name.lowercased() {
+            case "ctrl", "control", "primary", "cmd", "command", "⌘": modifiers.insert(.primary)
+            case "alt", "option", "opt", "⌥": modifiers.insert(.option)
+            case "shift", "⇧": modifiers.insert(.shift)
+            case "super", "meta", "win": modifiers.insert(.command)
+            default: return nil
+            }
+        }
+        guard let key = Self.keyCode(named: keyName) else { return nil }
+        let printable = (32...126).contains(key)
+        if printable, modifiers.subtracting(.shift).isEmpty { return nil }
+        self.init(key, modifiers)
+    }
+
+    /// GLFW numbering for a key's name; letters are upper case there.
+    static func keyCode(named name: String) -> Int32? {
+        let lower = name.lowercased()
+        let named: [String: Int32] = [
+            "space": 32, "esc": 256, "escape": 256, "enter": 257, "return": 257, "tab": 258,
+            "backspace": 259, "insert": 260, "delete": 261, "del": 261, "right": 262, "left": 263,
+            "down": 264, "up": 265, "pageup": 266, "pagedown": 267, "home": 268, "end": 269,
+        ]
+        if let code = named[lower] { return code }
+        if lower.hasPrefix("f"), let n = Int(lower.dropFirst()), (1...25).contains(n) { return Int32(289 + n) }
+        guard name.unicodeScalars.count == 1, let scalar = name.uppercased().unicodeScalars.first,
+              (33...126).contains(scalar.value), !(97...122).contains(scalar.value) else { return nil }
+        return Int32(scalar.value)
+    }
+}

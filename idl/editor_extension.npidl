@@ -51,6 +51,43 @@ interface DocumentActionProvider {
   boolean ReportResult(invocation: in u64, message: in string);
 }
 
+/// What a general command (`"kind": "command"`) sees when it runs: the tab
+/// in front, as it is at that moment, unsaved edits included.
+message CommandContext {
+  /// False for a tab with no text to act on — a preview, a terminal — or a
+  /// document over 8 MiB; the fields below about it are then empty or zero.
+  hasDocument: boolean;
+  documentId: u64;
+  revision: u64;
+  /// Empty for a buffer that was never saved.
+  path: string;
+  /// The editor's language ID: `swift`, `json`, `plain`.
+  language: string;
+  /// The open folder, empty when there is none.
+  projectRoot: string;
+  text: string;
+  /// UTF-8 byte offsets into `text`. Equal when nothing is selected.
+  selectionStartByte: u64;
+  selectionEndByte: u64;
+  caretByte: u64;
+}
+
+/// Scoped to one invocation. Everything asked for is done after the host
+/// returns successfully, in the order: edits, files opened, message.
+interface CommandHost {
+  CommandContext ReadContext(invocation: in u64) raises(ExpiredInvocation);
+  /// Ordered, nonoverlapping UTF-8 byte ranges anywhere in the document,
+  /// applied as one undo step, and only if the document has not changed
+  /// since `ReadContext`. One batch per invocation.
+  EditStatus ProposeEdits(invocation: in u64, documentId: in u64, revision: in u64, edits: in vector<SelectionEdit>);
+  /// Opens a file in a tab. A relative path is taken from the project root,
+  /// or the document's folder without one. `line` is one-based; 0 leaves
+  /// the caret where the tab had it.
+  boolean OpenFile(invocation: in u64, path: in string, line: in u32);
+  /// A line for the notice bar. The last one wins.
+  boolean ShowMessage(invocation: in u64, message: in string);
+}
+
 message PreviewDocument {
   path: string;
   text: string;
