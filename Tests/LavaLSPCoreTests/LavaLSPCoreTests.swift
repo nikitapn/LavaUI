@@ -188,6 +188,60 @@ import Testing
         #expect(defaultRoot?.root == workspace)
     }
 
+    /// The two C-family servers, as the editor's defaults configure them.
+    private var cFamily: [LanguageServerConfig] {
+        [
+            LanguageServerConfig(name: "clangd", command: ["clangd"], languages: ["c", "cpp", "objective-c"],
+                                 rootMarkers: ["compile_commands.json", "build/compile_commands.json",
+                                               "compile_flags.txt", ".git"]),
+            LanguageServerConfig(name: "sourcekit-lsp", command: ["sourcekit-lsp"],
+                                 languages: ["swift", "c", "cpp", "objective-c"],
+                                 rootMarkers: ["Package.swift", ".git"]),
+        ]
+    }
+
+    /// This repository's shape: a SwiftPM package whose C targets meson's
+    /// compile database does not list, beside C++ it does.
+    @Test func cFilesGoWhereTheirBuildSettingsAre() async throws {
+        let root = try temporaryWorkspace()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let files = FileManager.default
+        for folder in [".git", "build", "Sources/CPulse/include", "canvas/src/render", "compositor/src"] {
+            try files.createDirectory(at: root.appendingPathComponent(folder), withIntermediateDirectories: true)
+        }
+        try Data().write(to: root.appendingPathComponent("Package.swift"))
+        let database = """
+        [{"directory": "\(root.path)/build", "file": "../canvas/src/render/quad.cpp", "command": "c++"},
+         {"directory": "\(root.path)/build", "file": "\(root.path)/compositor/src/main.cpp", "command": "c++"}]
+        """
+        try Data(database.utf8).write(to: root.appendingPathComponent("build/compile_commands.json"))
+        func server(_ path: String) async -> String? {
+            // As the editor names them: a header is C++ to a server.
+            let language = path.hasSuffix(".c") ? "c" : "cpp"
+            return await LanguageServerConfig.select(for: root.appendingPathComponent(path), in: root,
+                                                     configs: cFamily, language: language)?.config.name
+        }
+        // In the package, listed nowhere: the package's server.
+        #expect(await server("Sources/CPulse/lava_pulse.c") == "sourcekit-lsp")
+        #expect(await server("Sources/CPulse/include/lava_pulse.h") == "sourcekit-lsp")
+        // Listed by the build that compiles it, and its headers beside it.
+        #expect(await server("canvas/src/render/quad.cpp") == "clangd")
+        #expect(await server("canvas/src/render/quad.hpp") == "clangd")
+        #expect(await server("compositor/src/main.cpp") == "clangd")
+        let selected = await LanguageServerConfig.select(
+            for: root.appendingPathComponent("compositor/src/main.cpp"), in: root, configs: cFamily)
+        #expect(selected?.root.standardizedFileURL.path == root.standardizedFileURL.path)
+    }
+
+    @Test func plainCWithoutAPackageStaysWithClangd() async throws {
+        let root = try temporaryWorkspace()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        let selected = await LanguageServerConfig.select(for: root.appendingPathComponent("main.c"), in: root,
+                                                         configs: cFamily)
+        #expect(selected?.config.name == "clangd")
+    }
+
     private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         try JSONDecoder().decode(type, from: Data(json.utf8))
     }

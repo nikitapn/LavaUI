@@ -86,12 +86,17 @@ public struct LanguageServerSettings: Equatable, Sendable {
     }
 
     fileprivate static let defaults: [String: Self] = [
+        // Both serve the C family. Which one takes a file is
+        // `LanguageServerConfig.select`'s answer: clangd where a compile
+        // database lists it, sourcekit-lsp inside a SwiftPM package — it
+        // knows a C target's include paths, plain clangd does not.
         "sourcekit-lsp": .init(
-            command: ["sourcekit-lsp"], languages: ["swift"], rootMarkers: ["Package.swift", ".git"]
+            command: ["sourcekit-lsp"], languages: ["swift", "c", "cpp", "objective-c"],
+            rootMarkers: ["Package.swift", ".git"]
         ),
         "clangd": .init(
             command: ["clangd"], languages: ["c", "cpp", "objective-c"],
-            rootMarkers: ["compile_commands.json", "compile_flags.txt", ".git"]
+            rootMarkers: ["compile_commands.json", "build/compile_commands.json", "compile_flags.txt", ".git"]
         ),
     ]
 
