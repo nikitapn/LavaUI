@@ -36,6 +36,10 @@ struct SourceControlPanel: View {
         let font = session.fonts.tab ?? FontStore.default
         let rowH = ((font?.lineHeight ?? 18) + 8).rounded()
         let colors = GitMarkColors(appearance)
+        // Read here, not in the rows the lazy list builds, so a move of the
+        // selection alone redraws its highlight and buttons.
+        let selected = model.selected
+        let session = self.session, project = self.project
         return VStack(flexGrow: 1, spacing: 0) {
             header(theme: theme)
             if !project.isInRepository {
@@ -49,10 +53,18 @@ struct SourceControlPanel: View {
                 if let done = model.committed { line("Committed \(done)", color: colors.added, id: "scm-committed") }
                 ScrollView(.vertical, position: model.scroll) {
                     LazyVStack(rows, rowHeight: rowH) { entry in
-                        row(entry, font: font, colors: colors, theme: theme, rowH: rowH)
+                        row(entry, selected: entry.id == selected,
+                            font: font, colors: colors, theme: theme, rowH: rowH)
                     }
                 }
                 .flexGrow(1)
+                .onFrame { [model] frame in model.viewportHeight = frame.h }
+                // A click on a row gives the list the keyboard; the arrows
+                // then walk it, showing each file's diff as they reach it.
+                .focusable(onKey: { event in
+                    Self.handleKey(event, session: session, project: project, rowHeight: rowH)
+                })
+                .focused(Binding(get: { model.listFocused }, set: { model.listFocused = $0 }))
                 .agentId("scm-rows")
             }
         }
@@ -86,6 +98,13 @@ struct SourceControlPanel: View {
                 font: session.fonts.tab,
                 onSubmit: { session.commit() }
             )
+            .onKey { [project] event in
+                // Down leaves the message for the list under it.
+                guard event.key == KeyCode.down, event.mods == 0, !model.message.contains("\n")
+                else { return false }
+                return Self.enterList(session: session, project: project)
+            }
+            .focused(Binding(get: { model.messageFocused }, set: { model.messageFocused = $0 }))
             .agentId("scm-message")
             HStack(height: .pt(34), padding: 0, alignment: .center, spacing: 6, onClick: {
                 if enabled { session.commit() }
@@ -185,11 +204,11 @@ struct SourceControlPanel: View {
     private static let letterWidth: Float = 26
 
     private func row(
-        _ row: SourceControlList.Row, font: UIFont?, colors: GitMarkColors, theme: Theme, rowH: Float
+        _ row: SourceControlList.Row, selected: Bool, font: UIFont?, colors: GitMarkColors,
+        theme: Theme, rowH: Float
     ) -> some View {
         let model = project.sourceControl
         let key = row.id
-        let selected = model.selected == key
         let actions = model.hovered == key || selected ? actions(for: row) : []
         let session = self.session
         return Canvas(
@@ -280,6 +299,139 @@ struct SourceControlPanel: View {
         .hoverSnap()
         .cursor(.pointer)
         .agentId(key)
+    }
+}
+
+extension SourceControlPanel {
+    // MARK: - Keyboard
+
+    /// From the message into the list: the first file is selected and its
+    /// diff shown, and the list takes the keyboard.
+    fileprivate static func enterList(session: EditorSession, project: ProjectSession) -> Bool {
+        let model = project.sourceControl
+        let rows = SourceControlList(project.changes).rows(collapsed: model.collapsed)
+        guard let first = rows.first(where: { if case .item = $0 { return true } else { return false } })
+                ?? rows.first else { return false }
+        select(first.id, session: session, project: project, rowHeight: nil)
+        model.listFocused = true
+        return true
+    }
+
+    /// The same keys as the project tree and the search results
+    /// (`ProjectTree.step`, a group being a folder of its files), and a file
+    /// they reach shows its diff with the keyboard left here. On a file,
+    /// Space stages or unstages it and moves on to the next in its group,
+    /// Delete asks to discard it, and Enter opens it to work in; on a group,
+    /// Enter and Space fold it. While a discard is being asked about, Enter
+    /// answers yes and Escape no. Up from the top row goes to the message.
+    fileprivate static func handleKey(
+        _ event: KeyEvent, session: EditorSession, project: ProjectSession, rowHeight: Float
+    ) -> Bool {
+        let model = project.sourceControl
+        if model.pendingDiscard != nil {
+            switch event.key {
+            case KeyCode.enter:
+                session.confirmDiscard()
+                return true
+            case KeyCode.escape:
+                model.pendingDiscard = nil
+                return true
+            default:
+                break
+            }
+        }
+        guard event.mods == 0 else { return false }
+        let list = SourceControlList(project.changes)
+        let rows = list.rows(collapsed: model.collapsed)
+        let page = max(1, Int(model.viewportHeight / max(1, rowHeight)) - 1)
+        let current = rows.first { $0.id == model.selected }
+        let key: ProjectTreeKey
+        switch event.key {
+        case KeyCode.up:
+            if model.selected == nil || model.selected == rows.first?.id {
+                model.messageFocused = true
+                return true
+            }
+            key = .up
+        case KeyCode.down: key = .down
+        case KeyCode.left: key = .left
+        case KeyCode.right: key = .right
+        case KeyCode.home: key = .home
+        case KeyCode.end: key = .end
+        case KeyCode.pageUp: key = .pageUp(rows: page)
+        case KeyCode.pageDown: key = .pageDown(rows: page)
+        case KeyCode.enter, KeyCode.space, KeyCode.delete:
+            switch current {
+            case .header(let group, _)?:
+                guard event.key != KeyCode.delete else { return true }
+                if model.collapsed.remove(group) == nil { model.collapsed.insert(group) }
+            case .item(let item)?:
+                act(on: item, key: event.key, list: list, session: session, project: project,
+                    rowHeight: rowHeight)
+            case nil:
+                break
+            }
+            return true
+        default:
+            return false
+        }
+        switch ProjectTree.step(key, from: model.selected,
+                                in: list.navigationRows(collapsed: model.collapsed)) {
+        case .select(let id):
+            select(id, session: session, project: project, rowHeight: rowHeight)
+        case .expand(let id), .collapse(let id):
+            if let group = rows.first(where: { $0.id == id }).flatMap(Self.group(of:)) {
+                if model.collapsed.remove(group) == nil { model.collapsed.insert(group) }
+            }
+        case .none:
+            break
+        }
+        return true
+    }
+
+    private static func act(
+        on item: SourceControlList.Item, key: Int32, list: SourceControlList,
+        session: EditorSession, project: ProjectSession, rowHeight: Float
+    ) {
+        let model = project.sourceControl
+        let id = SourceControlList.Row.item(item).id
+        switch key {
+        case KeyCode.enter:
+            guard item.change != .deleted, let root = project.repository?.root else { return }
+            if session.visibleDiff != nil { session.closeDiff() }
+            session.open([root.appendingPathComponent(item.path)])
+            FrameTasks.after { [controller = session.controller] in controller.focus() }
+        case KeyCode.space:
+            // Chosen before the list changes: the status comes back from a
+            // worker, and by then this row is gone from its group.
+            let next = list.selectionAfterRemoving(id, collapsed: model.collapsed)
+            if item.group == .staged { session.unstage([item]) } else { session.stage([item]) }
+            if let next { select(next, session: session, project: project, rowHeight: rowHeight) }
+        case KeyCode.delete:
+            guard item.group == .changes else { return }
+            session.requestDiscard(item)
+        default:
+            break
+        }
+    }
+
+    private static func group(of row: SourceControlList.Row) -> SourceControlList.Group? {
+        if case .header(let group, _) = row { return group }
+        return nil
+    }
+
+    /// Selects row `id`, keeps it in sight, and shows a file's diff.
+    private static func select(
+        _ id: String, session: EditorSession, project: ProjectSession, rowHeight: Float?
+    ) {
+        let model = project.sourceControl
+        model.selected = id
+        let rows = SourceControlList(project.changes).rows(collapsed: model.collapsed)
+        guard let index = rows.firstIndex(where: { $0.id == id }) else { return }
+        if let rowHeight {
+            model.scroll.keepRowInSight(index, rowHeight: rowHeight, viewportHeight: model.viewportHeight)
+        }
+        if case .item(let item) = rows[index] { session.compareChange(item) }
     }
 }
 

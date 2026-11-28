@@ -141,4 +141,37 @@ public struct SourceControlList: Equatable, Sendable {
         }
         return out
     }
+
+    /// `rows(collapsed:)` as a tree for `ProjectTree.step`: a group's header
+    /// is a folder of its files, so the keys fold and climb the way they do
+    /// in the project tree. Paths are the rows' ids.
+    public func navigationRows(collapsed: Set<Group> = []) -> [ProjectRow] {
+        rows(collapsed: collapsed).map { row in
+            switch row {
+            case .header(let group, _):
+                return ProjectRow(node: ProjectNode(name: group.title, path: row.id, isDirectory: true),
+                                  depth: 0, isExpanded: !collapsed.contains(group))
+            case .item(let item):
+                return ProjectRow(node: ProjectNode(name: String(item.name), path: row.id, isDirectory: false),
+                                  depth: 1, isExpanded: false)
+            }
+        }
+    }
+
+    /// Where the selection goes when the file row `id` leaves its group —
+    /// staged, unstaged, discarded: the next file in the same group, or the
+    /// one before it at the end, or the group's header when it was the last.
+    /// So Space, Space, Space stages a run of files without aiming at each.
+    public func selectionAfterRemoving(_ id: String, collapsed: Set<Group> = []) -> String? {
+        let rows = rows(collapsed: collapsed)
+        guard let index = rows.firstIndex(where: { $0.id == id }),
+              case .item(let item) = rows[index] else { return nil }
+        func sibling(_ row: Row) -> Bool {
+            if case .item(let other) = row { return other.group == item.group }
+            return false
+        }
+        if index + 1 < rows.count, sibling(rows[index + 1]) { return rows[index + 1].id }
+        if index > 0, sibling(rows[index - 1]) { return rows[index - 1].id }
+        return Row.header(item.group, count: 0).id
+    }
 }

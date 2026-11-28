@@ -107,19 +107,9 @@ final class ProjectSession {
         }
     }
 
-    /// Scrolls only as far as it takes, the way a list follows its keyboard:
-    /// a row above the view comes in at the top, one below at the bottom.
-    /// Through the scroll position, not `scrollIntoView`: the rows are lazy,
-    /// and a row past the end of the view has no node to ask.
     private func keepInSight(_ path: String, rowHeight: Float) {
-        guard viewportHeight > 0, let index = rows.firstIndex(where: { $0.node.path == path })
-        else { return }
-        let top = Float(index) * rowHeight
-        if top < scroll.offset {
-            scroll.scroll(to: top)
-        } else if top + rowHeight > scroll.offset + viewportHeight {
-            scroll.scroll(to: top + rowHeight - viewportHeight)
-        }
+        guard let index = rows.firstIndex(where: { $0.node.path == path }) else { return }
+        scroll.keepRowInSight(index, rowHeight: rowHeight, viewportHeight: viewportHeight)
     }
 
     /// `old` is now `new` on disk: the tree follows, keeping what was open,

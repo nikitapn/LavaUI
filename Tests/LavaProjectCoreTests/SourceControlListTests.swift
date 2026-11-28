@@ -57,4 +57,25 @@ final class SourceControlListTests: XCTestCase {
         XCTAssertTrue(list.isClean)
         XCTAssertEqual(list.rows(), [.header(.changes, count: 0)])
     }
+
+    func testNavigationRowsAreGroupsOfFiles() {
+        let rows = SourceControlList(entries).navigationRows(collapsed: [.staged])
+        XCTAssertEqual(rows.first?.node.path, "h:conflicts")
+        XCTAssertEqual(rows.map(\.depth), [0, 1, 0, 0, 1, 1, 1, 1])
+        XCTAssertEqual(rows.filter(\.node.isDirectory).map(\.isExpanded), [true, false, true])
+        // Left from a file climbs to its group, as in the project tree.
+        XCTAssertEqual(ProjectTree.step(.left, from: "changes:gone.swift", in: rows), .select("h:changes"))
+    }
+
+    func testSelectionAfterRemovingGoesToANeighbourInTheSameGroup() {
+        let list = SourceControlList(entries)
+        XCTAssertEqual(list.selectionAfterRemoving("changes:both.swift"), "changes:gone.swift")
+        // The last file of a group falls back to the one before, not into
+        // the next group.
+        XCTAssertEqual(list.selectionAfterRemoving("changes:z/edited.swift"), "changes:scratch.txt")
+        XCTAssertEqual(list.selectionAfterRemoving("staged:new.swift"), "staged:both.swift")
+        // A group's only file leaves its header.
+        XCTAssertEqual(list.selectionAfterRemoving("conflicts:clash.c"), "h:conflicts")
+        XCTAssertNil(list.selectionAfterRemoving("h:changes"))
+    }
 }

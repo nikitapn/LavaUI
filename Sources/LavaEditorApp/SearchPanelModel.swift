@@ -173,13 +173,8 @@ final class SearchPanelModel {
 
     /// Scrolls only as far as it takes to show the row `id`.
     func keepInSight(_ id: String, rowHeight: Float) {
-        guard viewportHeight > 0, let index = rows.firstIndex(where: { $0.id == id }) else { return }
-        let top = Float(index) * rowHeight
-        if top < scroll.offset {
-            scroll.scroll(to: top)
-        } else if top + rowHeight > scroll.offset + viewportHeight {
-            scroll.scroll(to: top + rowHeight - viewportHeight)
-        }
+        guard let index = rows.firstIndex(where: { $0.id == id }) else { return }
+        scroll.keepRowInSight(index, rowHeight: rowHeight, viewportHeight: viewportHeight)
     }
 
     func toggle(_ path: String) {

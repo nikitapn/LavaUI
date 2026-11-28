@@ -27,7 +27,13 @@ final class SourceControlModel {
     /// selected row — the pointer can then leave it, and a click that opened
     /// a diff leaves the stage / discard buttons where the user is looking.
     var selected: String?
+    /// Whether the list, or the message box, holds the keyboard — set to
+    /// move it between the two (Down from the message, Up from the top row).
+    var listFocused = false
+    var messageFocused = false
     @ObservationIgnored let scroll = ScrollPosition()
+    /// The list's visible height, from layout: what a page is.
+    @ObservationIgnored var viewportHeight: Float = 0
 }
 
 /// The panel's actions. Every git call runs on a worker — a commit runs the
