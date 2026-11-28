@@ -629,8 +629,8 @@ public final class LavaWindow {
                 button: ev.button, x: ev.x, y: ev.y
             )
             // Focus first: a list pressed on has the keyboard by the time its
-            // row's click runs, and a text field inside it still takes focus
-            // in its own click, which comes after.
+            // row's click runs. A press on a text field inside it is left to
+            // the field, which takes focus in its own click (`focusTarget`).
             if ev.button == 0,
                let target = host.focusTarget(x: ev.x, y: ev.y, originY: menuH)
             {

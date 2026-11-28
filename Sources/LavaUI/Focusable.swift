@@ -11,8 +11,8 @@ import Foundation
 //
 // Resolved through the hit chain outwards, like `.onAnyPress`, so the row
 // under the pointer keeps its own click and the list around it still gets
-// the focus. A text field inside a focusable view still wins: its click runs
-// after the press and focuses the field.
+// the focus. A text field inside a focusable view still wins: a press on it
+// leaves focus alone (`focusTarget`), and the field takes it in its click.
 
 /// What a focusable view does with keys. Replaced on every reconcile, so the
 /// handlers it installs with `FocusManager` look it up rather than capture
@@ -52,11 +52,20 @@ enum FocusableRouter {
 
 extension LayoutHost {
     /// The nearest `.focusable` view at this point, walking outwards.
+    ///
+    /// None when something that takes focus itself is nearer the pointer —
+    /// a text field in a row of a focusable list. The field takes focus in
+    /// its own click, and the list taking it first in between was not free:
+    /// it was a focus change the field saw, and a field that ends an edit
+    /// when it loses focus (a rename in place) ended on the very click that
+    /// meant to put the caret in it.
     public func focusTarget(
         x: Float, y: Float, originX: Float = 0, originY: Float = 0
     ) -> NodeID? {
-        hitTestScrollChain(x: x, y: y, originX: originX, originY: originY)
-            .first { FocusableRouter.has($0) }
+        let nearest = hitTestScrollChain(x: x, y: y, originX: originX, originY: originY)
+            .first { FocusableRouter.has($0) || FocusTargets.has($0) }
+        guard let nearest, FocusableRouter.has(nearest) else { return nil }
+        return nearest
     }
 }
 
@@ -192,18 +201,26 @@ enum FocusBindings {
     /// target lacks focus gets it, a `false` whose target holds it lets go.
     /// Once a loop turn, after input — a key handler that sets a flag has its
     /// answer before the frame is drawn.
+    ///
+    /// Every flag is read before anything moves, and takes go before lets-go.
+    /// Both matter when one change sets two flags — a rename field closing
+    /// sets its own to `false` and the list's it came from to `true`. Acting
+    /// on them one at a time, in the dictionary's order, the field's `false`
+    /// sometimes went first: `clear()` re-mirrors every flag, which put the
+    /// list's `true` back to `false` before it was read, and the keyboard
+    /// went nowhere. Taking first moves focus off the field, which leaves its
+    /// `false` nothing to do.
     static func sync(in scope: WindowScope) {
-        for (id, entry) in entries where entry.scope === scope {
-            let wants = entry.binding.wrappedValue
-            let holds = scope.focused == id
-            if wants, !holds {
-                WindowScope.withCurrent(scope) { FocusTargets.take(id) }
-                // A target that could not take it must not be asked again
-                // every turn.
-                if scope.focused != id { entry.binding.wrappedValue = false }
-            } else if !wants, holds {
-                WindowScope.withCurrent(scope) { FocusManager.clear() }
-            }
+        let flags = entries.filter { $0.value.scope === scope }
+            .map { (id: $0.key, entry: $0.value, wants: $0.value.binding.wrappedValue) }
+        for flag in flags where flag.wants && scope.focused != flag.id {
+            WindowScope.withCurrent(scope) { FocusTargets.take(flag.id) }
+            // A target that could not take it must not be asked again
+            // every turn.
+            if scope.focused != flag.id { flag.entry.binding.wrappedValue = false }
+        }
+        for flag in flags where !flag.wants && scope.focused == flag.id {
+            WindowScope.withCurrent(scope) { FocusManager.clear() }
         }
     }
 }
