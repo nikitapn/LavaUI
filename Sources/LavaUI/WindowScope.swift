@@ -135,8 +135,15 @@ public final class WindowScope {
     /// `FocusManager.focus(keysBeforeShortcuts:)`.
     var keysBeforeShortcuts = false
     var hasTextSelection: (() -> Bool)?
-    /// A compositor sends a character after the key that generated it, even
-    /// when a shortcut already consumed the key.
+    /// A shortcut — a menu item, an overlay's key handler, or an app's raw
+    /// key hook through `LavaApp.suppressRawKeyText` — took the last key
+    /// press, and the character that press typed is not to be delivered. A
+    /// compositor sends every press as a key and, when the layout produced
+    /// one, a character — Alt+X is also an `x`, the `f` of Ctrl+X F is an
+    /// `f` — so without this a shortcut typed its letter into whatever held
+    /// focus once the action had run. GLFW drops those itself. Cleared by
+    /// every key event, so text that arrives on its own (an input method
+    /// committing a word) is never eaten.
     var swallowShortcutText = false
 
     /// Where keys go when nothing is focused. See `FocusManager.setDefault`.
