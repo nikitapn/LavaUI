@@ -28,6 +28,9 @@ final class ProjectSession {
     /// The row whose name is being edited in place (F2), and the name so far.
     var renaming: String?
     var renameText = ""
+    /// A row made by New File or New Folder that is still being named:
+    /// Escape takes it away again while it is empty.
+    @ObservationIgnored var creating: String?
     /// Whether the tree holds the keyboard — set to hand it back after a
     /// rename, which took it for the name field.
     var treeFocused = false
@@ -50,6 +53,9 @@ final class ProjectSession {
     /// The tree's visible height, from layout: what a page is, and what
     /// "in sight" means for a row the keyboard moved to.
     @ObservationIgnored var viewportHeight: Float = 0
+    /// The tree's top edge in the window, from layout, for finding the row
+    /// under a right click.
+    @ObservationIgnored var viewportTop: Float = 0
     /// The Source Control panel's own state. See `SourceControlModel`.
     let sourceControl = SourceControlModel()
 
@@ -124,6 +130,22 @@ final class ProjectSession {
             self.selected = new + selected.dropFirst(old.count)
         }
         changed()
+    }
+
+    /// `path` was just made on disk: the folders above it open, and it is
+    /// selected and in sight.
+    func created(_ path: String, rowHeight: Float) {
+        tree.reveal(path)
+        tree.reload(ProjectTree.parent(of: path))
+        changed()
+        apply(.select(path), rowHeight: rowHeight)
+    }
+
+    /// The row at a window `y`, or nil below the last row.
+    func row(atWindowY y: Float, rowHeight: Float) -> ProjectRow? {
+        guard rowHeight > 0, y >= viewportTop else { return nil }
+        let index = Int((y - viewportTop + scroll.offset) / rowHeight)
+        return rows.indices.contains(index) ? rows[index] : nil
     }
 
     /// `path` has gone from disk. The selection moves to the row that took

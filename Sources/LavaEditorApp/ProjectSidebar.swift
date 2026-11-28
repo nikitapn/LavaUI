@@ -101,6 +101,7 @@ struct ProjectExplorer: View {
     @Bindable var session: EditorSession
     let project: ProjectSession
     let appearance: EditorAppearance
+    @State private var menu: ProjectContextMenu.Anchor? = nil
 
     var body: some View {
         let theme = appearance.theme
@@ -115,6 +116,7 @@ struct ProjectExplorer: View {
         let selected = project.selected
         // The same for the row being renamed, which swaps that row for a field.
         let renaming = project.renaming
+        let menuStyle = TabContextMenu.style(theme: theme)
         return VStack(flexGrow: 1, spacing: 0) {
             header(theme: theme)
             ScrollView(.vertical, position: project.scroll) {
@@ -125,7 +127,21 @@ struct ProjectExplorer: View {
                 }
             }
             .flexGrow(1)
-            .onFrame { [project] frame in project.viewportHeight = frame.h }
+            .onFrame { [project] frame in
+                project.viewportHeight = frame.h
+                project.viewportTop = frame.y
+            }
+            // A right click selects the row under it — or nothing, below the
+            // last row, which means the project's top — and opens the menu
+            // there. Found from the pointer rather than per row: the space
+            // below the rows has no row to ask.
+            .onAnyPress { [project] button in
+                guard button == PointerButton.right else { return }
+                let point = PointerState.window
+                let path = project.row(atWindowY: point.y, rowHeight: rowH)?.node.path
+                if let path { project.selected = path }
+                menu = ProjectContextMenu.Anchor(path: path, x: point.x, y: point.y)
+            }
             // A click on a row gives the tree the keyboard, as in any file
             // tree; the arrows then walk it (`ProjectTree.step`).
             .focusable(onKey: { [session, project] event in
@@ -135,6 +151,23 @@ struct ProjectExplorer: View {
             })
             .focused(Binding(get: { project.treeFocused }, set: { project.treeFocused = $0 }))
             .agentId("project-rows")
+        }
+        .overlay(
+            isPresented: Binding(get: { menu != nil }, set: { if !$0 { menu = nil } }),
+            placement: OverlayPlacement { [menu] context in
+                let width = context.idealSize.width
+                let height = context.idealSize.height
+                let x = min(max(0, menu?.x ?? 0), max(0, context.viewport.width - width))
+                let y = min(max(0, menu?.y ?? 0), max(0, context.viewport.height - height))
+                return OverlayFrame(x: x, y: y, width: width, height: height)
+            },
+            style: menuStyle.overlayStyle
+        ) {
+            if let menu {
+                ProjectContextMenu(session: session, project: project, path: menu.path, style: menuStyle) {
+                    self.menu = nil
+                }
+            }
         }
     }
 

@@ -75,6 +75,57 @@ extension EditorSession {
         project.renaming = path
     }
 
+    /// Makes a file or folder next to `target` — inside it when it is a
+    /// folder, beside it when it is a file, at the top for nil — under a name
+    /// that is free, and puts that name in the rename field, all of it
+    /// selected. Made first and named after, as file managers do: the row is
+    /// real from the start, and Escape takes it away again while it is empty.
+    func createInTree(folder: Bool, near target: String?) {
+        guard let project else { return }
+        let row = target.flatMap { path in project.rows.first { $0.node.path == path } }
+        let parent: String
+        if let row {
+            parent = row.node.isDirectory ? row.node.path : ProjectTree.parent(of: row.node.path)
+        } else {
+            parent = ""
+        }
+        let directory = project.tree.url(of: parent).path
+        // `lstat`, not `fileExists`: a dangling link still holds its name.
+        func exists(_ path: String) -> Bool {
+            var info = stat()
+            return lstat(path, &info) == 0
+        }
+        let made: String
+        do {
+            if folder {
+                made = try NewFolder.make(
+                    named: NewFolder.freeName(in: directory, exists: exists), in: directory
+                )
+            } else {
+                var name = "untitled"
+                if exists(directory + "/" + name) {
+                    name = CopyNaming.keepBoth(name, isDirectory: false, in: directory, exists: exists)
+                }
+                made = directory + "/" + name
+                // Exclusive, so a file that appeared since the check is not
+                // emptied out.
+                let fd = Glibc.open(made, O_WRONLY | O_CREAT | O_EXCL, 0o644)
+                guard fd >= 0 else {
+                    throw FileAccessError(path: made, message: String(cString: strerror(errno)))
+                }
+                Glibc.close(fd)
+            }
+        } catch {
+            notice = "Could not make a new \(folder ? "folder" : "file"): \(Self.describe(error))"
+            return
+        }
+        guard let path = project.tree.path(of: URL(fileURLWithPath: made)) else { return }
+        project.created(path, rowHeight: projectRowHeight)
+        project.creating = path
+        project.renameText = (made as NSString).lastPathComponent
+        project.renaming = path
+    }
+
     /// Renames on disk and takes everything that pointed at the old name
     /// along: the tree, its open folders, and tabs on the file or on files
     /// inside a renamed folder. A refusal — the name is taken, or not a name
@@ -92,6 +143,16 @@ extension EditorSession {
         project.renaming = nil
         project.treeFocused = true
         let new = URL(fileURLWithPath: newPath)
+        let wasCreating = project.creating == path
+        project.creating = nil
+        defer {
+            // A file just made is made to be written in.
+            if wasCreating, !Self.isDirectory(new), let relative = project.tree.path(of: new) {
+                project.selected = relative
+                open([new], mode: .treeDoubleClick)
+                FrameTasks.after { [controller] in controller.focus() }
+            }
+        }
         guard let relative = project.tree.path(of: new), relative != path else { return }
         for index in documents.indices {
             guard let url = documents[index].url?.standardizedFileURL else { continue }
@@ -119,6 +180,26 @@ extension EditorSession {
         }
         project.renaming = nil
         project.treeFocused = true
+        if let made = project.creating {
+            project.creating = nil
+            if !keeping { discardIfEmpty(made) }
+        }
+    }
+
+    /// Takes back what New File or New Folder made, if nothing has been put
+    /// in it since. Removed outright rather than trashed: an empty file
+    /// that existed for two seconds is not something anyone wants back.
+    private func discardIfEmpty(_ path: String) {
+        guard let project else { return }
+        let url = project.tree.url(of: path)
+        let removed: Bool
+        if Self.isDirectory(url) {
+            removed = rmdir(url.path) == 0
+        } else {
+            let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? -1
+            removed = size == 0 && unlink(url.path) == 0
+        }
+        if removed { project.removed(path) }
     }
 
     /// Moves the selected row to the Trash (Delete). The Trash is the undo,

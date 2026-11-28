@@ -92,7 +92,7 @@ struct TabContextMenu: View {
     }
 
     // Match the panel's desktop program lookup and leave Explorer running on its own.
-    private static func launchExplorer(at folder: URL) -> Bool {
+    static func launchExplorer(at folder: URL) -> Bool {
         let name = "LavaExplorer"
         let directory = CommandLine.arguments.first.map {
             URL(fileURLWithPath: $0).deletingLastPathComponent()
