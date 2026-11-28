@@ -159,13 +159,19 @@ struct ProblemsView: View {
                 }
                 .flexGrow(1)
                 .onFrame { [model] frame in model.viewportHeight = frame.h }
-                .focusable(onKey: { [session] event in
-                    Self.handleKey(event, session: session, rowHeight: rowHeight)
-                })
-                .focused(Binding(get: { model.focused }, set: { model.focused = $0 }))
                 .agentId("problems-list")
             }
         }
+        // On the whole view, not the list: the list is not there while
+        // there are no problems, and a `.focused` flag set with nothing to
+        // take it stays a request — Ctrl+Shift+M on an empty list, then the
+        // tree, and the list took the keyboard from the tree the moment a
+        // diagnostic made it appear. Held here, the flag follows focus
+        // whether or not there is anything to list.
+        .focusable(onKey: { [session] event in
+            Self.handleKey(event, session: session, rowHeight: rowHeight)
+        })
+        .focused(Binding(get: { model.focused }, set: { model.focused = $0 }))
         .agentId("problems-panel")
     }
 

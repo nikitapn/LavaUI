@@ -624,6 +624,12 @@ final class LanguageServers {
             requestSync()
         case .diagnostics(let published):
             guard let path = URL(string: published.uri)?.standardizedFileURL.path else { return }
+            // Only for a file a tab has open. Warming the colour cache opens
+            // files on the server for a moment too, and a server publishes
+            // for those — clangd's report on a header nobody had open went
+            // into the Problems list, and its empty one on the close took it
+            // out again a moment later.
+            guard opened.values.contains(where: { $0.path == path }) else { return }
             diagnostics[path] = published.diagnostics.isEmpty ? nil : published.diagnostics
         case .exited(let exit, let willRestart):
             server.capabilities = nil
