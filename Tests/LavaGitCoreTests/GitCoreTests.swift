@@ -70,6 +70,59 @@ final class GitRepositoryTests: XCTestCase {
         XCTAssertEqual(try repo.contents(of: fresh), .absent)
     }
 
+    func testBlameUsesThePinnedHeadAndCommitMetadata() throws {
+        try localIdentity()
+        let repo = GitRepository(root: directory)
+        let file = directory.appendingPathComponent("a.txt")
+        let first = try XCTUnwrap(repo.headOID())
+        try write("inserted\none\nTWO\n", "a.txt")
+        try git_("add", "a.txt")
+        try git_("commit", "-qm", "Second subject", "-m", "The full body.\nWith another line.",
+                 "--author", "Another Author <another@example.invalid>",
+                 "--date", "2026-08-03T21:40:00+00:00")
+        let second = try XCTUnwrap(repo.headOID())
+        // Neither the index nor the working file describes the blamed lines.
+        try write("different on disk\n", "a.txt")
+        try git_("add", "a.txt")
+        var commits: [String: GitBlameCommit] = [:]
+        let original = try XCTUnwrap(repo.blame(file, at: first, commits: &commits))
+        XCTAssertEqual(original[0]?.oid, first)
+        XCTAssertEqual(original[1]?.oid, first)
+        XCTAssertNil(original[2])
+
+        let updated = try XCTUnwrap(repo.blame(file, at: second, commits: &commits))
+        XCTAssertEqual(updated[1]?.oid, first)
+        XCTAssertEqual(updated[1]?.authorLabel(userEmail: updated.userEmail), "You")
+        let own = try XCTUnwrap(updated[0])
+        XCTAssertEqual(own.oid, second)
+        XCTAssertEqual(own.authorLabel(userEmail: updated.userEmail), "Another Author")
+        XCTAssertEqual(own.subject, "Second subject")
+        XCTAssertEqual(own.message, "Second subject\n\nThe full body.\nWith another line.\n")
+        XCTAssertEqual(updated[2], own)
+        XCTAssertNil(updated[-1])
+        XCTAssertNil(updated[3])
+        XCTAssertEqual(Set(commits.keys), [first, second])
+        XCTAssertEqual(BlameDate.exact(own.date, timeZone: TimeZone(secondsFromGMT: 0)!),
+                       "August 3rd, 2026 9:40 PM")
+        XCTAssertEqual(own.hint(userEmail: "ANOTHER@example.invalid", now: own.date.addingTimeInterval(300)),
+                       "You, 5 minutes ago • Second subject")
+    }
+
+    func testBlameDateRelativeUnits() {
+        let now = Date(timeIntervalSince1970: 100_000_000)
+        let day: TimeInterval = 86400
+        XCTAssertEqual(BlameDate.relative(now.addingTimeInterval(1), now: now), "now")
+        XCTAssertEqual(BlameDate.relative(now.addingTimeInterval(-60), now: now), "1 minute ago")
+        XCTAssertEqual(BlameDate.relative(now.addingTimeInterval(-90 * day), now: now), "3 months ago")
+        XCTAssertEqual(BlameDate.relative(now.addingTimeInterval(-730 * day), now: now), "2 years ago")
+    }
+
+    func testNoHeadBeforeFirstCommit() throws {
+        let empty = directory.appendingPathComponent("empty")
+        try git_("init", "-q", empty.path)
+        XCTAssertNil(try GitRepository(root: empty).headOID())
+    }
+
     func testStatusAndBranch() throws {
         let repo = try XCTUnwrap(GitRepository.containing(directory))
         try "changed".write(to: directory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)

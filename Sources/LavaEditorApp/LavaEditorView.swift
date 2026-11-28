@@ -10,7 +10,8 @@ struct LavaEditorView: View {
     @State private var pathMenuOpen = false
 
     var body: some View {
-        VStack(flexGrow: 1, spacing: 0) {
+        session.watchBlameHead()
+        return VStack(flexGrow: 1, spacing: 0) {
             // With a project open the sidebar runs the full height of the
             // window and carries its buttons, and the tabs belong to the
             // document column beside it — as in VS Code. Tabs across the top
@@ -40,6 +41,7 @@ struct LavaEditorView: View {
         .overlayLayer {
             Canvas(label: "session-checkpoint", width: .pct(100), height: .pct(100)) { _, _ in
                 session.checkpointSession()
+                session.tickBlame()
             }
         }
         // Dropping files on the window is how most people open the second one.
@@ -153,7 +155,8 @@ struct LavaEditorView: View {
                     lineGaps: chat.map { [EditorLineGap(line: session.chatAnchor.line, rows: $0.rows)] } ?? [],
                     stateStore: session.editorStates,
                     stateKey: session.active.id,
-                    zone: session.chatAnchor
+                    zone: session.chatAnchor,
+                    lineEndHint: session.inlineBlameHint()
                 )
                 .flexGrow(1)
                 .theme(appearance.documentTheme)
@@ -163,10 +166,28 @@ struct LavaEditorView: View {
                         InlineChatView(session: session, chat: chat, appearance: appearance)
                     }
                 }
+                .overlay(
+                    isPresented: Binding(get: { session.isBlameCardVisible },
+                                         set: { if !$0 { session.dismissBlameCard() } }),
+                    placement: BlameCard.placement(session.blame.anchor),
+                    style: blameCardStyle(appearance)
+                ) {
+                    if let card = session.blame.card {
+                        BlameCard(card: card, state: session.blame, appearance: appearance,
+                                  font: session.fonts.status)
+                    }
+                }
             }
         }
         .padding(.top, 6)
         .background(appearance.theme.inset)
+    }
+
+    private func blameCardStyle(_ appearance: EditorAppearance) -> OverlayStyle {
+        let theme = appearance.documentTheme
+        var style = OverlayStyle(background: theme.panel, border: theme.border, cornerRadius: 8, padding: 0)
+        style.dismissesOnOutsidePress = false
+        return style
     }
 
     private func documentStyle(_ appearance: EditorAppearance) -> CodeStyle {

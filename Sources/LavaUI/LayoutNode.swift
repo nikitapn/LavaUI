@@ -684,6 +684,7 @@ final class LeafNode: YogaBoxNode {
     /// caret go round it the same way.
     private(set) var hintLines: [Int] = []
     private(set) var actionGutterWidth: Float = 0
+    var lineEndHint: EditorLineEndHint?
     var lineActionHits: [(rect: CGRect, action: EditorLineAction)] = []
     private var gapCache: (generation: Int, revision: UInt64, gaps: RowGaps)?
 
@@ -2573,7 +2574,8 @@ public final class LayoutHost {
     func outsideOverlayPress(
         in overlays: [OverlayAttachment], x: Float, y: Float, originX: Float, originY: Float
     ) -> (() -> Void)? {
-        guard !overlays.isEmpty, let root,
+        let dismissible = overlays.filter(\.dismissesOnOutsidePress)
+        guard !dismissible.isEmpty, let root,
               !overlays.contains(where: { $0.modal || $0.contains(x - originX, y - originY) })
         else { return nil }
         // Switch the menu bar before dismissing the old attachments. Its old
@@ -2584,7 +2586,7 @@ public final class LayoutHost {
         )
         return {
             selectTitle?()
-            for overlay in overlays { overlay.dismiss() }
+            for overlay in dismissible { overlay.dismiss() }
         }
     }
 

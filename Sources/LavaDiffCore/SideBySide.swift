@@ -160,6 +160,21 @@ public struct TextDiff: Sendable {
         return line + delta
     }
 
+    /// The corresponding old line, only when the new line is unchanged.
+    public static func unchangedOldLine(forNew line: Int, hunks: [DiffHunk]) -> Int? {
+        var low = 0
+        var high = hunks.count
+        while low < high {
+            let middle = low + (high - low) / 2
+            if hunks[middle].new.upperBound <= line { low = middle + 1 }
+            else { high = middle }
+        }
+        if low < hunks.count, hunks[low].new.contains(line) { return nil }
+        guard low > 0 else { return line }
+        let previous = hunks[low - 1]
+        return line + previous.old.upperBound - previous.new.upperBound
+    }
+
     /// Word-level change ranges for a `.changed` row, or nil when the pair is
     /// too different for them to help.
     public func intraline(_ row: DiffRow) -> (old: [Range<Int>], new: [Range<Int>])? {

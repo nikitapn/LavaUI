@@ -268,6 +268,7 @@ public final class EditorController {
     private var insertAction: ((String, Range<Int>, Int?) -> Bool)?
     private var linePrefixAction: ((Int) -> String?)?
     private var focusAction: (() -> Void)?
+    fileprivate weak var leaf: LeafNode?
     private var pendingLine: Int?
     private var pendingPosition: EditorPosition?
 
@@ -312,6 +313,9 @@ public final class EditorController {
 
     /// Returns keyboard focus to the editor without moving the caret.
     public func focus() { focusAction?() }
+
+    /// Whether this editor currently owns keyboard focus.
+    public var isFocused: Bool { leaf.map { FocusManager.isFocused($0.id) } ?? false }
 
     /// Character offset of the caret — the active end of the selection.
     public func caretOffset() -> Int? { caretOffsetAction?() }
@@ -767,6 +771,8 @@ public struct EditorView: PrimitiveView {
     /// Told where the gap above its line was drawn, for `.editorZone`. See
     /// `EditorZoneAnchor`.
     public var zone: EditorZoneAnchor?
+    /// Optional text after the caret line. See `EditorLineEndHint`.
+    public var lineEndHint: EditorLineEndHint?
 
     /// Creates an editor bound to `text`. Every parameter matches the property of the same name.
     public init(
@@ -802,9 +808,11 @@ public struct EditorView: PrimitiveView {
         scrollLink: EditorScrollLink? = nil,
         stateStore: EditorStateStore? = nil,
         stateKey: AnyHashable? = nil,
-        zone: EditorZoneAnchor? = nil
+        zone: EditorZoneAnchor? = nil,
+        lineEndHint: EditorLineEndHint? = nil
     ) {
         self.zone = zone
+        self.lineEndHint = lineEndHint
         self.stateStore = stateStore
         self.stateKey = stateKey
         self.lineGaps = lineGaps
@@ -910,7 +918,7 @@ public struct EditorView: PrimitiveView {
     private func configureFollow(_ leaf: LeafNode) {
         leaf.onFollow = onFollow
         leaf.onPointerOffset = onPointerOffset
-        guard onFollow != nil || onPointerOffset != nil else {
+        guard onFollow != nil || onPointerOffset != nil || leaf.lineEndHint != nil else {
             leaf.onPointerHoverLocal = nil
             if leaf.onHover != nil {
                 leaf.onHover = nil
@@ -928,6 +936,7 @@ public struct EditorView: PrimitiveView {
             leaf.pointerCursor = nil
             leaf.setLink(nil)
             leaf.reportPointer(nil)
+            leaf.lineEndHint?.reportHover(nil)
         }
         HoverState.register(leaf.id) { [weak leaf] inside in leaf?.onHover?(inside) }
         leaf.onPointerHoverLocal = { [weak leaf] x, y in
@@ -1011,6 +1020,11 @@ public struct EditorView: PrimitiveView {
         leaf.decorations = decorations
         // Sorted once here so the paint can binary-search a screenful of rows.
         leaf.lineActions = lineActions
+        if leaf.lineEndHint?.anchor !== lineEndHint?.anchor {
+            leaf.lineEndHint?.anchor.frame = nil
+            leaf.lineEndHint?.reportHover(nil)
+        }
+        leaf.lineEndHint = lineEndHint
         leaf.lineMarks = lineMarks.sorted { $0.lines.lowerBound < $1.lines.lowerBound }
         leaf.onDecorationTap = onDecorationTap
         leaf.lineGaps = lineGaps
@@ -1025,6 +1039,7 @@ public struct EditorView: PrimitiveView {
         configureFollow(leaf)
 
         let binding = _text
+        controller?.leaf = leaf
         controller?.install(
             reveal: { [weak leaf] line in
                 guard let leaf, let font = leaf.font ?? FontStore.default else { return false }
@@ -1220,6 +1235,13 @@ extension LeafNode {
     }
 
     func updateLink(localX: Float, localY: Float) {
+        lineEndHint?.reportHover(CGPoint(x: CGFloat(localX), y: CGFloat(localY)))
+        if lineEndHint?.anchor.isHovered == true {
+            pointerCursor = .arrow
+            setLink(nil)
+            reportPointer(nil)
+            return
+        }
         if !PointerCapture.isActive, lineAction(atX: localX, y: localY) != nil {
             pointerCursor = .pointer
             setLink(nil)

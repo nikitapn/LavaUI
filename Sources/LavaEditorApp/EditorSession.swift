@@ -1,4 +1,5 @@
 import Foundation
+import LavaDiffCore
 import LavaEditorSettings
 import LavaProjectCore
 import LavaTerminal
@@ -41,6 +42,7 @@ final class EditorSession {
         // Every edit, save, reload and close passes through here, which is the
         // one place project search can hear about all of them. It debounces.
         didSet {
+            dismissBlameCard()
             refreshActivePreview()
             projectSearch.buffersChanged()
             scheduleLanguageSync()
@@ -262,6 +264,10 @@ final class EditorSession {
     /// HEAD's copy of each open document that has one, by document id. See
     /// `EditorSession+Git`.
     var gitBaselines: [Int: GitBaseline] = [:]
+    let blame = BlameState()
+    @ObservationIgnored var baselineHeads: [Int: GitHead] = [:]
+    @ObservationIgnored var baselineRequests: [Int: Int] = [:]
+    @ObservationIgnored var baselineDiffCache: (key: GitDiffKey, hunks: [DiffHunk])?
     @ObservationIgnored var baselineGeneration = 0
     @ObservationIgnored var marksCache: (key: MarksKey, marks: [EditorLineMark])?
     /// Fill changed lines as well as marking them in the gutter.
@@ -475,6 +481,7 @@ final class EditorSession {
                 // Bytes, not characters: `utf8.count` is stored, a character
                 // count walks the buffer. One typed character is one to four.
                 let grew = newValue.utf8.count - self.documents[self.activeIndex].text.utf8.count
+                self.dismissBlameCard()
                 self.documents[self.activeIndex].text = newValue
                 self.markModified()
                 self.revision &+= 1
@@ -939,6 +946,8 @@ final class EditorSession {
     }
 
     func forgetTab(_ id: Int) {
+        baselineHeads[id] = nil
+        baselineRequests[id] = nil
         gitBaselines[id] = nil
         tabFrames[id] = nil
         if diff?.documentID == id { closeDiff() }

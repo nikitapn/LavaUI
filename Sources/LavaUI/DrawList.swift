@@ -1406,6 +1406,8 @@ public final class DrawList {
             let pending = pendingOverlays[pendingIndex]
             pendingIndex += 1
             let att = pending.attachment
+            // An editor can update the overlay anchor after it is queued.
+            guard att.isPresented() else { continue }
             let savedAlpha = alphaMultiplier
             alphaMultiplier = pending.opacity
             defer { alphaMultiplier = savedAlpha }
@@ -2721,6 +2723,10 @@ extension DrawList {
         _ leaf: LeafNode, x: Float, y: Float, w: Float, h: Float
     ) {
         leaf.lineActionHits.removeAll(keepingCapacity: true)
+        let hintAnchor = leaf.lineEndHint?.anchor
+        hintAnchor?.frame = nil
+        hintAnchor?.localFrame = nil
+        hintAnchor?.line = nil
         guard let font = leaf.font ?? FontStore.default else { return }
         let style = leaf.codeStyle ?? CodeStyle()
         let inset = leaf.textInset
@@ -2792,6 +2798,10 @@ extension DrawList {
         // the editor stayed focused.
         let caretOffset = leaf.focusOffset()
         let caretRow = leaf.focusRow()
+        let hintLine = leaf.lineEndHint.map { _ in leaf.logicalLine(ofRow: caretRow) }
+        let hintRow = hintLine.map { line in
+            line + 1 < leaf.logicalLineCount ? leaf.firstRow(ofLine: line + 1) - 1 : rows.count - 1
+        }
         let activeLine = style.activeGutterText.map { _ in leaf.logicalLine(ofRow: caretRow) }
         let selection = state.hasSelection ? state.selectedRange : nil
         // Once per emit rather than once per row a selection happens to span,
@@ -3205,6 +3215,26 @@ extension DrawList {
                 lineText, spans: lineSpans,
                 style: style, run: run, font: font, x: textX, y: rowTop, h: lineH
             )
+
+            if row == hintRow, let hintLine, let hint = leaf.lineEndHint {
+                let hintX = textX + run.width + 18
+                let room = x + w - inset - style.scrollbarWidth - hintX
+                if hintX >= x + leaf.gutterWidth, room >= font.shapedRun("…").width,
+                   rowTop < y + h, rowTop + lineH > y,
+                   let label = hint.text(hintLine), !label.isEmpty {
+                    let fitted = font.ellipsized(label, availWidth: room)
+                    let width = font.shapedRun(fitted).width
+                    text(fitted, x: hintX - 4, y: rowTop, w: width, h: lineH,
+                         color: leaf.theme.textMuted, font: font)
+                    let frame = CGRect(x: CGFloat(hintX), y: CGFloat(max(y, rowTop)),
+                                       width: CGFloat(width),
+                                       height: CGFloat(min(y + h, rowTop + lineH) - max(y, rowTop)))
+                    hint.anchor.frame = frame.offsetBy(dx: -CGFloat(retainedShift.x), dy: -CGFloat(retainedShift.y))
+                    hint.anchor.localFrame = frame.offsetBy(dx: -CGFloat(x), dy: -CGFloat(y))
+                    hint.anchor.line = hintLine
+                    hint.anchor.scroll = CGPoint(x: CGFloat(leaf.scrollX), y: leaf.scrollY)
+                }
+            }
 
             for deco in leaf.decorations where deco.underline != .none && deco.range.overlaps(range) {
                 let from = max(deco.range.lowerBound, range.lowerBound)

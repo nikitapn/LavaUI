@@ -101,6 +101,10 @@ enum HoverRegions {
         for child in node.childNodes where collect(id, in: child, into: &path) {
             return true
         }
+        if let overlay = node as? OverlayBoxNode, overlay.attachment.isPresented(),
+           let root = overlay.attachment.root, collect(id, in: root, into: &path) {
+            return true
+        }
         if region != nil { path.removeLast() }
         return false
     }

@@ -39,7 +39,9 @@ struct LavaEditorApp {
             editor: editor,
             menu: { menuBar(session: session, fontDialog: fontDialog, editor: editor) },
             onRawKey: { event in
+                let handledBlame = session.handleBlameKey(event)
                 if session.pendingWorkspace == nil, session.handleKeyChord(event) { return true }
+                if handledBlame { return true }
                 // Escape in the chat's field closes the chat, wherever the
                 // field's own handling would have sent it.
                 if let chat = session.inlineChat, chat.inputFocused, session.pendingWorkspace == nil,
@@ -265,6 +267,9 @@ struct LavaEditorApp {
                 ) { session.newTerminal() }
                 MenuItem("Refresh Folder", id: "view.refresh-folder",
                          isEnabled: session.project != nil) { session.project?.refresh() }
+                MenuItem("Toggle Inline Blame", id: "view.inline-blame", isChecked: session.blame.enabled) {
+                    session.toggleInlineBlame()
+                }
                 MenuItem("Toggle Soft Wrap", id: "view.wrap", isChecked: session.wraps) {
                     session.wraps.toggle()
                 }

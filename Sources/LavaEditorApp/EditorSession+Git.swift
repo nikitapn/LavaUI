@@ -3,9 +3,20 @@ import LavaDiffCore
 import LavaGitCore
 import LavaUI
 
+struct GitHead: Equatable, Sendable {
+    let repository: GitRepository
+    let oid: String
+
+    static func read(containing url: URL) -> GitHead? {
+        guard let repository = GitRepository.containing(url), let oid = try? repository.headOID() else { return nil }
+        return GitHead(repository: repository, oid: oid)
+    }
+}
+
 /// The last commit's copy of a document, split into lines once, which every
 /// keystroke after that is diffed against.
-struct GitBaseline {
+struct GitBaseline: Sendable {
+    let head: GitHead
     /// HEAD's lines, hashed once on the worker that fetched them: the gutter
     /// diffs every keystroke against them, and hashing the whole commit's
     /// copy each time was most of that diff.
@@ -28,27 +39,41 @@ extension EditorSession {
     func refreshBaseline(_ index: Int) {
         guard documents.indices.contains(index), let url = documents[index].url else { return }
         let id = documents[index].id
+        baselineGeneration &+= 1
+        let generation = baselineGeneration
+        baselineRequests[id] = generation
         let owner = SessionRef(session: self)
         DispatchQueue.global(qos: .userInitiated).async {
-            var lines: DiffBaseline?
-            if let repository = GitRepository.containing(url),
-               case .text(let text)? = try? repository.contents(of: url, at: .head)
-            {
-                lines = DiffBaseline(TextLines(text).lines)
+            let head = GitHead.read(containing: url)
+            var baseline: GitBaseline?
+            if let head, case .text(let text)? = try? head.repository.contents(of: url, at: .commit(head.oid)) {
+                baseline = GitBaseline(head: head, lines: DiffBaseline(TextLines(text).lines),
+                                       generation: generation)
             }
-            let fetched = lines
+            let fetched = baseline
             MainQueue.async {
                 let session = owner.session
-                if let fetched {
-                    session.baselineGeneration &+= 1
-                    session.gitBaselines[id] = GitBaseline(
-                        lines: fetched, generation: session.baselineGeneration
-                    )
-                } else if session.gitBaselines[id] != nil {
-                    session.gitBaselines[id] = nil
+                guard session.baselineRequests[id] == generation else { return }
+                session.baselineRequests[id] = nil
+                if session.baselineHeads[id] != head {
+                    session.blame.invalidate(path: url)
+                    if session.active.id == id { session.dismissBlameCard() }
+                }
+                session.baselineHeads[id] = head
+                if fetched != nil || session.gitBaselines[id] != nil {
+                    session.gitBaselines[id] = fetched
                 }
             }
         }
+    }
+
+    func baselineHunks(for id: Int, text: String, baseline: GitBaseline) -> [DiffHunk] {
+        let key = GitDiffKey(document: id, revision: revision, bytes: text.utf8.count,
+                             baseline: baseline.generation)
+        if let cached = baselineDiffCache, cached.key == key { return cached.hunks }
+        let hunks = LineDiff.hunks(from: baseline.lines, to: TextLines(text).lines)
+        baselineDiffCache = (key, hunks)
+        return hunks
     }
 
     /// Marks for the document in front: what it has gained, changed and lost
@@ -73,7 +98,7 @@ extension EditorSession {
         )
         if let cached = marksCache, cached.key == key { return cached.marks }
 
-        let hunks = LineDiff.hunks(from: base.lines, to: TextLines(document.text).lines)
+        let hunks = baselineHunks(for: document.id, text: document.text, baseline: base)
         let colors = ChangeColors(appearance)
         let fills = highlightsChangedLines
         let marks = hunks.map { hunk -> EditorLineMark in
@@ -90,6 +115,13 @@ extension EditorSession {
         marksCache = (key, marks)
         return marks
     }
+}
+
+struct GitDiffKey: Equatable {
+    var document: Int
+    var revision: Int
+    var bytes: Int
+    var baseline: Int
 }
 
 struct MarksKey: Equatable {
