@@ -44,6 +44,8 @@ extension EditorSession {
         // A commit, a checkout or a reset moved HEAD under every open file.
         project.onRepositoryChanged = {
             let session = owner.session
+            session.blame.invalidate()
+            session.dismissBlameCard()
             for index in session.documents.indices where session.documents[index].isLoaded {
                 session.refreshBaseline(index)
             }

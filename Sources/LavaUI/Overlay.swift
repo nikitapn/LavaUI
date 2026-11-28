@@ -105,6 +105,7 @@ final class OverlayAttachment {
     /// Nothing outside the panel takes input while it is up. See
     /// `OverlayStyle.modal`.
     var modal = false
+    var dismissesOnOutsidePress = true
     var onKey: ((KeyEvent) -> Bool)?
     var onUnfocusedText: ((Character) -> Void)?
 
@@ -351,6 +352,7 @@ public struct OverlayView<Content: View, OverlayContent: View>: PrimitiveView {
 
         att.scrim = style.scrim
         att.modal = style.modal
+        att.dismissesOnOutsidePress = style.dismissesOnOutsidePress
         box.menuBarTitleAction = menuBarTitleAction
         att.onKey = style.onKey
         att.onUnfocusedText = style.onUnfocusedText
@@ -482,6 +484,8 @@ public struct OverlayStyle {
     /// Non-modal popups close and consume outside presses. An open menu bar
     /// can also switch titles on that press. Keyboard handling is separate.
     public var modal: Bool
+    /// Whether a non-modal overlay dismisses and consumes a press outside it.
+    public var dismissesOnOutsidePress = true
     /// Keys while the overlay is up, before anything behind it: true means
     /// handled. What makes a modal a keyboard scope as well as a pointer one.
     public var onKey: ((KeyEvent) -> Bool)?

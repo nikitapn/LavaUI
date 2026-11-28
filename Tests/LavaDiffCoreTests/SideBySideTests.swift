@@ -2,6 +2,13 @@ import XCTest
 @testable import LavaDiffCore
 
 final class SideBySideTests: XCTestCase {
+    func testUnchangedLineMappingSkipsReplacementsAndInsertions() {
+        let diff = TextDiff(old: "delete\nkeep A\nchange\nkeep B\nkeep C\n",
+                            new: "keep A\nchanged\nkeep B\ninsert\nkeep C\n")
+        let lines = (0..<5).map { TextDiff.unchangedOldLine(forNew: $0, hunks: diff.hunks) }
+        XCTAssertEqual(lines, [1, nil, 3, nil, 4])
+    }
+
     func testChangedLinesPairAndTheRestArePadded() {
         let rows = SideBySide.rows(
             hunks: [DiffHunk(old: 1..<4, new: 1..<2)], oldCount: 5, newCount: 3, context: nil
