@@ -146,6 +146,7 @@ struct BranchPickerView: View {
         .padding(EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10))
         .background(isSelected ? theme.selectionFill : .clear)
         .hoverBackground(isSelected ? theme.selectionFill : theme.hover)
+        .hoverSnap()
         .cornerRadius(8)
         .cursor(.pointer)
         .scrollIntoView(when: isSelected)

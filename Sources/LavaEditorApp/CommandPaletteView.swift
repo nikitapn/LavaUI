@@ -125,6 +125,7 @@ struct CommandPaletteView: View {
         .padding(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
         .background(isSelected ? theme.selectionFill : .clear)
         .hoverBackground(isSelected ? theme.selectionFill : theme.hover)
+        .hoverSnap()
         .cornerRadius(6)
         .cursor(.pointer)
         .scrollIntoView(when: isSelected)

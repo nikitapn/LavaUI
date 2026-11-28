@@ -168,6 +168,7 @@ struct SearchPanel: View {
             list.popClip()
         }
         .hoverBackground(selected ? .clear : theme.hover)
+        .hoverSnap()
         .hoverInset(horizontal: 4, vertical: 1)
         .cornerRadius(5)
         .cursor(.pointer)
@@ -223,6 +224,7 @@ struct SearchPanel: View {
             list.popClip()
         }
         .hoverBackground(selected ? .clear : theme.hover)
+        .hoverSnap()
         .hoverInset(horizontal: 4, vertical: 1)
         .cornerRadius(5)
         .cursor(.pointer)
