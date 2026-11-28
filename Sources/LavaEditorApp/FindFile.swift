@@ -242,8 +242,10 @@ final class FindFile: @unchecked Sendable {
         cancel()
         let generation = rankGeneration
         let query = text
-        pending = true
-        show([], total: 0)
+        // The last matches stay up until the new ones replace them. Cleared
+        // first, every keystroke drew one frame of an empty list between
+        // two that usually agree on the top row — which read as that row
+        // blinking. `pending` ("Finding files…") is for the first listing.
         let work = DispatchWorkItem { [weak self] in
             let result = project.filter.rank(query, limit: 250)
             let rows = result.matches.map { match in
