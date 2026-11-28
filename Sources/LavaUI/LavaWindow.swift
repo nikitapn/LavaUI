@@ -57,6 +57,12 @@ public final class LavaWindow {
     /// A press on a `.onFileDrag` view that has not yet travelled far
     /// enough to be a drag: the source, and where the press was.
     private var pendingFileDrag: (source: NodeID, x: Float, y: Float)?
+    /// A menu shortcut or an overlay's key handler took the last key press, and the character that
+    /// press typed is not to be delivered. A compositor sends every press
+    /// as a key and, when the layout produced one, a character — Alt+X is
+    /// also an `x` — so without this a shortcut on Alt typed its letter into
+    /// whatever held focus once the action had run. GLFW drops those itself.
+    private var swallowShortcutText = false
 
     /// Asks the widget under the pointer where, inside itself, the pointer is.
     ///
@@ -813,6 +819,10 @@ public final class LavaWindow {
                 button: ev.button, x: ev.x, y: ev.y
             )
         case .text:
+            if swallowShortcutText {
+                swallowShortcutText = false
+                break
+            }
             FocusManager.releaseIfGone { host.contains($0) }
             if let scalar = Unicode.Scalar(UInt32(bitPattern: ev.button)) {
                 let character = Character(scalar)
@@ -834,13 +844,21 @@ public final class LavaWindow {
             }
             FocusManager.releaseIfGone { host.contains($0) }
             let isPress = ev.x > 0
+            // Cleared by every key event: a press's character comes between
+            // its press and its release, and text arriving after a release —
+            // an input method committing a word — was typed, not a shortcut.
+            swallowShortcutText = false
             let key = KeyEvent(key: ev.button, mods: Int32(ev.y), isRepeat: ev.x > 1)
             if let modal = keyboardModal {
-                if isPress, modal.onKey?(key) != true, hasFocus(in: modal) {
+                if isPress, modal.onKey?(key) == true {
+                    swallowShortcutText = true
+                } else if isPress, hasFocus(in: modal) {
                     FocusManager.handle(key)
                 }
                 break
             }
+            // Not swallowed after this hook: an app may take a letter's key
+            // and still want its character (LavaShot's label).
             if onRawKey?(ev) == true { break }
             if isPress, ev.button == KeyCode.escape, host.dismissOverlays() { break }
             // A terminal's Ctrl+C is the program's, not Edit ▸ Copy.
@@ -848,6 +866,7 @@ public final class LavaWindow {
             if isPress, let menuHost,
                menuHost.activate(matchingKey: ev.button, mods: Int32(ev.y))
             {
+                swallowShortcutText = true
                 break
             }
             if isPress, FocusManager.handle(key) {

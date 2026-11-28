@@ -107,6 +107,11 @@ final class EditorSession {
     @ObservationIgnored let chatAnchor = EditorZoneAnchor(line: 0)
     /// Git → Switch Branch or Worktree…, while it is up. See `BranchPicker`.
     var branchPicker: BranchPicker?
+    /// Alt+X's list of commands, while it is up. See `CommandPalette`.
+    var commandPalette: CommandPalette?
+    /// The menu bar's builder, which is where the palette's commands come
+    /// from. Set by the app before it runs.
+    @ObservationIgnored var commandMenu: () -> MenuBar = { MenuBar(menus: []) }
     @ObservationIgnored var switchingBranch = false
     var lineActions: [Int: [EditorLineAction]] = [:]
     var actionSnapshot: (document: Int, revision: Int, path: String, text: String)?

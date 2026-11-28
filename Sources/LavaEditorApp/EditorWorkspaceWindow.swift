@@ -64,6 +64,19 @@ struct EditorWorkspaceWindow: View {
             }
         }
         .overlay(
+            isPresented: Binding(get: { session.commandPalette != nil }, set: { presented in
+                if !presented, session.commandPalette != nil { session.closeCommandPalette() }
+            }),
+            placement: CommandPaletteView.placement,
+            style: session.commandPalette.map {
+                CommandPaletteView.style(session: session, palette: $0, theme: appearance.theme)
+            } ?? OverlayStyle()
+        ) {
+            if let palette = session.commandPalette {
+                CommandPaletteView(session: session, palette: palette, appearance: appearance)
+            }
+        }
+        .overlay(
             isPresented: Binding(get: { session.agentLaunch != nil }, set: { presented in
                 if !presented { session.cancelAgentLaunch() }
             }),

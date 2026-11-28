@@ -36,6 +36,16 @@ enum ScrollReveal {
         walk(root, scroll: nil, x: 0, y: 0)
     }
 
+    /// The same for an overlay's subtree, which is laid out on its own and
+    /// hangs off its presenter rather than among anyone's children — the
+    /// window's walk never reaches it, and a selected row in a palette's
+    /// list asked to be shown and nothing moved. Not gated on `anyPending`,
+    /// which the window's pass may already have cleared this frame; an
+    /// overlay is a few dozen nodes. Leaves the flag for that pass.
+    static func resolveDetached(_ root: any AnyViewNode) {
+        walk(root, scroll: nil, x: 0, y: 0)
+    }
+
     /// `x`,`y` accumulate the box's position in its scroll container's content
     /// — which starts again at zero inside every container, because that is
     /// the space the container's offset is measured in.

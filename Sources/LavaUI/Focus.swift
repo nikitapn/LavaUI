@@ -50,6 +50,19 @@ public enum FocusManager {
         if moved { FocusBindings.focusChanged(in: scope) }
     }
 
+    /// Gives focus back to `id` — a field, an editor or a `.focusable` view
+    /// that held it earlier, as `focusedID` read then. What a transient
+    /// surface does on its way out, so the keyboard returns to where it was
+    /// rather than to a default. False when `id` is gone from the tree or
+    /// cannot take focus, for the caller to choose a fallback.
+    @discardableResult
+    public static func refocus(_ id: NodeID) -> Bool {
+        if isFocused(id) { return true }
+        guard FocusTargets.has(id) else { return false }
+        FocusTargets.take(id)
+        return isFocused(id)
+    }
+
     /// Clears focus if `id` holds it; does nothing otherwise.
     public static func resignFocus(_ id: NodeID) {
         guard WindowScope.currentOrMain.focused == id else { return }

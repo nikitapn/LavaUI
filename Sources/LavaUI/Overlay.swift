@@ -193,6 +193,7 @@ final class OverlayAttachment {
             settleRows()
             let repositioned = grids.map { $0.scrollNode?.applyPendingPosition() == true }
             if repositioned.contains(true) { settleRows() }
+            ScrollReveal.resolveDetached(root)
             return
         }
 
@@ -234,6 +235,7 @@ final class OverlayAttachment {
         // Left-aligned with the anchor, pulled back in at the right edge.
         let ox = max(0, min(anchorX, max(0, viewportW - size.w)))
         origin = (ox, oy)
+        ScrollReveal.resolveDetached(root)
     }
 }
 
