@@ -223,6 +223,8 @@ final class EditorSession {
     var diff: DiffModel?
     /// The terminals under the editor. See `TerminalPanel`.
     let terminal = TerminalPanel()
+    /// The Problems view in the same panel. See `ProblemsModel`.
+    let problems = ProblemsModel()
 
     /// Undo history, caret and selection per document, so switching tabs or
     /// opening a comparison does not throw them away. Keyed by document id.
@@ -1089,9 +1091,20 @@ final class EditorSession {
             }
             replaceWholeText(with: edited.text)
         }
+        func resolve(_ path: String) -> URL {
+            (path.hasPrefix("/") ? URL(fileURLWithPath: path)
+                : (base ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath)).appendingPathComponent(path))
+                .standardizedFileURL
+        }
+        #if canImport(LavaEditorExtensionAPI)
+        for (path, diagnostics) in outcome.diagnostics {
+            let file = resolve(path).path
+            problems.publish(Self.problems(diagnostics, path: file, source: installed.command.title),
+                             path: file, by: "\(installed.extensionID)/\(installed.command.id)")
+        }
+        #endif
         for (path, line) in outcome.opens {
-            let url = path.hasPrefix("/") ? URL(fileURLWithPath: path)
-                : (base ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath)).appendingPathComponent(path)
+            let url = resolve(path)
             open([url.standardizedFileURL])
             guard line > 0, active.isLoaded, active.url?.standardizedFileURL == url.standardizedFileURL else { continue }
             // The start of the line, in characters: the controller takes
@@ -1110,6 +1123,7 @@ final class EditorSession {
     func reloadExtensions() {
         ExtensionHost.reload()
         extensions = ExtensionCatalog.discover()
+        problems.clearExtensions()
         for tab in documents { tab.preview?.invalidate() }
         refreshActivePreview()
         actionSnapshot = nil

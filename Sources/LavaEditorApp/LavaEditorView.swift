@@ -345,6 +345,7 @@ struct LavaEditorView: View {
                         .flexShrink(1)
                         .agentId("status-invalid-utf8")
                 }
+                problemStatus(theme: theme)
                 lineStatus(theme: theme)
                     .padding(.horizontal, 6)
                     .agentId("status-lines")
@@ -358,6 +359,42 @@ struct LavaEditorView: View {
         }
         .padding(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 14))
         .background(theme.panel)
+    }
+
+    /// Errors and warnings in every file the editor knows about, as VS
+    /// Code's status bar has them; a click opens the Problems view.
+    private func problemStatus(theme: Theme) -> some View {
+        let list = session.problemList
+        let errors = String(list.errors), warnings = String(list.warnings)
+        let font = session.fonts.status ?? FontStore.default
+        let gap: Float = 5, icon: Float = 13
+        let errorsWidth = font?.shapedRun(errors).width ?? 8
+        let warningsWidth = font?.shapedRun(warnings).width ?? 8
+        let width = icon * 2 + gap * 2 + errorsWidth + warningsWidth + 10
+        return Canvas(label: "Problems status", width: .pt(width + 16),
+                      height: .pt((font?.lineHeight ?? 16) + 8),
+                      onTap: { [session] in session.toggleProblems() }) { draw, frame in
+            guard let font else { return }
+            let mid = frame.y + frame.h / 2
+            let y = mid - font.lineHeight / 2
+            var x = frame.x + 8
+            for (severity, count, countWidth) in [(LavaUI.DiagnosticSeverity.error, errors, errorsWidth),
+                                                  (.warning, warnings, warningsWidth)] {
+                let lit = count != "0"
+                draw.strokeIcon(ProblemsView.icon(severity), x: x, y: mid - icon / 2, size: icon,
+                                color: lit ? severity.defaultColor : theme.textSecondary, strokeWidth: 1.8)
+                x += icon + gap
+                draw.text(count, x: x - 4, y: y, w: countWidth, h: font.lineHeight,
+                          color: theme.textSecondary, font: font)
+                x += countWidth + 10
+            }
+        }
+        .hoverBackground(theme.hover)
+        .hoverSnap()
+        .cornerRadius(6)
+        .cursor(.pointer)
+        .tooltip("Problems (Ctrl+Shift+M)")
+        .agentId("status-problems")
     }
 
     private func lineStatus(theme: Theme) -> some View {

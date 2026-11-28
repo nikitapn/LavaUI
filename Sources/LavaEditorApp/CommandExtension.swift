@@ -18,6 +18,10 @@ enum CommandExtension {
         var edited: (documentID: Int, revision: Int, text: String)?
         var opens: [(path: String, line: Int)] = []
         var message: String?
+        #if canImport(LavaEditorExtensionAPI)
+        /// Problems by file, as published — the last report for a path wins.
+        var diagnostics: [(path: String, diagnostics: [ExtensionDiagnostic])] = []
+        #endif
     }
 
     /// The tab in front, as the command will see it.
@@ -126,6 +130,16 @@ private final class Host: CommandHostServant, @unchecked Sendable {
             guard active[invocation] != nil, !path.isEmpty,
                   (active[invocation]?.outcome.opens.count ?? 0) < 16 else { return false }
             active[invocation]?.outcome.opens.append((path, Int(line)))
+            return true
+        }
+    }
+
+    override func publishDiagnostics(invocation: UInt64, path: String,
+                                     diagnostics: [ExtensionDiagnostic]) -> Bool {
+        lock.withLock {
+            guard active[invocation] != nil, !path.isEmpty, diagnostics.count <= 10_000,
+                  (active[invocation]?.outcome.diagnostics.count ?? 0) < 4_096 else { return false }
+            active[invocation]?.outcome.diagnostics.append((path, diagnostics))
             return true
         }
     }

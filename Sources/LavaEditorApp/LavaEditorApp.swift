@@ -245,6 +245,10 @@ struct LavaEditorApp {
                     shortcut: KeyShortcut(KeyCode.g, [.primary, .shift])
                 ) { session.showSidebar(.sourceControl) }
                 MenuItem(
+                    "Problems", id: "view.problems",
+                    shortcut: KeyShortcut(KeyCode.m, [.primary, .shift])
+                ) { session.toggleProblems() }
+                MenuItem(
                     "Terminal", id: "view.terminal",
                     shortcut: KeyShortcut(KeyCode.graveAccent, .primary)
                 ) { session.toggleTerminal() }

@@ -2,8 +2,8 @@ import Foundation
 import LavaTerminal
 import LavaUI
 
-/// The panel under the editor: a strip naming each terminal, and the one in
-/// front.
+/// The panel under the editor: its two views, Problems and Terminal, and —
+/// on the terminal — a strip naming each one, and the one in front.
 struct TerminalPanelView: View {
     @Bindable var session: EditorSession
     let appearance: EditorAppearance
@@ -11,17 +11,30 @@ struct TerminalPanelView: View {
     var body: some View {
         let theme = appearance.theme
         let panel = session.terminal
+        let showsProblems = panel.content == .problems
+        let problemCount = session.problemList.count
         return VStack(flexGrow: 1, spacing: 0) {
             HStack(padding: 5, alignment: .center, spacing: 4) {
-                Text("TERMINAL", color: .secondary, font: session.fonts.status)
-                    .padding(.horizontal, 8)
-                ForEach(Array(panel.tabs.enumerated()), id: \.offset) { index, terminal in
-                    tab(index, terminal, isActive: index == panel.active, theme: theme)
+                // The panel's two views. Problems does not need a shell, so
+                // switching to it starts none; Terminal starts one if there
+                // is none to show.
+                pill(problemCount > 0 ? "PROBLEMS \(problemCount)" : "PROBLEMS",
+                     isActive: showsProblems, theme: theme) { session.showProblems() }
+                    .agentId("panel-problems")
+                pill("TERMINAL", isActive: !showsProblems, theme: theme) {
+                    if panel.tabs.isEmpty { session.newTerminal() } else { session.selectTerminal(panel.active) }
                 }
-                pill("+", isActive: false, theme: theme) { session.newTerminal() }
-                    .agentId("terminal-new")
+                .agentId("panel-terminal")
+                if !showsProblems {
+                    Text("·", color: .muted, font: session.fonts.status)
+                    ForEach(Array(panel.tabs.enumerated()), id: \.offset) { index, terminal in
+                        tab(index, terminal, isActive: index == panel.active, theme: theme)
+                    }
+                    pill("+", isActive: false, theme: theme) { session.newTerminal() }
+                        .agentId("terminal-new")
+                }
                 Spacer()
-                if let current = panel.current {
+                if !showsProblems, let current = panel.current {
                     pill("Kill", isActive: false, theme: theme) { session.closeTerminal(current) }
                         .agentId("terminal-kill")
                 }
@@ -29,7 +42,10 @@ struct TerminalPanelView: View {
                     .agentId("terminal-hide")
             }
             .background(theme.panel)
-            if let current = panel.current, let font = panel.font ?? FontStore.default {
+            if showsProblems {
+                ProblemsView(session: session, appearance: appearance)
+                    .flexGrow(1)
+            } else if let current = panel.current, let font = panel.font ?? FontStore.default {
                 TerminalGrid(
                     session: current, mono: font,
                     claimsKeyboard: false, background: theme.inset

@@ -12,6 +12,9 @@ import Observation
 @Observable
 final class TerminalPanel {
     var isOpen = false
+    /// What the panel shows: the terminals, or the Problems list.
+    enum Content { case terminal, problems }
+    var content: Content = .terminal
     private(set) var tabs: [TerminalSession] = []
     var active = 0
     /// The editor's share of the column while the panel is open.
@@ -61,10 +64,12 @@ extension EditorSession {
     /// none; from the terminal, hides the panel and goes back to the text;
     /// from the text with the panel open, goes to the terminal.
     func toggleTerminal() {
-        if terminal.isOpen, let current = terminal.current, FocusManager.isFocused(current.focusID) {
+        if terminal.isOpen, terminal.content == .terminal,
+           let current = terminal.current, FocusManager.isFocused(current.focusID) {
             hideTerminal()
             return
         }
+        terminal.content = .terminal
         if terminal.isOpen, let current = terminal.current {
             focusTerminal(current)
             return
@@ -80,7 +85,7 @@ extension EditorSession {
     /// Opens or closes the panel. The editor is the same view either way
     /// (the split collapses rather than going away), so it keeps its place
     /// by itself; this only hands the keyboard back when asked.
-    private func setPanelOpen(_ open: Bool, focusEditor: Bool = false) {
+    func setPanelOpen(_ open: Bool, focusEditor: Bool = false) {
         terminal.isOpen = open
         if focusEditor { controller.focus() }
     }
@@ -102,6 +107,7 @@ extension EditorSession {
         session.keysBeforeShortcuts = true
         session.declinesKey = TerminalPanel.editorKeeps
         terminal.append(session)
+        terminal.content = .terminal
         setPanelOpen(true)
         let owner = LanguageSessionRef(self)
         // After the frame, as LavaTerm does: the grid sizes the session from
@@ -123,6 +129,7 @@ extension EditorSession {
     func selectTerminal(_ index: Int) {
         guard terminal.tabs.indices.contains(index) else { return }
         terminal.active = index
+        terminal.content = .terminal
         focusTerminal(terminal.tabs[index])
     }
 
@@ -142,7 +149,9 @@ extension EditorSession {
         terminal.remove(session)
         if let next = terminal.current {
             if wasFocused { focusTerminal(next) }
-        } else {
+        } else if terminal.content == .terminal {
+            // The last shell closes the panel — unless it is showing the
+            // Problems, which did not need a shell to be open.
             setPanelOpen(false, focusEditor: wasFocused)
         }
     }

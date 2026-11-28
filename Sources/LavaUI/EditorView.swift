@@ -126,7 +126,9 @@ public enum DiagnosticSeverity: Sendable, Equatable {
     /// A suggestion: grey, with a small dot.
     case hint
 
-    var defaultColor: Color {
+    /// The colour of its squiggle — public so a list of problems can mark
+    /// each with the colour it is underlined in.
+    public var defaultColor: Color {
         switch self {
         case .error: return Color(r: 0.92, g: 0.35, b: 0.35)
         case .warning: return Color(r: 0.92, g: 0.72, b: 0.30)

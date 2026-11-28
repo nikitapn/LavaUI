@@ -50,6 +50,11 @@
       "id": "open-readme",
       "title": "Open Project README",
       "kind": "command"
+    },
+    {
+      "id": "mark-todos",
+      "title": "Mark TODOs",
+      "kind": "command"
     }
   ]
 }

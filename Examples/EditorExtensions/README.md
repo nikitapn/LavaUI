@@ -35,7 +35,11 @@ It may then ask for three things, all done by the editor after the host returns 
 - `openFile(invocation:path:line:)` — a tab for a file; a relative path is taken from the open folder, or the document's own without one. `line` is one-based, 0 for none. Up to 16 per invocation.
 - `showMessage` — a line in the notice bar; the last one wins.
 
-`CommandContext.selectedText`, `selectedLines` and `applying(_:)` cover the usual arithmetic. A command gets 30 seconds and a fresh worker each time. The example's **Sort Lines** (Ctrl+Alt+S), **Count Words** and **Open Project README** show one of each.
+- `publishDiagnostics(invocation:path:diagnostics:)` — problems for a file, shown in the Problems panel (View → Problems, Ctrl+Shift+M) and underlined in the editor. Each publish replaces this command's problems for that path, so a run that finds nothing clears what the last one found; they stay until then, or until **Reload Extensions**.
+
+`CommandContext.selectedText`, `selectedLines` and `applying(_:)` cover the usual arithmetic. A command gets 30 seconds and a fresh worker each time. The example's **Sort Lines** (Ctrl+Alt+S), **Count Words**, **Open Project README** and **Mark TODOs** show one of each.
+
+An `ExtensionDiagnostic` has zero-based lines, zero-based UTF-8 byte columns within its line, and LSP's severities (1 error, 2 warning, 3 information, 4 hint). A `documentActions` provider can report problems for its document on every discovery pass with `setDiagnostics(invocation:diagnostics:)` — live linting as the user types; a provider that does not call it leaves its previous report.
 
 ### Embedded surfaces
 

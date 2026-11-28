@@ -53,6 +53,32 @@ func runTextCommand(_ name: String, _ reference: UnsafePointer<CChar>, invocatio
             }
             _ = try await editor.openFile(invocation: invocation, path: name, line: 1)
         }
+    case "mark-todos":
+        // Every TODO and FIXME in the document as a problem: a warning for
+        // FIXME, information for TODO. Run again after fixing them and the
+        // list empties — a publish replaces this command's last one.
+        return runCommand(reference) { editor in
+            let context = try await editor.readContext(invocation: invocation)
+            guard context.hasDocument, !context.path.isEmpty else {
+                _ = try await editor.showMessage(invocation: invocation, message: "Save the file first.")
+                return
+            }
+            var found: [ExtensionDiagnostic] = []
+            for (number, line) in context.text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+                for (marker, severity) in [("FIXME", UInt32(2)), ("TODO", UInt32(3))] {
+                    guard let range = line.range(of: marker) else { continue }
+                    let start = line.utf8.distance(from: line.startIndex, to: range.lowerBound)
+                    let note = line[range.upperBound...].drop { $0 == ":" || $0 == " " }
+                    found.append(ExtensionDiagnostic(
+                        startLine: UInt32(number), startColumn: UInt32(start),
+                        endLine: UInt32(number), endColumn: UInt32(start + marker.utf8.count),
+                        severity: severity, message: note.isEmpty ? marker : "\(marker): \(note)"))
+                }
+            }
+            _ = try await editor.publishDiagnostics(invocation: invocation, path: context.path, diagnostics: found)
+            _ = try await editor.showMessage(invocation: invocation,
+                                             message: found.isEmpty ? "No TODOs." : "\(found.count) marked.")
+        }
     default:
         return 2
     }

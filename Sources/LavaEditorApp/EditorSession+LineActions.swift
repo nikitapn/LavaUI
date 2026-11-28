@@ -68,18 +68,33 @@ extension EditorSession {
         let owner = LanguageSessionRef(self)
         DispatchQueue.global(qos: .utility).async {
             var discovered: [(InstalledCommand, DocumentLineAction)] = []
+            var reported: [(InstalledCommand, [ExtensionDiagnostic])] = []
             for provider in providers {
                 do {
                     let reply = try LineActionService.invoke(provider, path: path, text: text, action: "")
                     discovered += reply.actions.map { (provider, $0) }
+                    if let diagnostics = reply.diagnostics { reported.append((provider, diagnostics)) }
                 } catch {
                     FileHandle.standardError.write(Data("\(provider.extensionID): \(error)\n".utf8))
                 }
             }
             let results = discovered
+            let problems = reported
             MainQueue.async {
                 guard let session = owner.session else { return }
                 session.scanningActions = false
+                // Problems belong to the file, not to the tab in front, so
+                // they are kept even when the answer for the tab is stale:
+                // they were found in the text it had, and the next pass
+                // replaces them.
+                if !path.isEmpty {
+                    let file = URL(fileURLWithPath: path).standardizedFileURL.path
+                    for (provider, diagnostics) in problems {
+                        session.problems.publish(
+                            Self.problems(diagnostics, path: file, source: provider.command.title),
+                            path: file, by: "\(provider.extensionID)/\(provider.command.id)")
+                    }
+                }
                 guard session.active.id == document, session.revision == version,
                       session.active.text == text, session.active.url?.path == path else {
                     session.scheduleLineActionDiscovery()
@@ -128,6 +143,9 @@ private final class LineActionService: DocumentActionProviderServant, @unchecked
     struct Reply {
         var actions: [DocumentLineAction] = []
         var message = ""
+        /// Nil when the provider said nothing about problems this time,
+        /// which leaves what it said before.
+        var diagnostics: [ExtensionDiagnostic]?
     }
     private struct Request {
         let document: ActionDocument
@@ -177,7 +195,20 @@ private final class LineActionService: DocumentActionProviderServant, @unchecked
                     && ($0.gutterPlay || !$0.hint.isEmpty) && $0.hint.utf8.count <= 256
                     && !$0.hint.contains(where: \.isNewline) }) else { return false }
             }
-            requests[invocation]?.reply = Reply(actions: actions)
+            var reply = requests[invocation]?.reply ?? Reply()
+            reply.actions = actions
+            requests[invocation]?.reply = reply
+            return true
+        }
+    }
+
+    override func setDiagnostics(invocation: UInt64, diagnostics: [ExtensionDiagnostic]) -> Bool {
+        lock.withLock {
+            guard let request = requests[invocation], request.document.actionId.isEmpty,
+                  diagnostics.count <= 10_000 else { return false }
+            var reply = request.reply ?? Reply()
+            reply.diagnostics = diagnostics
+            requests[invocation]?.reply = reply
             return true
         }
     }

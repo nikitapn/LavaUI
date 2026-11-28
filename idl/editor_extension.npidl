@@ -44,10 +44,26 @@ message DocumentLineAction {
   hint: string;
 }
 
+/// A problem an extension found, for the Problems panel and the editor's
+/// squiggles. Lines are zero-based; columns are zero-based UTF-8 byte
+/// offsets within their line.
+message ExtensionDiagnostic {
+  startLine: u32;
+  startColumn: u32;
+  endLine: u32;
+  endColumn: u32;
+  /// 1 error, 2 warning, 3 information, 4 hint — as LSP numbers them.
+  severity: u32;
+  message: string;
+}
+
 interface DocumentActionProvider {
   ActionDocument ReadDocument(invocation: in u64) raises(ExpiredInvocation);
   /// Replaces this provider's gutter buttons and inline hints for the snapshot.
   boolean SetLineActions(invocation: in u64, actions: in vector<DocumentLineAction>);
+  /// Replaces this provider's problems for the document — during discovery
+  /// only, which runs whenever typing pauses. An empty list clears them.
+  boolean SetDiagnostics(invocation: in u64, diagnostics: in vector<ExtensionDiagnostic>);
   boolean ReportResult(invocation: in u64, message: in string);
 }
 
@@ -86,6 +102,11 @@ interface CommandHost {
   boolean OpenFile(invocation: in u64, path: in string, line: in u32);
   /// A line for the notice bar. The last one wins.
   boolean ShowMessage(invocation: in u64, message: in string);
+  /// Replaces this command's problems for the file at `path` (absolute, or
+  /// relative as for OpenFile). An empty list clears them. A linter run
+  /// publishes each file it looked at; they stay until it runs again or the
+  /// extensions are reloaded.
+  boolean PublishDiagnostics(invocation: in u64, path: in string, diagnostics: in vector<ExtensionDiagnostic>);
 }
 
 message PreviewDocument {

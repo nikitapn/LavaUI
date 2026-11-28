@@ -6,7 +6,7 @@ public func activate(_ command: UnsafePointer<CChar>, _ reference: UnsafePointer
     let options: JSONSerialization.WritingOptions
     switch String(cString: command) {
     case "overview": return renderOverview(reference, invocation: invocation)
-    case "sort-lines", "word-count", "open-readme":
+    case "sort-lines", "word-count", "open-readme", "mark-todos":
         return runTextCommand(String(cString: command), reference, invocation: invocation)
     case "preview":
         return runMarkdownPreviewProvider(reference) { editor in

@@ -35,8 +35,33 @@ extension EditorSession {
     /// against the text as it is now: the server's ranges are for the version
     /// it last saw, which while typing is a keystroke or two behind.
     func languageDecorations() -> [EditorDecoration] {
-        guard let url = active.url,
-              let published = languageServers.diagnostics[url.standardizedFileURL.path],
+        guard let url = active.url else { return [] }
+        return serverDecorations(url) + extensionDecorations(url)
+    }
+
+    /// What extensions reported for the file in front. Their columns are
+    /// UTF-8 bytes, so they are converted against the text on their own.
+    private func extensionDecorations(_ url: URL) -> [EditorDecoration] {
+        let path = url.standardizedFileURL.path
+        let reported = problems.fromExtensions.values.flatMap { $0[path] ?? [] }
+        guard !reported.isEmpty else { return [] }
+        let positions = DocumentPositions(active.text, encoding: .utf8)
+        let count = positions.characterCount
+        return reported.compactMap { problem in
+            guard var range = positions.characterRange(for: problem.range) else { return nil }
+            if range.isEmpty {
+                guard count > 0 else { return nil }
+                let at = min(range.lowerBound, count - 1)
+                range = at..<(at + 1)
+            }
+            let source = problem.source.map { "\($0): " } ?? ""
+            return EditorDecoration(range: range, severity: Self.severity(problem.severity),
+                                    message: source + problem.message)
+        }
+    }
+
+    private func serverDecorations(_ url: URL) -> [EditorDecoration] {
+        guard let published = languageServers.diagnostics[url.standardizedFileURL.path],
               let server = languageServers.ready(active.id) else { return [] }
         let positions = languageServers.positions(for: active.id, text: active.text, encoding: server.encoding)
         let count = positions.characterCount
