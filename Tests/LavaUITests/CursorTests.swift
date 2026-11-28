@@ -147,6 +147,61 @@ final class CursorTests: XCTestCase {
         ])
     }
 
+    /// A scrollbar is not a node, so the point has to be asked: on the bar of
+    /// a `ScrollView` that overflows, yes; on its content, or on one that
+    /// fits, no.
+    func testAScrollbarIsFoundAtItsEdgeOnlyWhenThereIsSomethingToScroll() throws {
+        let editor = try XCTUnwrap(Editor.openClient(width: 200, height: 100))
+        let host = LayoutHost()
+        // The container learns how long its content is when it is drawn.
+        func draw() {
+            _ = host.calculateLayout(width: 200, height: 100)
+            guard let root = host.rootNode else { return }
+            let list = DrawList(editor: editor)
+            list.clear()
+            list.emitTree(root, viewportW: 200, viewportH: 100)
+        }
+        host.setRoot(ScrollView(.vertical) {
+            VStack(spacing: 0) { Spacer().frame(width: .pt(10), height: .pt(800)) }
+        }.frame(width: .pt(200), height: .pt(100)))
+        draw()
+        XCTAssertTrue(host.isOnScrollbar(x: 195, y: 50))
+        XCTAssertFalse(host.isOnScrollbar(x: 100, y: 50))
+
+        host.setRoot(ScrollView(.vertical) { Text("short") }.frame(width: .pt(200), height: .pt(100)))
+        draw()
+        XCTAssertFalse(host.isOnScrollbar(x: 195, y: 50))
+    }
+
+    /// Over a scrollbar the pointer is the arrow, whatever the row under it
+    /// wears, and it goes back to the row's when the pointer comes off.
+    func testOverAScrollbarThePointerIsTheArrow() throws {
+        let editor = try XCTUnwrap(Editor.openClient(width: 100, height: 100))
+        let host = LayoutHost()
+        host.setRoot(VStack { Text("row").cursor(.pointer) })
+        _ = host.calculateLayout(width: 200, height: 100)
+        let root = try XCTUnwrap(host.rootNode)
+        let row = try XCTUnwrap(node(labelled: "Text", in: root)).id
+
+        let requests = CursorRequests()
+        let originalRequest = CursorBridge.request
+        CursorBridge.invalidate()
+        CursorBridge.request = { shape, _ in requests.shapes.withLock { $0.append(shape) } }
+        defer {
+            CursorBridge.request = originalRequest
+            CursorBridge.overScrollbar = false
+            CursorBridge.invalidate()
+        }
+        CursorBridge.hover(row, in: root, window: .main, editor: editor)
+        CursorBridge.overScrollbar = true
+        CursorBridge.hover(row, in: root, window: .main, editor: editor)
+        CursorBridge.overScrollbar = false
+        CursorBridge.hover(row, in: root, window: .main, editor: editor)
+        XCTAssertEqual(requests.shapes.withLock { $0 }, [
+            CursorShape.pointer.rawValue, CursorShape.arrow.rawValue, CursorShape.pointer.rawValue,
+        ])
+    }
+
     /// The pointer image changes when the pointer *enters* a view, and only a
     /// hit-testable node is ever reported as entered.
     func testStatingACursorMakesTheNodeHitTestable() throws {

@@ -73,6 +73,11 @@ public enum CursorBridge {
     /// in one window at a time.
     nonisolated(unsafe) private static var current: CursorShape = .arrow
 
+    /// Whether the pointer is on a scrollbar (`LayoutHost.isOnScrollbar`),
+    /// kept up to date by the window from pointer motion: a bar is not a
+    /// node, so no hover report says the pointer reached it.
+    nonisolated(unsafe) static var overScrollbar = false
+
     /// Called by the window that owns the pointer, on every hover change.
     static func apply(_ shape: CursorShape, window: WindowID, editor: Editor) {
         guard shape != current else { return }
@@ -111,6 +116,12 @@ public enum CursorBridge {
         _ hovered: NodeID?, in root: (any AnyViewNode)?,
         window: WindowID, editor: Editor
     ) {
+        // A scrollbar shows the arrow: one under the pointer, or a thumb being
+        // dragged — whose capture holder may be an editor, wearing an I-beam.
+        if overScrollbar || ScrollbarDrag.isActive {
+            apply(.arrow, window: window, editor: editor)
+            return
+        }
         if let holder = PointerCapture.holder, let root, holds(holder, in: root) {
             hover(resolving: holder, in: root, window: window, editor: editor)
             return

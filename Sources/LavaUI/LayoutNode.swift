@@ -2722,6 +2722,66 @@ public final class LayoutHost {
         return chain
     }
 
+    /// Whether the point is on a scrollbar — a `ScrollView`'s that is
+    /// showing, or an editor's — anywhere under it, in its grabbable width
+    /// (`Scrollbar.hitThickness`), the same test a press there makes.
+    ///
+    /// For the pointer image. A bar is not a node: it is painted over the
+    /// edge of its container, so the node the renderer reports under it is
+    /// whatever row or text runs underneath — a hand, an I-beam — when what
+    /// the pointer is over is a control that is dragged.
+    func isOnScrollbar(x: Float, y: Float, originY: Float = 0) -> Bool {
+        guard layoutValid, let root else { return false }
+        for att in OverlayScan.presented(in: root).reversed() {
+            guard let overlayRoot = att.root else { continue }
+            if att.contains(x, y - originY) {
+                return scrollbarWalk(overlayRoot, x: x, y: y, ox: att.origin.x,
+                                     oy: originY + att.origin.y)
+            }
+            if att.modal { return false }
+        }
+        return scrollbarWalk(root, x: x, y: y, ox: 0, oy: originY)
+    }
+
+    private func scrollbarWalk(
+        _ node: any AnyViewNode, x: Float, y: Float, ox: Float, oy: Float
+    ) -> Bool {
+        if let box = node as? YogaBoxNode,
+           box.transitionState?.isLeaving == true || box.isHidden || box.ignoresInput {
+            return false
+        }
+        guard let box = node as? YogaBoxNode, let yref = box.yoga else {
+            return node.childNodes.contains { scrollbarWalk($0, x: x, y: y, ox: ox, oy: oy) }
+        }
+        let nx = ox + YGNodeLayoutGetLeft(yref) + box.visualOffsetX
+        let ny = oy + YGNodeLayoutGetTop(yref)
+        let nw = YGNodeLayoutGetWidth(yref)
+        let nh = YGNodeLayoutGetHeight(yref)
+        let inside = x >= nx && x < nx + nw && y >= ny && y < ny + nh
+        if box.clipsChildren, !inside { return false }
+        if inside {
+            let lx = x - nx, ly = y - ny
+            if let scroll = box as? ScrollNode, scroll.showsIndicator, scroll.maxOffset > 0,
+               scroll.indicatorMetrics(offset: scroll.scrollOffset) != nil {
+                let onBar = scroll.axis == .vertical
+                    ? Scrollbar.hitsVertical(localX: lx, boxWidth: nw)
+                    : Scrollbar.hitsHorizontal(localY: ly, boxHeight: nh)
+                if onBar { return true }
+            }
+            if let leaf = box as? LeafNode, leaf.kind == .editor,
+               let font = leaf.font ?? FontStore.default {
+                if leaf.verticalScrollbar(font: font) != nil,
+                   Scrollbar.hitsVertical(localX: lx, boxWidth: leaf.viewportWidth) { return true }
+                if leaf.horizontalScrollbar(font: font) != nil,
+                   Scrollbar.hitsHorizontal(localY: ly, boxHeight: leaf.viewportHeight) { return true }
+            }
+        }
+        let shift = box.childOffset
+        return node.childNodes.contains {
+            scrollbarWalk($0, x: x, y: y, ox: nx - shift.x, oy: ny - shift.y)
+        }
+    }
+
     /// The nearest `.onDrop` handler at this point, innermost first.
     ///
     /// Not `hitTestHover`, which resolves exactly one node and is right for a
@@ -3043,6 +3103,7 @@ public final class LayoutHost {
         mods: Int32, button: Int32, overlays: [OverlayAttachment]
     ) -> (() -> Void)? { nil }
     func presentedOverlaysForPress() -> [OverlayAttachment] { [] }
+    func isOnScrollbar(x: Float, y: Float, originY: Float = 0) -> Bool { false }
     func outsideOverlayPress(
         in overlays: [OverlayAttachment], x: Float, y: Float, originX: Float, originY: Float
     ) -> (() -> Void)? { nil }

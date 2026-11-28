@@ -716,6 +716,14 @@ public final class LavaWindow {
                 PointerCapture.move(x: ev.x, y: ev.y - menuH)
             } else {
                 localHover(x: ev.x, y: ev.y, menuH: menuH)
+                // Onto or off a scrollbar: the node under the pointer is often
+                // the same row either side of that edge, so this is the only
+                // thing that notices.
+                let onBar = host.isOnScrollbar(x: ev.x, y: ev.y, originY: menuH)
+                if onBar != CursorBridge.overScrollbar {
+                    CursorBridge.overScrollbar = onBar
+                    CursorBridge.hover(HoverState.current, in: host.rootNode, window: id, editor: editor)
+                }
             }
         case .mouseUp:
             pendingFileDrag = nil
@@ -726,7 +734,9 @@ public final class LavaWindow {
             PointerRelease.fire()
             // The drag held the pointer image (`CursorBridge.hover`); hand it
             // back to whatever the pointer stopped over, which may not move
-            // again to say so.
+            // again to say so. Motion went to the drag meanwhile, so whether
+            // that is a scrollbar is asked again here.
+            CursorBridge.overScrollbar = host.isOnScrollbar(x: ev.x, y: ev.y, originY: menuH)
             CursorBridge.hover(HoverState.current, in: host.rootNode, window: id, editor: editor)
         case .scroll:
             Tooltips.dismiss()
@@ -781,6 +791,7 @@ public final class LavaWindow {
             // Hand the arrow back on the way out. A window that kept its
             // resize cursor after the pointer left would be setting the image
             // for whatever the pointer went on to.
+            CursorBridge.overScrollbar = false
             CursorBridge.hover(nil, in: host.rootNode, window: id, editor: editor)
             CursorBridge.invalidate()
         case .nodeScroll:
